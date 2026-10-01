@@ -1,0 +1,214 @@
+name: publish
+# Lives in the PUBLIC mirror aiworkforceone/awo-hq-vscode (copied there by kpa-app's
+# hq-vscode-publish.yml as .github/workflows/publish.yml). DEVOPS.md §3.2, the mirror's half:
+#
+#   1. reproduce   rebuild from the public source and require the SAME bytes kpa-app verified
+#                  (SHA256SUMS, committed by kpa-app's release job). A mismatch stops the release.
+#   2. test        unit tests, then the real-VS-Code suite against the engines.vscode floor.
+#   3. package     one .vsix, checked against vsix-allowlist.json.
+#   4. provenance  a GitHub artifact attestation (SLSA) on the .vsix, SHA256SUMS on a GitHub Release.
+#   5. Marketplace first (the stricter validator). Keyless Entra OIDC (`azure/login`) when the
+#      environment variable AZURE_CLIENT_ID is set; otherwise the VSCE_PAT secret (a Marketplace
+#      personal access token, read by vsce from the environment, never on a command line). Neither
+#      set: the release stops with a clear error.
+#   6. Open VSX (Cursor, Windsurf, VSCodium), with the OVSX_PAT the environment holds.
+#   7. idempotent  a registry that already has this version is skipped, so a failed run can be
+#                  RE-RUN to finish the other registry without burning a version.
+#
+# WHAT PROVES THE PACKAGE CAME FROM kpa-app: the push path (a deploy key that exists nowhere else,
+# `main` and `v*` protected) plus step 1, and the attestation ties the published .vsix to this
+# public commit (`gh attestation verify <file>.vsix --repo aiworkforceone/awo-hq-vscode`).
+#
+# TWO JOBS (branch security review): `build` reproduces, tests and packages with NO publishing
+# identity (no id-token, no environment, no secret), so a test dependency never runs next to the
+# OIDC token, VSCE_PAT or OVSX_PAT. `publish` gets the environment, and runs no build or test code:
+# it attests and publishes the exact .vsix `build` produced (sha256-checked on the hand-off).
+#
+# THE GATE is the tag push on kpa-app (`hq-vscode-v*`, whose release job pushes this mirror's
+# `v*` tag), as for the CLI: `marketplace-publish` has NO required reviewer (Jean, 2026-09-30),
+# only a deployment tag policy `v*`, so its secrets reach nothing but a `v*` tag run. `build`
+# refuses to go on unless that tag policy is still in place, so removing it stops releases instead
+# of exposing the publishing secrets to any branch.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: hq-vscode-publish
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      flag: ${{ steps.version.outputs.flag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: 0. the publish environment still admits only v* tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          env_api="repos/$GITHUB_REPOSITORY/environments/marketplace-publish"
+          custom="$(gh api "$env_api" --jq '.deployment_branch_policy.custom_branch_policies // false')"
+          if [ "$custom" != "true" ]; then
+            echo "::error::marketplace-publish has no deployment tag policy; refusing to publish"
+            exit 1
+          fi
+          tags="$(gh api "$env_api/deployment-branch-policies" \
+            --jq '[.branch_policies[] | select(.type == "tag") | .name] | join(",")')"
+          case ",$tags," in
+            *,v\*,*) echo "marketplace-publish admits only the v* tag policy's runs" ;;
+            *) echo "::error::marketplace-publish has no v* tag policy; refusing to publish"; exit 1 ;;
+          esac
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - id: version
+        name: tag matches package.json; odd minor is a pre-release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          v="$(node -p 'require("./vscode-extension/package.json").version')"
+          test "${TAG#v}" = "$v"
+          minor="$(printf '%s' "$v" | cut -d. -f2)"
+          if [ $((minor % 2)) -eq 1 ]; then flag=--pre-release; else flag=; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "flag=$flag" >> "$GITHUB_OUTPUT"
+      - name: 1. reproduce the committed bundle from this public source
+        run: |
+          set -euo pipefail
+          npm ci --prefix vscode-extension --ignore-scripts
+          node vscode-extension/build.mjs
+          sha256sum -c SHA256SUMS
+      - name: 2a. unit tests
+        run: vscode-extension/node_modules/.bin/vitest run --config vscode-extension/vitest.config.mts
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: vscode-extension/.vscode-test
+          key: vscode-test-${{ runner.os }}-mirror
+      - name: 2b. the real-VS-Code suite, at the engines floor, then at stable
+        run: |
+          set -euo pipefail
+          xvfb-run -a node vscode-extension/test/run-integration.mjs
+          VSCODE_TEST_VERSION=stable xvfb-run -a node vscode-extension/test/run-integration.mjs
+      - name: 3. package + allowlist
+        working-directory: vscode-extension
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          FLAG: ${{ steps.version.outputs.flag }}
+        run: |
+          set -euo pipefail
+          npx --no-install vsce package --no-dependencies $FLAG --out "awo-hq-$VERSION.vsix"
+          node scripts/check-vsix.mjs "awo-hq-$VERSION.vsix"
+          sha256sum "awo-hq-$VERSION.vsix" > "awo-hq-$VERSION.vsix.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vsix
+          path: |
+            vscode-extension/awo-hq-${{ steps.version.outputs.version }}.vsix
+            vscode-extension/awo-hq-${{ steps.version.outputs.version }}.vsix.sha256
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: marketplace-publish
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      FLAG: ${{ needs.build.outputs.flag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vsix
+          path: vsix
+      - name: the .vsix is the one build packaged
+        working-directory: vsix
+        run: sha256sum -c "awo-hq-$VERSION.vsix.sha256"
+      - name: the publishing tools only (no build, no tests, no install scripts)
+        run: npm ci --prefix vscode-extension --ignore-scripts
+      - name: 4a. provenance (SLSA attestation on the .vsix)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: vsix/awo-hq-${{ needs.build.outputs.version }}.vsix
+      - name: 4b. GitHub Release with the .vsix and its checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat SHA256SUMS "vsix/awo-hq-$VERSION.vsix.sha256" > "$RUNNER_TEMP/SHA256SUMS"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "release v$VERSION exists (a re-run): assets kept as they are"
+          else
+            gh release create "v$VERSION" --verify-tag ${FLAG:+--prerelease} \
+              --title "awo-hq $VERSION" --notes "AI Workforce One HQ for VS Code $VERSION" \
+              "vsix/awo-hq-$VERSION.vsix" "$RUNNER_TEMP/SHA256SUMS"
+          fi
+      - id: registries
+        name: 7. which registries already have this version (a re-run finishes only what is missing)
+        run: |
+          set -euo pipefail
+          pub="$(node -p 'require("./vscode-extension/package.json").publisher')"
+          ms="$(curl -s -o /dev/null -w '%{http_code}' "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/$pub/vsextensions/awo-hq/$VERSION/vspackage")"
+          ovsx="$(curl -s -o /dev/null -w '%{http_code}' "https://open-vsx.org/api/$pub/awo-hq/$VERSION")"
+          echo "marketplace=$([ "$ms" = 200 ] && echo present || echo missing)" >> "$GITHUB_OUTPUT"
+          echo "openvsx=$([ "$ovsx" = 200 ] && echo present || echo missing)" >> "$GITHUB_OUTPUT"
+      - id: marketplace
+        name: 5. how to sign in to the Marketplace (Entra when configured, else VSCE_PAT)
+        if: steps.registries.outputs.marketplace == 'missing'
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          # Only whether the secret is set, never its value.
+          HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$AZURE_CLIENT_ID" ]; then
+            echo "Marketplace: keyless Entra sign-in (vars.AZURE_CLIENT_ID)"
+            echo "mode=entra" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_VSCE_PAT" = "true" ]; then
+            echo "Marketplace: personal access token (secrets.VSCE_PAT)"
+            echo "mode=pat" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::marketplace-publish has neither vars.AZURE_CLIENT_ID (Entra) nor secrets.VSCE_PAT: cannot publish to the Marketplace"
+            exit 1
+          fi
+      - name: 5a. Marketplace sign-in (Entra OIDC, no stored secret)
+        if: steps.registries.outputs.marketplace == 'missing' && steps.marketplace.outputs.mode == 'entra'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: 5b. Marketplace (Entra)
+        if: steps.registries.outputs.marketplace == 'missing' && steps.marketplace.outputs.mode == 'entra'
+        run: >-
+          vscode-extension/node_modules/.bin/vsce publish --azure-credential
+          --packagePath "vsix/awo-hq-$VERSION.vsix" $FLAG
+      - name: 5b. Marketplace (personal access token)
+        if: steps.registries.outputs.marketplace == 'missing' && steps.marketplace.outputs.mode == 'pat'
+        env:
+          # vsce reads VSCE_PAT from the environment (`-p` defaults to it): the token is never on
+          # the command line, and GitHub masks it in any output.
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: >-
+          vscode-extension/node_modules/.bin/vsce publish
+          --packagePath "vsix/awo-hq-$VERSION.vsix" $FLAG
+      - name: 6. Open VSX
+        if: steps.registries.outputs.openvsx == 'missing'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: vscode-extension/node_modules/.bin/ovsx publish "vsix/awo-hq-$VERSION.vsix" -p "$OVSX_PAT" $FLAG

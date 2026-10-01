@@ -1,0 +1,469 @@
+/**
+ * The extension's events client against a loopback WebSocket that speaks the server's frames: one
+ * socket per org, subscribe on open, `isLive` only after the ack, a reconnect after a drop that
+ * re-subscribes and hands the file system a `resync`, a 4401 that stops dialling, and the caches.
+ */
+import { afterEach, describe, expect, it } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { WebSocketServer, type WebSocket } from 'ws';
+import { HqApiError, type HqClient } from '@hq/client/api.js';
+import type { Team } from '@hq/client/teams.js';
+import type { EventsServerFrame } from '@kpa/shared/remote-fs.types';
+import { EventsHub } from '../../src/fs/events-client.js';
+import { ContentCache, ListingCache } from '../../src/fs/caches.js';
+
+const WS_ID = '3f9a1c2e-1111-4222-8333-444455556666';
+const team = {
+  alias: 'hq-3f9a1c2e',
+  org: { slug: 'awo' },
+  workspace: { id: WS_ID },
+} as unknown as Team;
+
+let server: Server | null = null;
+/** Hubs a test left open (a failed assertion skips its own close): closed before the server. */
+const hubs: EventsHub[] = [];
+
+afterEach(async () => {
+  for (const h of hubs.splice(0)) h.closeAll();
+  if (server) await new Promise((r) => server!.close(r));
+  server = null;
+});
+
+async function fakeHq(onConnect: (ws: WebSocket, n: number) => void): Promise<string> {
+  server = createServer();
+  const wss = new WebSocketServer({ server });
+  let n = 0;
+  wss.on('connection', (ws, req) => {
+    expect(req.headers['x-hq-org']).toBe('awo');
+    expect(req.headers.authorization).toBe('Bearer hqa_tok');
+    n += 1;
+    onConnect(ws, n);
+  });
+  await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+function client(host: string): HqClient {
+  return {
+    host,
+    upgradeHeaders: async () => ({ Authorization: 'Bearer hqa_tok', 'x-hq-org': 'awo' }),
+    accessToken: async () => 'hqa_tok',
+  } as unknown as HqClient;
+}
+
+const until = async (cond: () => boolean, ms = 2000) => {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error('timeout');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+};
+
+describe('EventsHub', () => {
+  it('subscribes on open, is live after the ack, and a drop re-subscribes with a resync', async () => {
+    const seen: string[] = [];
+    let first: WebSocket | null = null;
+    const host = await fakeHq((ws, n) => {
+      if (n === 1) first = ws;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as { type: string; workspaceId: string };
+        seen.push(`${n}:${f.type}`);
+        if (f.type === 'subscribe') {
+          ws.send(
+            JSON.stringify({
+              type: 'subscribed',
+              workspaceId: f.workspaceId,
+              state: 'running',
+              watch: true,
+            }),
+          );
+        }
+      });
+    });
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 20,
+      maxBackoffMs: 40,
+    });
+    const frames: EventsServerFrame[] = [];
+    hub.onFrame((f) => void frames.push(f));
+    const sub = hub.subscribe(team);
+    await until(() => hub.isLive(team));
+    expect(seen).toEqual(['1:subscribe']);
+    expect(frames.map((f) => f.type)).toEqual(['subscribed']);
+    first!.terminate();
+    await until(() => frames.some((f) => f.type === 'resync'));
+    expect(seen).toEqual(['1:subscribe', '2:subscribe']);
+    expect(hub.isLive(team)).toBe(true);
+    sub.dispose();
+    await until(() => !hub.isLive(team));
+  });
+
+  it('a 4401 close stops dialling (the sign-in service handles the revocation)', async () => {
+    let connects = 0;
+    const host = await fakeHq((ws) => {
+      connects += 1;
+      ws.close(4401, 'unauthorized');
+    });
+    let unauthorized = 0;
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 10,
+      maxBackoffMs: 20,
+      // U28: the service asks HQ at once, instead of waiting for the next HTTP call.
+      onUnauthorized: () => void (unauthorized += 1),
+    });
+    hub.subscribe(team);
+    await until(() => connects === 1);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(connects).toBe(1);
+    expect(hub.isLive(team)).toBe(false);
+    expect(unauthorized).toBe(1);
+  });
+});
+
+describe('EventsHub: one socket per org (nonprod blocker 2026-09-30)', () => {
+  const teamN = (i: number) =>
+    ({
+      alias: `hq-${i}`,
+      org: { slug: 'awo' },
+      workspace: { id: `3f9a1c2e-1111-4222-8333-${String(i).padStart(12, '0')}` },
+    }) as unknown as Team;
+
+  /** A client whose token and headers take a while, like the real keychain + nonce path. */
+  function slowClient(host: string): HqClient {
+    const later = <T>(v: T) => new Promise<T>((r) => setTimeout(() => r(v), 15));
+    return {
+      host,
+      upgradeHeaders: () => later({ Authorization: 'Bearer hqa_tok', 'x-hq-org': 'awo' }),
+      accessToken: async () => 'hqa_tok',
+    } as unknown as HqClient;
+  }
+
+  it('10 concurrent watch() calls for one org open exactly ONE socket, which subscribes them all', async () => {
+    const subscribed = new Set<string>();
+    let sockets = 0;
+    const host = await fakeHq((ws) => {
+      sockets += 1;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as { type: string; workspaceId: string };
+        if (f.type !== 'subscribe') return;
+        subscribed.add(f.workspaceId);
+        ws.send(
+          JSON.stringify({
+            type: 'subscribed',
+            workspaceId: f.workspaceId,
+            state: 'running',
+            watch: true,
+          }),
+        );
+      });
+    });
+    const hub = new EventsHub({
+      client: () => new Promise((r) => setTimeout(() => r(slowClient(host)), 15)),
+    });
+    hubs.push(hub);
+    const teams = Array.from({ length: 10 }, (_, i) => teamN(i));
+    for (const t of teams) hub.subscribe(t);
+    await until(() => teams.every((t) => hub.isLive(t)));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sockets).toBe(1);
+    expect(subscribed.size).toBe(10);
+  });
+
+  it('a replaced socket is closed, never orphaned holding a server slot', async () => {
+    const closed: number[] = [];
+    let n = 0;
+    const host = await fakeHq((ws) => {
+      const mine = (n += 1);
+      ws.on('close', () => void closed.push(mine));
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as { type: string; workspaceId: string };
+        if (f.type === 'subscribe') {
+          ws.send(
+            JSON.stringify({
+              type: 'subscribed',
+              workspaceId: f.workspaceId,
+              state: 'running',
+              watch: true,
+            }),
+          );
+        }
+      });
+    });
+    const hub = new EventsHub({ client: async () => client(host) });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => hub.isLive(team));
+    // Force a second dial on the same org (the path a stray reconnect would take).
+    const org = (hub as unknown as { orgs: Map<string, { connect(): Promise<void> }> }).orgs.get(
+      'awo',
+    )!;
+    await org.connect();
+    await until(() => n === 2 && closed.includes(1));
+    await until(() => hub.isLive(team));
+    expect(closed).toEqual([1]);
+  });
+
+  it('disposing every watch while the dial is in flight leaves no socket open', async () => {
+    let sockets = 0;
+    const host = await fakeHq(() => void (sockets += 1));
+    const hub = new EventsHub({
+      client: () => new Promise((r) => setTimeout(() => r(slowClient(host)), 15)),
+    });
+    hubs.push(hub);
+    hub.subscribe(team).dispose();
+    await new Promise((r) => setTimeout(r, 120));
+    expect(sockets).toBe(0);
+  });
+
+  it('a 429 refusal backs off (no tight loop) and is surfaced once until a socket opens', async () => {
+    server = createServer();
+    let attempts = 0;
+    server.on('upgrade', (_req, socket) => {
+      attempts += 1;
+      socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const refused: Array<[string, number]> = [];
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      refusedBackoffMs: 150,
+      onRefused: (org, status) => void refused.push([org, status]),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => attempts === 1);
+    await new Promise((r) => setTimeout(r, 100));
+    // The ordinary backoff (5-10 ms) would have dialled ~10 more times by now.
+    expect(attempts).toBe(1);
+    await until(() => attempts === 2, 1000);
+    expect(refused).toEqual([['awo', 429]]);
+    expect(hub.isLive(team)).toBe(false);
+  });
+});
+
+describe('EventsHub: a revoked login seen at the upgrade (item 12)', () => {
+  it('a 401 while signing the upgrade (GET /api/remote/nonce) asks the service at once, once', async () => {
+    let unauthorized = 0;
+    let tries = 0;
+    const hub = new EventsHub({
+      client: async () =>
+        ({
+          host: 'http://127.0.0.1:9',
+          upgradeHeaders: async () => {
+            tries += 1;
+            throw new HqApiError(401, 'REMOTE_TOKEN_INVALID', 'Unauthorized', undefined);
+          },
+          accessToken: async () => 'x',
+        }) as unknown as HqClient,
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      onUnauthorized: () => void (unauthorized += 1),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => tries >= 3);
+    expect(unauthorized).toBe(1);
+  });
+});
+
+describe('EventsHub: 401 handling (security review of 509bdcb4, L2)', () => {
+  it('(a) re-armed once the service check finished: a later revocation is reported again', async () => {
+    let calls = 0;
+    let finish!: () => void;
+    let tries = 0;
+    const hub = new EventsHub({
+      client: async () =>
+        ({
+          host: 'http://127.0.0.1:9',
+          upgradeHeaders: async () => {
+            tries += 1;
+            throw new HqApiError(401, 'REMOTE_TOKEN_INVALID', 'Unauthorized', undefined);
+          },
+          accessToken: async () => 'x',
+        }) as unknown as HqClient,
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      unauthorizedQuietMs: 20,
+      onUnauthorized: () => {
+        calls += 1;
+        return new Promise<void>((r) => (finish = r));
+      },
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => tries >= 5);
+    expect(calls).toBe(1); // the check is still running
+    finish();
+    const at = tries;
+    await until(() => tries >= at + 3);
+    expect(calls).toBe(2);
+  });
+
+  it('(b) a 401 on the upgrade itself is handed to the service too', async () => {
+    server = createServer();
+    server.on('upgrade', (_req, socket) => {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    let calls = 0;
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      onUnauthorized: () => void (calls += 1),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => calls === 1);
+  });
+});
+
+describe('EventsHub: code review S3', () => {
+  it('a 401 at the nonce waits the LONG backoff (never the 1 s ladder)', async () => {
+    let tries = 0;
+    const hub = new EventsHub({
+      client: async () =>
+        ({
+          host: 'http://127.0.0.1:9',
+          upgradeHeaders: async () => {
+            tries += 1;
+            throw new HqApiError(401, 'REMOTE_TOKEN_INVALID', 'Unauthorized', undefined);
+          },
+          accessToken: async () => 'x',
+        }) as unknown as HqClient,
+      minBackoffMs: 5,
+      maxBackoffMs: 300,
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => tries === 1);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(tries).toBe(1);
+  });
+
+  it('401, then a socket that opens, then a later 401: the second is reported too (even inside the quiet time)', async () => {
+    let first: WebSocket | null = null;
+    const host = await fakeHq((ws, n) => {
+      if (n === 1) first = ws;
+    });
+    let failNext = true;
+    let calls = 0;
+    const hub = new EventsHub({
+      client: async () =>
+        ({
+          host,
+          upgradeHeaders: async () => {
+            if (failNext) {
+              failNext = false;
+              throw new HqApiError(401, 'REMOTE_TOKEN_INVALID', 'Unauthorized', undefined);
+            }
+            return { Authorization: 'Bearer hqa_tok', 'x-hq-org': 'awo' };
+          },
+          accessToken: async () => 'hqa_tok',
+        }) as unknown as HqClient,
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      unauthorizedQuietMs: 60_000,
+      onUnauthorized: () => void (calls += 1),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => first !== null);
+    expect(calls).toBe(1);
+    failNext = true;
+    first!.terminate();
+    await until(() => calls === 2);
+  });
+});
+
+describe('EventsHub (phase 2 security review)', () => {
+  /** A fake HQ that answers each subscribe with `ack`, then sends `then` frames (raw strings). */
+  async function hubWith(ack: Record<string, unknown>, then: string[] = []) {
+    let sock: WebSocket | null = null;
+    const host = await fakeHq((ws) => {
+      sock = ws;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as { type: string; workspaceId: string };
+        if (f.type !== 'subscribe') return;
+        ws.send(JSON.stringify({ type: 'subscribed', workspaceId: f.workspaceId, ...ack }));
+        for (const t of then) ws.send(t);
+      });
+    });
+    const hub = new EventsHub({ client: async () => client(host), minBackoffMs: 20 });
+    hubs.push(hub);
+    const frames: EventsServerFrame[] = [];
+    hub.onFrame((f) => void frames.push(f));
+    hub.subscribe(team);
+    return { hub, frames, send: (f: unknown) => sock!.send(JSON.stringify(f)) };
+  }
+
+  it('is live only on watch:true; a later watch:true makes it live, a stopped machine does not', async () => {
+    const { hub, frames, send } = await hubWith({ state: 'running', watch: false });
+    await until(() => frames.some((f) => f.type === 'subscribed'));
+    expect(hub.isLive(team)).toBe(false);
+    send({ type: 'subscribed', workspaceId: WS_ID, state: 'running', watch: true });
+    await until(() => hub.isLive(team));
+    send({ type: 'workspace-state', workspaceId: WS_ID, state: 'asleep' });
+    await until(() => !hub.isLive(team));
+  });
+
+  it('frames of the wrong shape are dropped (never emitted, never make a team live)', async () => {
+    const bad = [
+      JSON.stringify({ type: 'subscribed', workspaceId: 7, state: 'running', watch: true }),
+      JSON.stringify({ type: 'fs-changed', workspaceId: WS_ID, seq: 1, changes: 'x' }),
+      JSON.stringify({ type: 'fs-changed', workspaceId: WS_ID, seq: 1, changes: [{ path: 3 }] }),
+      JSON.stringify({ type: 'resync' }),
+      JSON.stringify({ type: 'nope', workspaceId: WS_ID }),
+      // An error code outside the closed set never reaches a label or a notification.
+      JSON.stringify({ type: 'error', code: '\u202eKCOL\u001b[31m', workspaceId: WS_ID }),
+      JSON.stringify({ type: 'error', code: 'NOT_FOUND', workspaceId: 42 }),
+      JSON.stringify([1, 2]),
+      JSON.stringify({ type: 'resync', workspaceId: WS_ID }),
+    ];
+    const { hub, frames } = await hubWith({ state: 'running', watch: 'yes' }, bad);
+    await until(() => frames.some((f) => f.type === 'resync'));
+    expect(frames).toEqual([{ type: 'resync', workspaceId: WS_ID }]);
+    expect(hub.isLive(team)).toBe(false);
+  });
+});
+
+describe('caches', () => {
+  it('content is keyed by etag (a new etag misses) and bounded (LRU by bytes and entries)', () => {
+    const c = new ContentCache(10, 2);
+    c.put('a', '"1"', new Uint8Array(4));
+    expect(c.get('a', '"1"')).toBeDefined();
+    expect(c.get('a', '"2"')).toBeUndefined();
+    c.put('b', '"1"', new Uint8Array(4));
+    c.put('c', '"1"', new Uint8Array(4));
+    expect(c.last('a')).toBeUndefined(); // evicted
+    expect(c.size).toBe(8);
+    c.put('huge', '"1"', new Uint8Array(11));
+    expect(c.last('huge')).toBeUndefined();
+  });
+
+  it('listings expire after the TTL unless the stream is live; the masked flag lives with its etag', () => {
+    let now = 0;
+    const l = new ListingCache(() => now);
+    l.putFolder('t', 'src', [{ path: 'src/a', type: 'file', size: 1, mtimeMs: 1, etag: '"1"' }]);
+    now = 31_000;
+    expect(l.folder('t', 'src', false)).toBeUndefined();
+    expect(l.folder('t', 'src', true)).toHaveLength(1);
+    expect(l.staleFolder('t', 'src')).toHaveLength(1);
+    l.markMasked('t', 'src/a', '"1"');
+    l.putStat('t', { path: 'src/a', type: 'file', size: 1, mtimeMs: 1, etag: '"1"' });
+    expect(l.stat('t', 'src/a')?.masked).toBe(true);
+    l.putStat('t', { path: 'src/a', type: 'file', size: 2, mtimeMs: 2, etag: '"2"' });
+    expect(l.stat('t', 'src/a')?.masked).toBeUndefined();
+    l.invalidate('t', 'src');
+    expect(l.stat('t', 'src/a')).toBeUndefined();
+  });
+});

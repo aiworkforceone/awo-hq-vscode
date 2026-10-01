@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    /* The extension host runs Node 20 (engines.vscode ^1.90.0) and loads ONE CommonJS file that
+       esbuild bundles (dist/extension.cjs), so the sources are checked the way the bundler reads them. */
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    /* `@types/vscode` exists ONLY in this package's node_modules (DEVOPS §4): the root typecheck
+       never sees the extension, and this one reads the shared code from source. */
+    "types": ["node", "vscode"],
+    "typeRoots": ["./node_modules/@types", "../node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@kpa/shared/*": ["../shared/src/*"],
+      "@hq/client/*": ["../hq-client/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist", ".vscode-test"]
+}

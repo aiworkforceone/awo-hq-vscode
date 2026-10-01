@@ -1,0 +1,9 @@
+# Only the bundle, the manifest, the docs and the icon ship (DEVOPS §3.2: vsix-allowlist.json is the
+# check; this file is what keeps everything else out).
+**
+!dist/extension.cjs
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE.txt
+!media/hq-mark.svg

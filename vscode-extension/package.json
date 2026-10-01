@@ -1,0 +1,441 @@
+{
+  "name": "awo-hq",
+  "displayName": "AI Workforce One HQ",
+  "description": "Your AI Workforce One HQ teams inside VS Code: join their session terminals and forward their ports, without SSH.",
+  "version": "0.1.0",
+  "publisher": "aiworkforceone",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aiworkforceone/awo-hq-vscode.git"
+  },
+  "homepage": "https://github.com/aiworkforceone/awo-hq-vscode#readme",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ai workforce one",
+    "hq",
+    "claude",
+    "codex",
+    "remote"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./dist/extension.cjs",
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Team files open over hq://; language servers that need local files do not attach."
+    },
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The extension never runs code from team files."
+    }
+  },
+  "activationEvents": [
+    "onView:hq.teams",
+    "onView:hq.ports",
+    "onView:hq.account",
+    "onAuthenticationRequest:aiworkforceone-hq",
+    "onFileSystem:hq",
+    "onView:hq.search"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hq",
+          "title": "AI Workforce One HQ",
+          "icon": "media/hq-mark.svg"
+        }
+      ]
+    },
+    "views": {
+      "hq": [
+        {
+          "id": "hq.teams",
+          "name": "Teams"
+        },
+        {
+          "id": "hq.ports",
+          "name": "Ports"
+        },
+        {
+          "id": "hq.search",
+          "name": "Search",
+          "when": "hq.hasSearch"
+        },
+        {
+          "id": "hq.account",
+          "name": "Account"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "hq.teams",
+        "contents": "Sign in to see your teams.\n[Sign in](command:hq.signIn)",
+        "when": "!hq.signedIn"
+      },
+      {
+        "view": "hq.teams",
+        "contents": "No org has developer access on yet. An org owner turns it on in HQ, under Settings, Security.",
+        "when": "hq.signedIn && !hq.hasOrgs"
+      },
+      {
+        "view": "hq.ports",
+        "contents": "Forward a port from a team machine to this computer.\n[Forward a Port](command:hq.forwardPort)",
+        "when": "hq.signedIn"
+      },
+      {
+        "view": "hq.account",
+        "contents": "Sign in to see your teams.\n[Sign in](command:hq.signIn)",
+        "when": "!hq.signedIn"
+      }
+    ],
+    "commands": [
+      {
+        "command": "hq.signIn",
+        "title": "Sign In",
+        "category": "HQ"
+      },
+      {
+        "command": "hq.signOut",
+        "title": "Sign Out",
+        "category": "HQ"
+      },
+      {
+        "command": "hq.refresh",
+        "title": "Refresh",
+        "category": "HQ",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "hq.wakeTeam",
+        "title": "Wake Team",
+        "category": "HQ",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "hq.newSessionTerminal",
+        "title": "New Session Terminal",
+        "category": "HQ",
+        "icon": "$(add)"
+      },
+      {
+        "command": "hq.attachSession",
+        "title": "Attach",
+        "category": "HQ",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "hq.openInHqWeb",
+        "title": "Open in HQ Web",
+        "category": "HQ",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "hq.manageDevices",
+        "title": "Manage Devices in HQ",
+        "category": "HQ"
+      },
+      {
+        "command": "hq.forwardPort",
+        "title": "Forward a Port...",
+        "category": "HQ",
+        "icon": "$(add)"
+      },
+      {
+        "command": "hq.ports.open",
+        "title": "Open in Browser",
+        "category": "HQ",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "hq.ports.copy",
+        "title": "Copy Local Address",
+        "category": "HQ",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "hq.ports.stop",
+        "title": "Stop Forwarding",
+        "category": "HQ",
+        "icon": "$(close)"
+      },
+      {
+        "command": "hq.ports.resume",
+        "title": "Resume Forwarding",
+        "category": "HQ",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "hq.ports.forwardDetected",
+        "title": "Forward",
+        "category": "HQ",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "hq.ports.dismissDetected",
+        "title": "Dismiss",
+        "category": "HQ",
+        "icon": "$(close)"
+      },
+      {
+        "command": "hq.openTeamFiles",
+        "title": "Open Team Files",
+        "category": "HQ",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "hq.searchTeamFiles",
+        "title": "Search in Team Files",
+        "category": "HQ",
+        "icon": "$(search)"
+      },
+      {
+        "command": "hq.search.open",
+        "title": "Open",
+        "category": "HQ"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "hq.signIn",
+          "when": "!hq.signedIn"
+        },
+        {
+          "command": "hq.signOut",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.wakeTeam",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.newSessionTerminal",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.attachSession",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.openInHqWeb",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.forwardPort",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.ports.open",
+          "when": "false"
+        },
+        {
+          "command": "hq.ports.copy",
+          "when": "false"
+        },
+        {
+          "command": "hq.ports.stop",
+          "when": "false"
+        },
+        {
+          "command": "hq.ports.resume",
+          "when": "false"
+        },
+        {
+          "command": "hq.ports.forwardDetected",
+          "when": "false"
+        },
+        {
+          "command": "hq.ports.dismissDetected",
+          "when": "false"
+        },
+        {
+          "command": "hq.openTeamFiles",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.searchTeamFiles",
+          "when": "hq.signedIn"
+        },
+        {
+          "command": "hq.search.open",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "hq.refresh",
+          "when": "view == hq.teams && hq.signedIn",
+          "group": "navigation"
+        },
+        {
+          "command": "hq.forwardPort",
+          "when": "view == hq.ports && hq.signedIn",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "hq.wakeTeam",
+          "when": "view == hq.teams && viewItem =~ /^team:off/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.newSessionTerminal",
+          "when": "view == hq.teams && viewItem =~ /^team:.*:write/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.openTeamFiles",
+          "when": "view == hq.teams && viewItem =~ /^team:/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.openTeamFiles",
+          "when": "view == hq.teams && viewItem =~ /^team:/",
+          "group": "1_team@0"
+        },
+        {
+          "command": "hq.searchTeamFiles",
+          "when": "view == hq.teams && viewItem =~ /^team:/",
+          "group": "1_team@4"
+        },
+        {
+          "command": "hq.wakeTeam",
+          "when": "view == hq.teams && viewItem =~ /^team:off/",
+          "group": "1_team@1"
+        },
+        {
+          "command": "hq.newSessionTerminal",
+          "when": "view == hq.teams && viewItem =~ /^team:.*:write/",
+          "group": "1_team@2"
+        },
+        {
+          "command": "hq.forwardPort",
+          "when": "view == hq.teams && viewItem =~ /^team:.*:write/",
+          "group": "1_team@3"
+        },
+        {
+          "command": "hq.openInHqWeb",
+          "when": "view == hq.teams && viewItem =~ /^(team|session)/",
+          "group": "9_web@1"
+        },
+        {
+          "command": "hq.attachSession",
+          "when": "view == hq.teams && viewItem =~ /^session/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.attachSession",
+          "when": "view == hq.teams && viewItem =~ /^session/",
+          "group": "1_session@1"
+        },
+        {
+          "command": "hq.ports.open",
+          "when": "view == hq.ports && viewItem == port:active",
+          "group": "inline@1"
+        },
+        {
+          "command": "hq.ports.copy",
+          "when": "view == hq.ports && viewItem == port:active",
+          "group": "inline@2"
+        },
+        {
+          "command": "hq.ports.stop",
+          "when": "view == hq.ports && viewItem =~ /^port:(active|paused)/",
+          "group": "inline@3"
+        },
+        {
+          "command": "hq.ports.resume",
+          "when": "view == hq.ports && viewItem == port:paused",
+          "group": "inline@1"
+        },
+        {
+          "command": "hq.ports.forwardDetected",
+          "when": "view == hq.ports && viewItem == port:detected",
+          "group": "inline@1"
+        },
+        {
+          "command": "hq.ports.dismissDetected",
+          "when": "view == hq.ports && viewItem == port:detected",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Workforce One HQ",
+      "properties": {
+        "hq.host": {
+          "type": "string",
+          "default": "https://hq.aiworkforceone.com",
+          "scope": "application",
+          "markdownDescription": "The HQ address this editor signs in to. Only `https://hq.aiworkforceone.com`, `https://hq-test.aiworkforceone.com` and the addresses in `#hq.allowedHosts#` are accepted. Switching address needs a new sign-in."
+        },
+        "hq.allowedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "description": "Extra HQ addresses this editor may sign in to (for AI Workforce One staff)."
+        },
+        "hq.localEcho": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "always",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Show what you type at once where the session's prompt allows it.",
+            "Always show what you type at once.",
+            "Show only what the session echoes back."
+          ],
+          "default": "auto",
+          "scope": "application",
+          "description": "Instant local echo in HQ session terminals (the same as in HQ and hq attach)."
+        }
+      }
+    },
+    "authentication": [
+      {
+        "id": "aiworkforceone-hq",
+        "label": "AI Workforce One HQ"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "vitest run --config vitest.config.mts",
+    "test:integration": "node test/run-integration.mjs",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@xterm/headless": "6.0.0",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/vscode": "1.90.0",
+    "@types/ws": "8.18.1",
+    "@vscode/test-electron": "2.5.2",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.0",
+    "ovsx": "0.10.12",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

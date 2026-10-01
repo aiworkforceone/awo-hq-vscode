@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Layout marker: the shared wire contract the extension is built with."
+}

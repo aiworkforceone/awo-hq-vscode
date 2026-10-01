@@ -1,0 +1,13 @@
+{
+  "comment": "Every file the published .vsix may contain (DEVOPS §3.2 step 7). Anything else fails the build: no *.node, no *.map, no src/, no node_modules/, no .env*, no tests.",
+  "files": [
+    "extension.vsixmanifest",
+    "[Content_Types].xml",
+    "extension/package.json",
+    "extension/dist/extension.cjs",
+    "extension/readme.md",
+    "extension/changelog.md",
+    "extension/LICENSE.txt",
+    "extension/media/hq-mark.svg"
+  ]
+}

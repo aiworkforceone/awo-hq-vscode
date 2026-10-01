@@ -1,0 +1,4 @@
+Copyright (c) 2026 AI Workforce One. All rights reserved.
+
+This software is provided to customers of AI Workforce One HQ for use with their HQ account.
+No other rights are granted.
