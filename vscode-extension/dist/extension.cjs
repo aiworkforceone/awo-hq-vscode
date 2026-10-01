@@ -2125,7 +2125,7 @@ var require_extension = __commonJS({
       if (dest[name] === void 0) dest[name] = [elem];
       else dest[name].push(elem);
     }
-    function parse(header) {
+    function parse2(header) {
       const offers = /* @__PURE__ */ Object.create(null);
       let params = /* @__PURE__ */ Object.create(null);
       let mustUnescape = false;
@@ -2265,7 +2265,7 @@ var require_extension = __commonJS({
         }).join(", ");
       }).join(", ");
     }
-    module2.exports = { format, parse };
+    module2.exports = { format, parse: parse2 };
   }
 });
 
@@ -2278,7 +2278,7 @@ var require_websocket = __commonJS({
     var http = require("http");
     var net2 = require("net");
     var tls = require("tls");
-    var { randomBytes: randomBytes3, createHash: createHash5 } = require("crypto");
+    var { randomBytes: randomBytes4, createHash: createHash5 } = require("crypto");
     var { Duplex, Readable } = require("stream");
     var { URL: URL2 } = require("url");
     var PerMessageDeflate = require_permessage_deflate();
@@ -2299,7 +2299,7 @@ var require_websocket = __commonJS({
     var {
       EventTarget: { addEventListener, removeEventListener }
     } = require_event_target();
-    var { format, parse } = require_extension();
+    var { format, parse: parse2 } = require_extension();
     var { toBuffer } = require_buffer_util();
     var kAborted = /* @__PURE__ */ Symbol("kAborted");
     var protocolVersions = [8, 13];
@@ -2816,7 +2816,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes3(16).toString("base64");
+      const key = randomBytes4(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -2976,7 +2976,7 @@ var require_websocket = __commonJS({
           }
           let extensions;
           try {
-            extensions = parse(secWebSocketExtensions);
+            extensions = parse2(secWebSocketExtensions);
           } catch (err) {
             const message = "Invalid Sec-WebSocket-Extensions header";
             abortHandshake(websocket, socket, message);
@@ -3268,7 +3268,7 @@ var require_subprotocol = __commonJS({
   "node_modules/ws/lib/subprotocol.js"(exports2, module2) {
     "use strict";
     var { tokenChars } = require_validation();
-    function parse(header) {
+    function parse2(header) {
       const protocols = /* @__PURE__ */ new Set();
       let start = -1;
       let end = -1;
@@ -3304,7 +3304,7 @@ var require_subprotocol = __commonJS({
       protocols.add(protocol);
       return protocols;
     }
-    module2.exports = { parse };
+    module2.exports = { parse: parse2 };
   }
 });
 
@@ -8864,7 +8864,10 @@ var COPY = {
   hostChanged: "The HQ address changed. Sign in again to use it.",
   keyringMissing: "Your HQ sign-in is stored without the system keychain on this computer.",
   renewSignIn: "Your HQ sign-in needs renewing.",
-  signInOtherWindow: "Signing in to AI Workforce One HQ from another VS Code window. Finish there; this window picks it up.",
+  signInOtherWindow: "Signing in to AI Workforce One HQ from another VS Code window. Finish there and this window picks it up, or sign in here instead.",
+  signInHereAction: "Sign in here instead",
+  signInMovedToOtherWindow: "Sign-in moved to another VS Code window. Finish it there.",
+  signInInProgress: "Already signing in to AI Workforce One HQ in this window. Waiting for the code.",
   revoked: "Your access to HQ from this computer ended. Sign in again.",
   signInAction: "Sign in",
   tooOld: "This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view.",
@@ -8923,7 +8926,9 @@ var COPY = {
   forwardDetected: (port) => `${port}  detected \xB7 Forward?`,
   forwardPaused: "paused \xB7 click to resume",
   forwardRefusedPort: (port) => `Port ${port} cannot be forwarded: the team machine uses it itself.`,
-  forwardRestart: (team) => `${team} needs a restart before ports can be forwarded. Stop and start it in HQ.`,
+  // kr-api's `restart_required`: Developer access is on now (the org gate passed), but this boot
+  // started without it, so its relay does not serve `forward` until the next start.
+  forwardRestart: (team) => `${team} started before Developer access was turned on. Restart it once (Restart machine in HQ team settings) and ports will forward.`,
   forwardNotAllowed: (team) => `You cannot forward ports from ${team}.`,
   forwardTeamOff: (team) => `${team} is off. Wake it, then forward the port again.`,
   forwardTeamStopped: (team) => `${team} is stopped. Start it from the team page in HQ, then forward the port again.`,
@@ -9048,8 +9053,8 @@ function isOnHost(url, host) {
 }
 
 // src/hq/hq-service.ts
-var import_node_crypto4 = require("node:crypto");
-var import_node_fs4 = require("node:fs");
+var import_node_crypto5 = require("node:crypto");
+var import_node_fs5 = require("node:fs");
 var import_node_os2 = __toESM(require("node:os"), 1);
 var import_node_path3 = __toESM(require("node:path"), 1);
 
@@ -9057,6 +9062,7 @@ var import_node_path3 = __toESM(require("node:path"), 1);
 var REMOTE_ACCESS_TTL_SEC = 15 * 60;
 var REMOTE_REFRESH_IDLE_TTL_SEC = 30 * 24 * 60 * 60;
 var REMOTE_REFRESH_ABSOLUTE_TTL_SEC = 90 * 24 * 60 * 60;
+var REMOTE_DEVICE_CODE_TTL_SEC = 600;
 var HQ_HEADER_ORG = "x-hq-org";
 var HQ_HEADER_NONCE = "x-hq-nonce";
 var HQ_HEADER_DEVICE_SIG = "x-hq-device-sig";
@@ -9704,6 +9710,151 @@ async function runDeviceFlow(deps, input) {
   return { kind: "expired" };
 }
 
+// src/auth/signin-lock.ts
+var import_node_fs4 = require("node:fs");
+var import_node_crypto4 = require("node:crypto");
+var SIGNIN_LOCK_TTL_MS = (REMOTE_DEVICE_CODE_TTL_SEC + 60) * 1e3;
+var SIGNIN_LOCK_STALE_MS = 3e4;
+var SIGNIN_LOCK_HEARTBEAT_MS = 5e3;
+var SIGNIN_TAKEOVER_WAIT_MS = 2e4;
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+function parse(raw) {
+  try {
+    const r = JSON.parse(raw);
+    return {
+      pid: typeof r.pid === "number" && r.pid > 0 ? r.pid : null,
+      expiresAt: typeof r.expiresAt === "number" ? r.expiresAt : null
+    };
+  } catch {
+    const legacy = /^(\d+):[0-9a-f]+$/.exec(raw.trim());
+    const pid = legacy ? Number(legacy[1]) : 0;
+    return { pid: pid > 0 ? pid : null, expiresAt: null };
+  }
+}
+function inspect(file, staleMs) {
+  let raw;
+  let mtimeMs;
+  try {
+    mtimeMs = (0, import_node_fs4.statSync)(file).mtimeMs;
+    raw = (0, import_node_fs4.readFileSync)(file, "utf8");
+  } catch {
+    return null;
+  }
+  const { pid, expiresAt } = parse(raw);
+  const now = Date.now();
+  if (pid !== null && !pidAlive(pid)) return { raw, stale: "owner-gone" };
+  if (now - mtimeMs > staleMs) return { raw, stale: "no-heartbeat" };
+  if (expiresAt !== null && now > expiresAt) return { raw, stale: "expired" };
+  return { raw, stale: null };
+}
+function breakIf(file, aside, shouldBreak) {
+  try {
+    (0, import_node_fs4.renameSync)(file, aside);
+  } catch {
+    return;
+  }
+  try {
+    if (!shouldBreak(aside)) {
+      try {
+        (0, import_node_fs4.linkSync)(aside, file);
+      } catch {
+      }
+    }
+  } finally {
+    (0, import_node_fs4.rmSync)(aside, { force: true });
+  }
+}
+var cancelFileOf = (file) => `${file}.cancel`;
+function tryCreate(file, opts) {
+  const raw = JSON.stringify({
+    owner: (0, import_node_crypto4.randomBytes)(8).toString("hex"),
+    pid: process.pid,
+    expiresAt: Date.now() + (opts.ttlMs ?? SIGNIN_LOCK_TTL_MS)
+  });
+  let fd;
+  try {
+    fd = (0, import_node_fs4.openSync)(file, "wx", 384);
+  } catch (err) {
+    if (err.code === "EEXIST") return null;
+    throw err;
+  }
+  try {
+    (0, import_node_fs4.writeSync)(fd, raw);
+  } finally {
+    (0, import_node_fs4.closeSync)(fd);
+  }
+  let cancelAsked = false;
+  const beat = setInterval(() => {
+    try {
+      if ((0, import_node_fs4.readFileSync)(file, "utf8") !== raw) return;
+      const now = /* @__PURE__ */ new Date();
+      (0, import_node_fs4.utimesSync)(file, now, now);
+    } catch {
+      return;
+    }
+    try {
+      if ((0, import_node_fs4.readFileSync)(cancelFileOf(file), "utf8") !== raw || cancelAsked) return;
+      cancelAsked = true;
+      (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
+      opts.onCancelRequested?.();
+    } catch {
+    }
+  }, opts.heartbeatMs ?? SIGNIN_LOCK_HEARTBEAT_MS);
+  beat.unref?.();
+  return {
+    release: () => {
+      clearInterval(beat);
+      try {
+        if ((0, import_node_fs4.readFileSync)(file, "utf8") === raw) (0, import_node_fs4.rmSync)(file, { force: true });
+      } catch {
+      }
+    }
+  };
+}
+function acquireSignInLock(file, opts = {}) {
+  const staleMs = opts.staleMs ?? SIGNIN_LOCK_STALE_MS;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const lock = tryCreate(file, opts);
+    if (lock) return { kind: "acquired", lock };
+    const held = inspect(file, staleMs);
+    if (!held) continue;
+    if (held.stale === null) return { kind: "busy" };
+    breakIf(file, `${file}.stale-${(0, import_node_crypto4.randomBytes)(4).toString("hex")}`, (aside) => {
+      const moved = inspect(aside, staleMs);
+      return moved !== null && moved.stale !== null;
+    });
+  }
+  return { kind: "busy" };
+}
+async function takeOverSignInLock(file, opts = {}) {
+  const staleMs = opts.staleMs ?? SIGNIN_LOCK_STALE_MS;
+  const first = acquireSignInLock(file, opts);
+  if (first.kind === "acquired") return first;
+  const target = inspect(file, staleMs);
+  if (target) {
+    (0, import_node_fs4.writeFileSync)(cancelFileOf(file), target.raw, { mode: 384 });
+    const deadline = Date.now() + (opts.takeoverWaitMs ?? SIGNIN_TAKEOVER_WAIT_MS);
+    while (Date.now() < deadline && inspect(file, staleMs)?.raw === target.raw) await sleep2(100);
+    breakIf(file, `${file}.takeover-${(0, import_node_crypto4.randomBytes)(4).toString("hex")}`, (aside) => {
+      try {
+        return (0, import_node_fs4.readFileSync)(aside, "utf8") === target.raw;
+      } catch {
+        return false;
+      }
+    });
+    (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
+  }
+  return acquireSignInLock(file, opts);
+}
+
 // src/util/emitter.ts
 var Emitter = class {
   listeners = /* @__PURE__ */ new Set();
@@ -9840,6 +9991,8 @@ var HqService = class {
   onRevoked = this.revokedEmitter.event;
   clientCache = null;
   signingIn = false;
+  /** The flow running in THIS window: its code (once known) and how to cancel it. */
+  flow = null;
   tooOldShown = false;
   revokedShown = false;
   /** The allowed host, or null (a host outside the allow-list is never contacted). */
@@ -9866,7 +10019,7 @@ var HqService = class {
   }
   /** One lock file per (editor, host) and purpose, shared by every window of this editor. */
   lockName(purpose, host) {
-    return `${purpose}-${(0, import_node_crypto4.createHash)("sha256").update(`${this.deps.appName}|${host}`).digest("hex").slice(0, 12)}.lock`;
+    return `${purpose}-${(0, import_node_crypto5.createHash)("sha256").update(`${this.deps.appName}|${host}`).digest("hex").slice(0, 12)}.lock`;
   }
   async client() {
     const host = this.host();
@@ -9978,31 +10131,54 @@ var HqService = class {
   async askToSignIn(message, modal) {
     if (await this.deps.ui.askToSignIn(message, modal)) void this.signIn();
   }
-  /** "HQ: Sign In" (D1). */
-  async signIn() {
+  /** "HQ: Sign In" (D1). A click never does nothing: it starts, re-shows or explains a flow. */
+  async signIn(opts = {}) {
     const verdict = this.deps.host();
     if (!verdict.ok) {
       this.deps.ui.modal(COPY.hostNotAllowed(verdict.host));
       return "host-not-allowed";
     }
-    if (this.signingIn) return "busy";
+    if (this.signingIn) {
+      const flow = this.flow;
+      if (flow?.code) this.deps.ui.showDeviceCode(flow.code, flow.cancel);
+      else this.deps.ui.info(COPY.signInInProgress);
+      return "busy";
+    }
     this.signingIn = true;
     const host = verdict.host;
-    let release = null;
+    let cancelled = false;
+    let wake = () => void 0;
+    const woken = new Promise((r) => wake = r);
+    const cancel = () => {
+      cancelled = true;
+      wake();
+    };
+    let movedAway = false;
+    const lockOpts = {
+      ...this.deps.signInLock,
+      onCancelRequested: () => {
+        movedAway = true;
+        cancel();
+      }
+    };
+    let acquired;
     try {
-      (0, import_node_fs4.mkdirSync)(this.lockDir(), { recursive: true, mode: 448 });
-      release = await acquireFileLock(import_node_path3.default.join(this.lockDir(), this.lockName("signin", host)), {
-        staleMs: 3e4,
-        waitMs: 0
-      });
+      (0, import_node_fs5.mkdirSync)(this.lockDir(), { recursive: true, mode: 448 });
+      const file = import_node_path3.default.join(this.lockDir(), this.lockName("signin", host));
+      acquired = opts.takeOver ? await takeOverSignInLock(file, lockOpts) : acquireSignInLock(file, lockOpts);
     } catch (err) {
       this.signingIn = false;
-      if (err instanceof FileLockBusyError) {
-        this.deps.ui.info(COPY.signInOtherWindow);
-        return "busy";
-      }
-      throw err;
+      this.deps.ui.modal(COPY.signInFailed(err instanceof Error ? err.message : COPY.unreachable));
+      return "failed";
     }
+    if (acquired.kind === "busy") {
+      this.signingIn = false;
+      void this.deps.ui.offerSignInHere(COPY.signInOtherWindow).then((here) => {
+        if (here) void this.signIn({ takeOver: true });
+      });
+      return "busy";
+    }
+    const release = () => acquired.lock.release();
     if (this.deps.store.account(host) && await this.deps.store.loadDeviceKey(host)) {
       release();
       this.signingIn = false;
@@ -10010,8 +10186,9 @@ var HqService = class {
       this.changed.fire();
       return "approved";
     }
-    let cancelled = false;
     let shown = null;
+    this.flow = { code: null, cancel };
+    const sleep4 = this.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     try {
       const { seed32, pub32 } = generateDeviceKeyMaterial();
       const hostname = (this.deps.hostname ?? (() => import_node_os2.default.hostname().split(".")[0] ?? ""))();
@@ -10022,14 +10199,14 @@ var HqService = class {
           host,
           clientHeaders: this.clientHeaders(),
           now: this.deps.now ?? Date.now,
-          sleep: this.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+          // A cancel (this window's Cancel, or another window signing in instead) ends the wait.
+          sleep: (ms) => Promise.race([sleep4(ms), woken]),
           cancelled: () => cancelled,
           onCode: async (code, pageUrl) => {
+            if (this.flow) this.flow.code = code;
             await this.deps.ui.copyToClipboard(code);
-            shown = this.deps.ui.showDeviceCode(code, () => {
-              cancelled = true;
-            });
-            await this.deps.ui.openExternal(pageUrl);
+            shown = this.deps.ui.showDeviceCode(code, cancel);
+            void this.deps.ui.openExternal(pageUrl).then(void 0, () => void 0);
           }
         },
         {
@@ -10040,7 +10217,8 @@ var HqService = class {
         }
       );
       if (result.kind !== "approved") {
-        this.reportSignInFailure(result);
+        if (movedAway) this.deps.ui.info(COPY.signInMovedToOtherWindow);
+        else this.reportSignInFailure(result);
         return result.kind;
       }
       const a = result.approved;
@@ -10062,6 +10240,7 @@ var HqService = class {
     } finally {
       shown?.close();
       release();
+      this.flow = null;
       this.signingIn = false;
     }
   }
@@ -10497,7 +10676,7 @@ function cleanLabel(value, max = 200) {
 }
 
 // src/ports/ports.ts
-var DENIED_FORWARD_PORTS = [9229, 9230];
+var DENIED_FORWARD_PORTS = [2375, 2376, 9229, 9230];
 var specKey = (s) => `${s.workspaceId}:${s.remotePort}`;
 function forwardError(team, err) {
   if (err instanceof ConnectRefusedError) {
@@ -10931,7 +11110,7 @@ var CLI_ATTACH_COPY = {
   detached: "hq: detached.",
   nowViewOnly: "hq: you can watch this session but not type in it."
 };
-var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+var sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
 function cleanPorts(value) {
   if (!Array.isArray(value)) return null;
   const ports = value.filter(
@@ -10977,7 +11156,7 @@ ${copy.detached}` };
       });
       if (opened !== null) {
         if ((reconnects > 0 || announced) && intent === "reconnect" && (opened === 0 || opened === 503) && reconnects < MAX_RECONNECTS) {
-          await sleep2(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+          await sleep3(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
           reconnects += 1;
           continue;
         }
@@ -10998,7 +11177,7 @@ ${copy.detached}` };
       if (end.kind === "dropped" && reconnects < MAX_RECONNECTS) {
         sink.say(`\r
 ${copy.reconnecting}`);
-        await sleep2(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+        await sleep3(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
         reconnects += 1;
         intent = "reconnect";
         continue;
@@ -12774,7 +12953,7 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.1.0".length > 0 ? "0.1.0" : "0.0.0-dev";
+var EXTENSION_VERSION = "0.1.1".length > 0 ? "0.1.1" : "0.0.0-dev";
 
 // src/fs/events-client.ts
 var import_ws3 = __toESM(require_ws(), 1);
@@ -13260,7 +13439,7 @@ var HqFsApi = class {
 };
 
 // src/fs/fs-core.ts
-var import_node_crypto5 = require("node:crypto");
+var import_node_crypto6 = require("node:crypto");
 
 // src/fs/caches.ts
 var LISTING_TTL_MS = 3e4;
@@ -13480,7 +13659,7 @@ function shownName(name) {
   return isSafeName(name) ? name : name.replace(UNSAFE_CHARS, REPLACEMENT);
 }
 function suffixedName(cleaned, real, hexLength = 6) {
-  const h = (0, import_node_crypto5.createHash)("sha256").update(real).digest("hex").slice(0, hexLength);
+  const h = (0, import_node_crypto6.createHash)("sha256").update(real).digest("hex").slice(0, hexLength);
   const dot = cleaned.lastIndexOf(".");
   return dot > 0 ? `${cleaned.slice(0, dot)} ~${h}${cleaned.slice(dot)}` : `${cleaned} ~${h}`;
 }
@@ -14752,7 +14931,8 @@ function vscodeUi() {
     copyToClipboard: async (text) => vscode11.env.clipboard.writeText(text),
     info: (message) => void vscode11.window.showInformationMessage(message),
     askToSignIn: async (message, modal) => await (modal ? vscode11.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode11.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
-    modal: (message) => void vscode11.window.showErrorMessage(message, { modal: true })
+    modal: (message) => void vscode11.window.showErrorMessage(message, { modal: true }),
+    offerSignInHere: async (message) => await vscode11.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction
   };
 }
 function hostSetting() {

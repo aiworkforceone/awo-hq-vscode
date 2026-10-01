@@ -23,7 +23,8 @@ import { Emitter } from '../util/emitter.js';
 import { cleanLabel } from '../util/text.js';
 
 /** Refused before any request (decision 14). HQ also refuses them. */
-export const DENIED_FORWARD_PORTS: readonly number[] = [9229, 9230];
+// docker-in-teams D27: and the Docker API (2375, 2376), matching HQ's and the runner's refusal.
+export const DENIED_FORWARD_PORTS: readonly number[] = [2375, 2376, 9229, 9230];
 
 export interface ForwardSpec {
   orgSlug: string;

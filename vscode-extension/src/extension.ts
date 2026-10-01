@@ -75,6 +75,9 @@ function vscodeUi(): HqUi {
         ? vscode.window.showWarningMessage(message, { modal: true }, COPY.signInAction)
         : vscode.window.showWarningMessage(message, COPY.signInAction))) === COPY.signInAction,
     modal: (message) => void vscode.window.showErrorMessage(message, { modal: true }),
+    offerSignInHere: async (message) =>
+      (await vscode.window.showInformationMessage(message, COPY.signInHereAction)) ===
+      COPY.signInHereAction,
   };
 }
 

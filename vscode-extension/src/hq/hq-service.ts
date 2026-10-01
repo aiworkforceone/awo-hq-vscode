@@ -40,9 +40,14 @@ import {
   publicLineOf,
   toOpenSshPrivateKey,
 } from '@hq/client/device-key.js';
-import { acquireFileLock, FileLockBusyError } from '@hq/client/file-lock.js';
 import { partitionTeams, type Team } from '@hq/client/teams.js';
 import { deviceLabelFor, runDeviceFlow, type DeviceFlowResult } from '../auth/device-flow.js';
+import {
+  acquireSignInLock,
+  takeOverSignInLock,
+  type SignInLockOptions,
+  type SignInLockResult,
+} from '../auth/signin-lock.js';
 import { COPY } from '../copy.js';
 import { Emitter } from '../util/emitter.js';
 import { type Account, type SessionStore } from './session-store.js';
@@ -63,6 +68,8 @@ export interface HqUi {
   /** A notification with a Sign in action; resolves true when it was chosen. */
   askToSignIn(message: string, modal: boolean): Promise<boolean>;
   modal(message: string): void;
+  /** Another window is signing in: offer "Sign in here instead"; resolves true when it was chosen. */
+  offerSignInHere(message: string): Promise<boolean>;
 }
 
 export interface HqServiceDeps {
@@ -76,8 +83,10 @@ export interface HqServiceDeps {
   fetch?: FetchLike;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  /** Where the cross-window refresh lock lives. Default `~/.hq/vscode`. */
+  /** Where the cross-window refresh and sign-in locks live. Default `~/.hq/vscode`. */
   lockDir?: string;
+  /** Test seam: the sign-in lock's TTL, heartbeat and take-over wait (defaults in signin-lock.ts). */
+  signInLock?: Omit<SignInLockOptions, 'onCancelRequested'>;
   hostname?: () => string;
   platform?: string;
 }
@@ -94,6 +103,8 @@ export class HqService {
 
   private clientCache: { host: string; client: HqClient } | null = null;
   private signingIn = false;
+  /** The flow running in THIS window: its code (once known) and how to cancel it. */
+  private flow: { code: string | null; cancel: () => void } | null = null;
   private tooOldShown = false;
   private revokedShown = false;
 
@@ -254,34 +265,61 @@ export class HqService {
     if (await this.deps.ui.askToSignIn(message, modal)) void this.signIn();
   }
 
-  /** "HQ: Sign In" (D1). */
-  async signIn(): Promise<SignInOutcome> {
+  /** "HQ: Sign In" (D1). A click never does nothing: it starts, re-shows or explains a flow. */
+  async signIn(opts: { takeOver?: boolean } = {}): Promise<SignInOutcome> {
     const verdict = this.deps.host();
     if (!verdict.ok) {
       this.deps.ui.modal(COPY.hostNotAllowed(verdict.host));
       return 'host-not-allowed';
     }
-    if (this.signingIn) return 'busy';
+    if (this.signingIn) {
+      // This window is already signing in: show its code again (the first notice may be hidden).
+      const flow = this.flow;
+      if (flow?.code) this.deps.ui.showDeviceCode(flow.code, flow.cancel);
+      else this.deps.ui.info(COPY.signInInProgress);
+      return 'busy';
+    }
     this.signingIn = true;
     const host = verdict.host;
     // ONE device flow per editor at a time, across windows (nonprod 2026-09-30: several windows
     // at a relaunch each ran one, and one sign-in made two grants). The lock is held for the whole
-    // flow (heartbeat); a window that finds it held says so and starts nothing.
-    let release: (() => void) | null = null;
+    // flow and never past the device code's life (signin-lock.ts); a window that finds it held by a
+    // live flow offers "Sign in here instead".
+    let cancelled = false;
+    let wake: () => void = () => undefined;
+    const woken = new Promise<void>((r) => (wake = r));
+    const cancel = (): void => {
+      cancelled = true;
+      wake();
+    };
+    let movedAway = false;
+    const lockOpts: SignInLockOptions = {
+      ...this.deps.signInLock,
+      onCancelRequested: () => {
+        movedAway = true;
+        cancel();
+      },
+    };
+    let acquired: SignInLockResult;
     try {
       mkdirSync(this.lockDir(), { recursive: true, mode: 0o700 });
-      release = await acquireFileLock(path.join(this.lockDir(), this.lockName('signin', host)), {
-        staleMs: 30_000,
-        waitMs: 0,
-      });
+      const file = path.join(this.lockDir(), this.lockName('signin', host));
+      acquired = opts.takeOver
+        ? await takeOverSignInLock(file, lockOpts)
+        : acquireSignInLock(file, lockOpts);
     } catch (err) {
       this.signingIn = false;
-      if (err instanceof FileLockBusyError) {
-        this.deps.ui.info(COPY.signInOtherWindow);
-        return 'busy';
-      }
-      throw err;
+      this.deps.ui.modal(COPY.signInFailed(err instanceof Error ? err.message : COPY.unreachable));
+      return 'failed';
     }
+    if (acquired.kind === 'busy') {
+      this.signingIn = false;
+      void this.deps.ui.offerSignInHere(COPY.signInOtherWindow).then((here) => {
+        if (here) void this.signIn({ takeOver: true });
+      });
+      return 'busy';
+    }
+    const release = () => acquired.lock.release();
     // Another window finished a sign-in while this one waited: adopt it, never make a second grant.
     if (this.deps.store.account(host) && (await this.deps.store.loadDeviceKey(host))) {
       release();
@@ -290,8 +328,9 @@ export class HqService {
       this.changed.fire();
       return 'approved';
     }
-    let cancelled = false;
     let shown: { close(): void } | null = null;
+    this.flow = { code: null, cancel };
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     try {
       // A fresh key for every sign-in: a new grant never reuses an old grant's key.
       const { seed32, pub32 } = generateDeviceKeyMaterial();
@@ -303,14 +342,16 @@ export class HqService {
           host,
           clientHeaders: this.clientHeaders(),
           now: this.deps.now ?? Date.now,
-          sleep: this.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+          // A cancel (this window's Cancel, or another window signing in instead) ends the wait.
+          sleep: (ms) => Promise.race([sleep(ms), woken]),
           cancelled: () => cancelled,
           onCode: async (code, pageUrl) => {
+            if (this.flow) this.flow.code = code;
             await this.deps.ui.copyToClipboard(code);
-            shown = this.deps.ui.showDeviceCode(code, () => {
-              cancelled = true;
-            });
-            await this.deps.ui.openExternal(pageUrl);
+            shown = this.deps.ui.showDeviceCode(code, cancel);
+            // Never awaited: an open-website prompt left unanswered must not stall the flow (and
+            // hold the sign-in lock) before its first poll.
+            void this.deps.ui.openExternal(pageUrl).then(undefined, () => undefined);
           },
         },
         {
@@ -321,7 +362,8 @@ export class HqService {
         },
       );
       if (result.kind !== 'approved') {
-        this.reportSignInFailure(result);
+        if (movedAway) this.deps.ui.info(COPY.signInMovedToOtherWindow);
+        else this.reportSignInFailure(result);
         return result.kind;
       }
       const a = result.approved;
@@ -345,6 +387,7 @@ export class HqService {
     } finally {
       (shown as { close(): void } | null)?.close();
       release();
+      this.flow = null;
       this.signingIn = false;
     }
   }

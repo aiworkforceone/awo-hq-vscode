@@ -179,6 +179,7 @@ beforeEach(async () => {
       info: () => undefined,
       askToSignIn: async () => false,
       modal: () => undefined,
+      offerSignInHere: async () => false,
     },
     host: () => ({ ok: true, host: fake.url }),
     extensionVersion: '0.1.0',
@@ -350,6 +351,20 @@ describe("the extension never shows the CLI's sentences (item 14)", () => {
   });
 });
 
+describe('a machine that started before Developer access was turned on', () => {
+  it('restart_required names the cause and the one restart that fixes it, without sounding broken', () => {
+    const e = new ConnectRefusedError(
+      'hq: x',
+      new HqApiError(409, 'REMOTE_UNSUPPORTED_RUNNER', 'x', { reason: 'restart_required' }),
+    );
+    const text = forwardError('tech & software', e);
+    expect(text).toBe(
+      'tech & software started before Developer access was turned on. Restart it once (Restart machine in HQ team settings) and ports will forward.',
+    );
+    expect(text).not.toMatch(/—| - |asleep|needs a restart/i);
+  });
+});
+
 describe('code review S5/S6', () => {
   it('S6: a STOPPED team gets its own sentence, not "has no machine yet"', () => {
     const e = new ConnectRefusedError(
@@ -515,6 +530,24 @@ describe('Ports (D11)', () => {
     expect(stub.messages.map((m) => m.text)).toEqual([
       'Port 9229 cannot be forwarded: the team machine uses it itself.',
     ]);
+  });
+
+  it.each([2375, 2376])(
+    'docker-in-teams D27: refuses the Docker API port %i before any request',
+    async (port) => {
+      const ports = new Ports(svc, mem as never);
+      await ports.start(withTeamAliases(orgs())[0]!, port, port);
+      expect(fake.requests.filter((r) => r.path.endsWith('/connections'))).toEqual([]);
+      expect(stub.messages.map((m) => m.text)).toEqual([
+        `Port ${port} cannot be forwarded: the team machine uses it itself.`,
+      ]);
+    },
+  );
+
+  it('docker-in-teams D27: a Docker API listener is never offered', () => {
+    const ports = new Ports(svc, mem as never);
+    ports.offer(withTeamAliases(orgs())[0]!, [8000, 2375, 2376]);
+    expect(ports.getChildren().map((e) => (e.kind === 'detected' ? e.port : null))).toEqual([8000]);
   });
 
   it('a forward restored after a reload stays paused: no connection until resumed', async () => {

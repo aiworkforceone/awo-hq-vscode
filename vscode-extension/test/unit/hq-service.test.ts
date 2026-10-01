@@ -9,12 +9,14 @@
  *   - a 401 wipes everything and closes terminals and forwards (`onRevoked`); a 426 is said once;
  *   - sign-out revokes the grant in HQ (device-signed DELETE) and then wipes.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { RemoteOrg } from '@kpa/shared/remote.types';
-import { HqService, type HqUi } from '../../src/hq/hq-service.js';
+import { HqService, type HqServiceDeps, type HqUi } from '../../src/hq/hq-service.js';
 import { COPY } from '../../src/copy.js';
 import { SessionStore, type MementoLike, type SecretsLike } from '../../src/hq/session-store.js';
 
@@ -170,8 +172,13 @@ function fakeUi() {
     infos: [] as string[],
     modals: [] as string[],
     asked: [] as string[],
-    showDeviceCode: (code: string) => {
+    /** Offers of "Sign in here instead", and what the person picks. */
+    offered: [] as string[],
+    signInHere: false,
+    cancelCode: null as (() => void) | null,
+    showDeviceCode: (code: string, onCancel: () => void) => {
       ui.codes.push(code);
+      ui.cancelCode = onCancel;
       return { close: () => undefined };
     },
     openExternal: async (url: string) => void ui.opened.push(url),
@@ -182,6 +189,10 @@ function fakeUi() {
       return false;
     },
     modal: (m: string) => void ui.modals.push(m),
+    offerSignInHere: async (m: string) => {
+      ui.offered.push(m);
+      return ui.signInHere;
+    },
   };
   return ui satisfies HqUi;
 }
@@ -197,6 +208,7 @@ function service(
   mem: MementoLike,
   fetchFn: typeof fetch,
   ui = fakeUi(),
+  extra: Partial<HqServiceDeps> = {},
 ): { svc: HqService; ui: ReturnType<typeof fakeUi>; store: SessionStore } {
   const store = new SessionStore(secrets, mem);
   const svc = new HqService({
@@ -210,6 +222,7 @@ function service(
     lockDir,
     hostname: () => 'jeans-mbp',
     platform: 'darwin',
+    ...extra,
   });
   return { svc, ui, store };
 }
@@ -312,12 +325,120 @@ describe('one device flow across windows (nonprod 2026-09-30: two grants from on
     const first = a.svc.signIn();
     await new Promise((r) => setTimeout(r, 50));
     expect(await b.svc.signIn()).toBe('busy');
-    expect(b.ui.infos).toEqual([COPY.signInOtherWindow]);
+    expect(b.ui.offered).toEqual([COPY.signInOtherWindow]);
     approve();
     expect(await first).toBe('approved');
     // The other window finished it: this one is signed in with no second grant.
     expect(await b.svc.signIn()).toBe('approved');
     expect(hq.seen.filter((x) => x.path === '/api/remote/device/start')).toHaveLength(1);
+  });
+});
+
+/** The sign-in lock file of the test editor ('Cursor') on HOST, named as the service names it. */
+function signInLockFile(): string {
+  const id = createHash('sha256').update(`Cursor|${HOST}`).digest('hex').slice(0, 12);
+  return path.join(lockDir, `signin-${id}.lock`);
+}
+
+/** A sleep that never ends on its own: the flow only moves on when it is cancelled. */
+const forever = () => new Promise<void>(() => undefined);
+
+const starts = (hq: ReturnType<typeof fakeHq>) =>
+  hq.seen.filter((x) => x.path === '/api/remote/device/start').length;
+
+describe('a stuck sign-in lock (0.1.1: "Signing in from another VS Code window" and nothing else)', () => {
+  it('a window whose flow hangs (browser prompt never answered) does not hold the lock past its TTL', async () => {
+    const hq = fakeHq();
+    const secrets = sharedSecrets();
+    const mem = memento();
+    const lock = { ttlMs: 300, heartbeatMs: 50 };
+    const hungUi = fakeUi();
+    hungUi.openExternal = () => new Promise(() => undefined); // the open-website prompt, never answered
+    const a = service(secrets, mem, hq.fetchFn, hungUi, { sleep: forever, signInLock: lock });
+    void a.svc.signIn();
+    await vi.waitFor(() => expect(a.ui.codes).toHaveLength(1));
+    const b = service(secrets, mem, hq.fetchFn, fakeUi(), { signInLock: lock });
+    expect(await b.svc.signIn()).toBe('busy'); // inside the TTL, the live window keeps it
+    await new Promise((r) => setTimeout(r, 400));
+    expect(await b.svc.signIn()).toBe('approved'); // past it, the lock is taken over
+    expect(starts(hq)).toBe(2);
+    expect(b.svc.signedIn()).toBe(true);
+  });
+
+  it('a lock left by a window that is gone (its process exited) is taken over at once', async () => {
+    const hq = fakeHq();
+    const secrets = sharedSecrets();
+    const mem = memento();
+    // The editor's previous sign-in lock (0.1.0 format, "<pid>:<token>"), still fresh: the window
+    // crashed a moment ago and nothing heartbeats it any more.
+    const gone = spawnSync(process.execPath, ['-e', '0']).pid;
+    writeFileSync(signInLockFile(), `${gone}:0123456789abcdef`);
+    const { svc } = service(secrets, mem, hq.fetchFn);
+    expect(await svc.signIn()).toBe('approved');
+  });
+
+  it('another window really signing in: "Sign in here instead" cancels it and signs in here', async () => {
+    const hq = fakeHq();
+    const secrets = sharedSecrets();
+    const mem = memento();
+    const lock = { heartbeatMs: 20, takeoverWaitMs: 5_000 };
+    const a = service(secrets, mem, hq.fetchFn, fakeUi(), { sleep: forever, signInLock: lock });
+    const first = a.svc.signIn();
+    await vi.waitFor(() => expect(a.ui.codes).toHaveLength(1));
+    const b = service(secrets, mem, hq.fetchFn, fakeUi(), { signInLock: lock });
+    b.ui.signInHere = true;
+    expect(await b.svc.signIn()).toBe('busy');
+    expect(b.ui.offered).toEqual([COPY.signInOtherWindow]);
+    // The other window gave up its flow (it said where the sign-in went) and this one finished.
+    expect(await first).toBe('cancelled');
+    expect(a.ui.infos).toEqual([COPY.signInMovedToOtherWindow]);
+    await vi.waitFor(() => expect(b.svc.signedIn()).toBe(true));
+    expect(starts(hq)).toBe(2);
+  });
+
+  it('"Sign in here instead" against a window that never answers (0.1.0) takes the lock after a wait', async () => {
+    const hq = fakeHq();
+    const secrets = sharedSecrets();
+    const mem = memento();
+    // A live process (this one) holding a 0.1.0 lock that ignores cancel requests.
+    writeFileSync(signInLockFile(), `${process.pid}:fedcba9876543210`);
+    const b = service(secrets, mem, hq.fetchFn, fakeUi(), { signInLock: { takeoverWaitMs: 200 } });
+    b.ui.signInHere = true;
+    expect(await b.svc.signIn()).toBe('busy');
+    await vi.waitFor(() => expect(b.svc.signedIn()).toBe(true));
+  });
+
+  it('clicking Sign in again in the window that is signing in shows its code again', async () => {
+    const hq = fakeHq();
+    const { svc, ui } = service(sharedSecrets(), memento(), hq.fetchFn, fakeUi(), {
+      sleep: forever,
+    });
+    const first = svc.signIn();
+    await vi.waitFor(() => expect(ui.codes).toHaveLength(1));
+    expect(await svc.signIn()).toBe('busy');
+    expect(ui.codes).toEqual(['WDJB-MJHT', 'WDJB-MJHT']);
+    expect(starts(hq)).toBe(1);
+    ui.cancelCode?.();
+    expect(await first).toBe('cancelled');
+    // The cancelled flow let the lock go: the next click starts a new one.
+    expect(readdirSync(lockDir).filter((f) => f.startsWith('signin-'))).toEqual([]);
+  });
+
+  it('a click before the code is known says a sign-in is starting in this window', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hq = fakeHq();
+    const slowStart = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/device/start')) await gate;
+      return hq.fetchFn(url, init);
+    }) as unknown as typeof fetch;
+    const { svc, ui } = service(sharedSecrets(), memento(), slowStart);
+    const first = svc.signIn();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await svc.signIn()).toBe('busy');
+    expect(ui.infos).toEqual([COPY.signInInProgress]);
+    release();
+    expect(await first).toBe('approved');
   });
 });
 

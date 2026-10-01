@@ -25,7 +25,11 @@ export const COPY = {
   keyringMissing: 'Your HQ sign-in is stored without the system keychain on this computer.',
   renewSignIn: 'Your HQ sign-in needs renewing.',
   signInOtherWindow:
-    'Signing in to AI Workforce One HQ from another VS Code window. Finish there; this window picks it up.',
+    'Signing in to AI Workforce One HQ from another VS Code window. Finish there and this window picks it up, or sign in here instead.',
+  signInHereAction: 'Sign in here instead',
+  signInMovedToOtherWindow: 'Sign-in moved to another VS Code window. Finish it there.',
+  signInInProgress:
+    'Already signing in to AI Workforce One HQ in this window. Waiting for the code.',
   revoked: 'Your access to HQ from this computer ended. Sign in again.',
   signInAction: 'Sign in',
   tooOld:
@@ -108,8 +112,10 @@ export const COPY = {
   forwardPaused: 'paused · click to resume',
   forwardRefusedPort: (port: number) =>
     `Port ${port} cannot be forwarded: the team machine uses it itself.`,
+  // kr-api's `restart_required`: Developer access is on now (the org gate passed), but this boot
+  // started without it, so its relay does not serve `forward` until the next start.
   forwardRestart: (team: string) =>
-    `${team} needs a restart before ports can be forwarded. Stop and start it in HQ.`,
+    `${team} started before Developer access was turned on. Restart it once (Restart machine in HQ team settings) and ports will forward.`,
   forwardNotAllowed: (team: string) => `You cannot forward ports from ${team}.`,
   forwardTeamOff: (team: string) => `${team} is off. Wake it, then forward the port again.`,
   forwardTeamStopped: (team: string) =>
