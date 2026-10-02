@@ -4,6 +4,7 @@
  * re-subscribes and hands the file system a `resync`, a 4401 that stops dialling, and the caches.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -98,6 +99,54 @@ describe('EventsHub', () => {
     expect(hub.isLive(team)).toBe(true);
     sub.dispose();
     await until(() => !hub.isLive(team));
+  });
+
+  it('fix/vscode-presence: a person opening a folder subscribes `open`; the client re-subscribing by itself (a drop, a renewed sign-in) says `reconnect`', async () => {
+    const seen: string[] = [];
+    const sockets: WebSocket[] = [];
+    const B = '3f9a1c2e-2222-4222-8333-444455556666';
+    const teamB = { ...team, alias: 'hq-b', workspace: { id: B } } as unknown as Team;
+    const host = await fakeHq((ws, n) => {
+      sockets.push(ws);
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as {
+          type: string;
+          workspaceId: string;
+          intent?: string;
+        };
+        if (f.type !== 'subscribe') return;
+        seen.push(`${n}:${f.workspaceId === WS_ID ? 'A' : 'B'}:${f.intent}`);
+        ws.send(
+          JSON.stringify({
+            type: 'subscribed',
+            workspaceId: f.workspaceId,
+            state: 'running',
+            watch: true,
+          }),
+        );
+      });
+    });
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 20,
+      maxBackoffMs: 40,
+    });
+    hubs.push(hub);
+    const subA = hub.subscribe(team); // the folder opens (before the socket exists)
+    await until(() => seen.length === 1);
+    hub.subscribe(teamB); // another folder opened later, on the open socket
+    await until(() => seen.length === 2);
+    expect(seen).toEqual(['1:A:open', '1:B:open']);
+    sockets[0]!.terminate(); // the hourly LB recycle
+    await until(() => seen.length === 4);
+    expect(seen.slice(2).sort()).toEqual(['2:A:reconnect', '2:B:reconnect']);
+    hub.reconnectAll(); // a renew elsewhere: the client dials again by itself
+    await until(() => seen.length === 6);
+    expect(seen.slice(4).sort()).toEqual(['3:A:reconnect', '3:B:reconnect']);
+    subA.dispose(); // the folder closed ...
+    hub.subscribe(team); // ... and opened again by the person
+    await until(() => seen.length === 7);
+    expect(seen[6]).toBe('3:A:open');
   });
 
   it('a 4401 close stops dialling (the sign-in service handles the revocation)', async () => {
@@ -465,5 +514,151 @@ describe('caches', () => {
     expect(l.stat('t', 'src/a')?.masked).toBeUndefined();
     l.invalidate('t', 'src');
     expect(l.stat('t', 'src/a')).toBeUndefined();
+  });
+});
+
+/** A socket the test drives by hand (hq-vscode-multi-account W3). */
+class HandWs extends EventEmitter {
+  readyState = 0;
+  sent: string[] = [];
+  terminated = false;
+  send(d: string): void {
+    this.sent.push(d);
+  }
+  terminate(): void {
+    this.terminated = true;
+    this.readyState = 3;
+  }
+  close(): void {
+    this.readyState = 3;
+  }
+  open(): void {
+    this.readyState = 1;
+    this.emit('open');
+  }
+}
+
+describe('EventsHub across a renew (hq-vscode-multi-account decision 26, review W3)', () => {
+  const handClient = (grant: string) =>
+    ({
+      host: 'http://127.0.0.1:1',
+      grant,
+      upgradeHeaders: async () => ({ Authorization: `Bearer hqa_${grant}` }),
+      accessToken: async () => `hqa_${grant}`,
+    }) as unknown as HqClient & { grant: string };
+
+  it('a 4401 from a socket of the OLD grant redials with the new one; it is not a stop', async () => {
+    const sockets: HandWs[] = [];
+    let current = 'g1';
+    let unauthorized = 0;
+    const hub = new EventsHub({
+      client: async () => handClient(current),
+      ws: () => {
+        const s = new HandWs();
+        sockets.push(s);
+        return s as never;
+      },
+      grantOf: (c) => (c as unknown as { grant: string }).grant,
+      currentGrant: () => current,
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      onUnauthorized: () => void (unauthorized += 1),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => sockets.length === 1);
+    sockets[0]!.open();
+    current = 'g2'; // another window renewed the account and revoked g1
+    sockets[0]!.emit('close', 4401);
+    await until(() => sockets.length === 2);
+    expect(unauthorized).toBe(0);
+  });
+
+  it('a 4401 on the CURRENT grant still stops and asks the service', async () => {
+    const sockets: HandWs[] = [];
+    let unauthorized = 0;
+    const hub = new EventsHub({
+      client: async () => handClient('g1'),
+      ws: () => {
+        const s = new HandWs();
+        sockets.push(s);
+        return s as never;
+      },
+      grantOf: (c) => (c as unknown as { grant: string }).grant,
+      currentGrant: () => 'g1',
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      onUnauthorized: () => void (unauthorized += 1),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => sockets.length === 1);
+    sockets[0]!.open();
+    sockets[0]!.emit('close', 4401);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sockets).toHaveLength(1);
+    expect(unauthorized).toBe(1);
+  });
+
+  it('a 4401 from a socket that was already replaced is ignored', async () => {
+    const sockets: HandWs[] = [];
+    let unauthorized = 0;
+    const hub = new EventsHub({
+      client: async () => handClient('g1'),
+      ws: () => {
+        const s = new HandWs();
+        sockets.push(s);
+        return s as never;
+      },
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+      onUnauthorized: () => void (unauthorized += 1),
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => sockets.length === 1);
+    sockets[0]!.open();
+    hub.reconnectAll();
+    await until(() => sockets.length === 2);
+    sockets[1]!.open();
+    sockets[0]!.emit('close', 4401); // the stale one
+    await new Promise((r) => setTimeout(r, 50));
+    expect(unauthorized).toBe(0);
+    expect(sockets).toHaveLength(2);
+    // The live socket still carries the subscription: a second watch adds no socket.
+    hub.subscribe(team);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('a reconnect asked while a dial is in flight redials once that dial finishes', async () => {
+    const sockets: HandWs[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const hub = new EventsHub({
+      client: async () => {
+        calls += 1;
+        if (calls === 1) await gate;
+        return handClient(calls === 1 ? 'g1' : 'g2');
+      },
+      ws: (_url, headers) => {
+        const s = new HandWs();
+        (s as unknown as { auth: string }).auth = headers.Authorization ?? '';
+        sockets.push(s);
+        return s as never;
+      },
+      minBackoffMs: 5,
+      maxBackoffMs: 10,
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => calls === 1);
+    hub.reconnectAll(); // renewed while the first dial waits for its client
+    release();
+    await until(() => sockets.length >= 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toBe(2);
+    expect(sockets.map((s) => (s as unknown as { auth: string }).auth)).toEqual(['Bearer hqa_g2']);
   });
 });

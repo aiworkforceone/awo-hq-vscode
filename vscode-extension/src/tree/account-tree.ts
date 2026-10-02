@@ -1,52 +1,101 @@
 /**
- * The Account view: who is signed in, to which HQ, and the two actions that manage it: sign out, and
- * HQ web's Account → Devices (this editor's grant is one row there, beside the CLI's). No device
- * list is built into the extension: one place to manage the same list.
+ * The Account view: every HQ account signed in on this editor and host (hq-vscode-multi-account
+ * §Wireframes), the one THIS window uses marked "Active in this window", a Sign out beside each
+ * (inline), HQ web's Account → Devices under each (this editor's grant is one row there, beside the
+ * CLI's), then Add another account and the host. Host-scoped, not window-scoped: it never goes blank
+ * because this window's own pick was signed out elsewhere.
+ *
+ * An account whose sign-in cannot be used here (decision 18's zombie) says "Sign in again", and
+ * clicking it renews that account.
  */
 import * as vscode from 'vscode';
 import { COPY } from '../copy.js';
-import type { HqService } from '../hq/hq-service.js';
+import type { AccountRef } from '../hq/account-ref.js';
+import type { AccountBundle, HqAccounts } from '../hq/accounts.js';
 import { cleanLabel } from '../util/text.js';
 
-type AccountNode = { kind: 'user' | 'host' | 'devices' | 'signOut' };
+export type AccountNode =
+  | { kind: 'account'; ref: AccountRef; email: string }
+  | { kind: 'devices'; ref: AccountRef; email: string }
+  | { kind: 'addAccount' }
+  | { kind: 'host' };
 
 export class AccountTree implements vscode.TreeDataProvider<AccountNode> {
   private readonly changed = new vscode.EventEmitter<AccountNode | undefined>();
   readonly onDidChangeTreeData = this.changed.event;
 
-  constructor(private readonly service: HqService) {
-    service.onDidChange(() => this.changed.fire(undefined));
+  constructor(
+    private readonly accounts: Pick<HqAccounts, 'list' | 'active' | 'get' | 'host' | 'onDidChange'>,
+  ) {
+    accounts.onDidChange(() => this.changed.fire(undefined));
+  }
+
+  /** Active first, then by email (never by recency). */
+  private ordered(): AccountBundle[] {
+    const active = this.accounts.active();
+    const rest = this.accounts.list().filter((b) => b !== active);
+    return active ? [active, ...rest] : rest;
   }
 
   getChildren(node?: AccountNode): AccountNode[] {
-    if (node || !this.service.signedIn()) return [];
-    return [{ kind: 'user' }, { kind: 'host' }, { kind: 'devices' }, { kind: 'signOut' }];
+    if (node?.kind === 'account') return [{ kind: 'devices', ref: node.ref, email: node.email }];
+    if (node) return [];
+    const all = this.ordered();
+    if (all.length === 0) return [];
+    return [
+      ...all.map((b) => ({ kind: 'account' as const, ref: b.ref, email: b.email })),
+      { kind: 'addAccount' },
+      { kind: 'host' },
+    ];
   }
 
   getTreeItem(node: AccountNode): vscode.TreeItem {
-    const account = this.service.account();
     switch (node.kind) {
-      case 'user': {
-        const item = new vscode.TreeItem(cleanLabel(account?.user.email ?? ''));
-        item.description = cleanLabel(account?.user.name ?? '');
+      case 'account': {
+        const b = this.accounts.get(node.ref);
+        const active = b !== null && this.accounts.active() === b;
+        const item = new vscode.TreeItem(
+          cleanLabel(node.email),
+          vscode.TreeItemCollapsibleState.Expanded,
+        );
         item.iconPath = new vscode.ThemeIcon('account');
-        return item;
-      }
-      case 'host': {
-        const item = new vscode.TreeItem(COPY.accountHost(this.service.host() ?? ''));
-        item.iconPath = new vscode.ThemeIcon('globe');
+        item.contextValue = active ? 'account:active' : 'account:other';
+        if (b?.health === 'needs-sign-in') {
+          item.description = COPY.needsSignInDescription;
+          item.command = {
+            command: 'hq.renewAccount',
+            title: COPY.needsSignInDescription,
+            arguments: [node.ref],
+          };
+        } else if (active) {
+          item.description = COPY.accountActiveNote;
+        } else {
+          // Clicking another account's row makes it this window's (MA-U9). The active row does
+          // nothing: it must not pretend to.
+          item.command = {
+            command: 'hq.switchAccount',
+            title: COPY.pickAccount,
+            arguments: [node.ref],
+          };
+        }
         return item;
       }
       case 'devices': {
         const item = new vscode.TreeItem(COPY.manageDevices);
         item.iconPath = new vscode.ThemeIcon('link-external');
+        item.tooltip = COPY.manageDevicesBrowserNote(cleanLabel(node.email));
         item.command = { command: 'hq.manageDevices', title: COPY.manageDevices };
         return item;
       }
-      case 'signOut': {
-        const item = new vscode.TreeItem(COPY.signOut);
-        item.iconPath = new vscode.ThemeIcon('sign-out');
-        item.command = { command: 'hq.signOut', title: COPY.signOut };
+      case 'addAccount': {
+        const item = new vscode.TreeItem(COPY.addAnotherAccount);
+        item.iconPath = new vscode.ThemeIcon('add');
+        item.command = { command: 'hq.addAccount', title: COPY.addAnotherAccount };
+        return item;
+      }
+      case 'host': {
+        const item = new vscode.TreeItem(COPY.accountHost(this.accounts.host() ?? ''));
+        item.iconPath = new vscode.ThemeIcon('globe');
         return item;
       }
     }

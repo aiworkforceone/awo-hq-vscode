@@ -10,6 +10,7 @@
  */
 import type { DevicePollResponse, DeviceStartResponse } from '@kpa/shared/remote.types';
 import { postJson, type FetchLike } from '@hq/client/api.js';
+import { COPY } from '../copy.js';
 import { isOnHost } from '../hq/hosts.js';
 
 export interface DeviceFlowDeps {
@@ -35,8 +36,12 @@ export type DeviceFlowResult =
   | { kind: 'approved'; approved: Extract<DevicePollResponse, { status: 'approved' }> }
   | { kind: 'denied' }
   | { kind: 'expired' }
+  /** The code expired right after a poll lost to the network: the approval may have happened. */
+  | { kind: 'expired-after-network' }
   | { kind: 'unavailable' }
   | { kind: 'too-old' }
+  /** Too many sign-ins pending from this network (HQ allows 5 per IP): wait a minute. */
+  | { kind: 'throttled' }
   | { kind: 'cancelled' }
   | { kind: 'failed'; detail: string };
 
@@ -48,6 +53,10 @@ export function deviceLabelFor(appName: string, hostname: string): string {
   const label = `${clean(appName) || 'VS Code'} on ${clean(hostname) || 'this computer'}`;
   return label.slice(0, 64);
 }
+
+/** Polls in a row that may fail on the network before the sign-in ends (about 15 s at 5 s). */
+export const POLL_NETWORK_RETRIES = 3;
+const unreachable = COPY.unreachable;
 
 export async function runDeviceFlow(
   deps: DeviceFlowDeps,
@@ -61,6 +70,7 @@ export async function runDeviceFlow(
   );
   if (start.status === 404) return { kind: 'unavailable' };
   if (start.status === 426) return { kind: 'too-old' };
+  if (start.status === 429) return { kind: 'throttled' };
   if (start.status !== 200) {
     return { kind: 'failed', detail: start.body?.error ?? `HTTP ${start.status}` };
   }
@@ -71,16 +81,30 @@ export async function runDeviceFlow(
   await deps.onCode(s.userCode, pageUrl);
 
   let interval = Math.max(5, s.interval);
+  let networkFailures = 0;
   const deadline = deps.now() + s.expiresIn * 1000;
   while (deps.now() < deadline) {
     await deps.sleep(interval * 1000);
     if (deps.cancelled()) return { kind: 'cancelled' };
-    const poll = await postJson<DevicePollResponse & { error?: string; code?: string }>(
-      deps.fetch,
-      `${deps.host}/api/remote/device/poll`,
-      { deviceCode: s.deviceCode },
-      deps.clientHeaders,
-    );
+    let poll: Awaited<
+      ReturnType<typeof postJson<DevicePollResponse & { error?: string; code?: string }>>
+    >;
+    try {
+      poll = await postJson<DevicePollResponse & { error?: string; code?: string }>(
+        deps.fetch,
+        `${deps.host}/api/remote/device/poll`,
+        { deviceCode: s.deviceCode },
+        deps.clientHeaders,
+      );
+      if (networkFailures > 0 && poll.status === 410) return { kind: 'expired-after-network' };
+      networkFailures = 0;
+    } catch {
+      // A poll that never got an answer (a dropped kept-alive socket, a network blip) is asked
+      // again at the next interval; only a run of them ends the sign-in, with the reason.
+      networkFailures += 1;
+      if (networkFailures >= POLL_NETWORK_RETRIES) return { kind: 'failed', detail: unreachable };
+      continue;
+    }
     if (poll.status === 200 && poll.body.status === 'approved') {
       return { kind: 'approved', approved: poll.body };
     }

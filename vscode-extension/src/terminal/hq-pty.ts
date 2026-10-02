@@ -13,6 +13,10 @@
  *
  * `open()` waits for the first `setDimensions` (250 ms) when VS Code did not pass one, so the attach
  * never paints at 80x24 and then reflows (DEF-192).
+ *
+ * A terminal belongs to the ACCOUNT that opened it (hq-vscode-multi-account §6): its service is that
+ * account's, its tab name carries the account's short label while 2 or more accounts are signed in,
+ * and when another window renews the account the terminal re-attaches in the same tab (decision 26).
  */
 import * as vscode from 'vscode';
 import type { RemoteSessionSummary } from '@kpa/shared/remote.types';
@@ -26,11 +30,16 @@ import { LocalEchoSession } from '@hq/client/local-echo/engine-adapter.js';
 import { createTerminalFilter } from '@hq/client/terminal-filter.js';
 import type { Team } from '@hq/client/teams.js';
 import { COPY } from '../copy.js';
+import type { AccountRef } from '../hq/account-ref.js';
 import type { HqService } from '../hq/hq-service.js';
+import { AccountGoneError, NeedsSignInError, SecretsBusyError } from '../hq/session-store.js';
 import { cleanLabel } from '../util/text.js';
 
 export interface PtyDeps {
+  /** The service of the account that opened this terminal (never the window's active one). */
   service: HqService;
+  /** The account's short label while 2 or more accounts are signed in (decision 21). */
+  accountLabel?: () => string | undefined;
   localEchoMode: () => LocalEchoMode;
   /** VS Code's own typeahead forced on (`terminal.integrated.localEchoEnabled: "on"`). */
   vsCodeTypeaheadOn: () => boolean;
@@ -54,18 +63,21 @@ export interface PtyDeps {
 }
 
 export interface SessionTarget {
+  account: AccountRef;
   team: Team;
   session: RemoteSessionSummary;
 }
 
-/** The terminal's tab name: `HQ · <team> · <session>` plus the state suffix. */
+/** The terminal's tab name: `HQ · [<account> ·] <team> · <session>` plus the state suffix. */
 export function terminalName(
-  target: SessionTarget,
+  target: Pick<SessionTarget, 'team' | 'session'>,
   state: { canType: boolean; waking?: boolean; stopped?: boolean },
+  label?: string,
 ): string {
   const base = COPY.terminalName(
     cleanLabel(target.team.workspace.name) || target.team.alias,
     cleanLabel(target.session.name) || target.session.id.slice(0, 8),
+    label,
   );
   if (state.stopped) return `${base}${COPY.terminalSuffixStopped}`;
   if (state.waking) return `${base}${COPY.terminalSuffixWaking}`;
@@ -100,12 +112,20 @@ export class HqPty implements vscode.Pseudoterminal {
   private closedByUser = false;
   private canType: boolean;
   private waking = false;
+  private stopped = false;
+  /** A re-attach was asked for (the account was renewed): the current attach ends quietly. */
+  private reattaching = false;
+  /** The grant the current attach was made with. */
+  private attachedGrant: string | undefined;
+  /** The name the tab was given last (relabels that change nothing are not sent). */
+  private lastName: string;
 
   constructor(
     private readonly deps: PtyDeps,
     readonly target: SessionTarget,
   ) {
     this.canType = target.session.canType;
+    this.lastName = terminalName(target, { canType: this.canType }, deps.accountLabel?.());
   }
 
   open(initial: vscode.TerminalDimensions | undefined): void {
@@ -136,7 +156,36 @@ export class HqPty implements vscode.Pseudoterminal {
   }
 
   private rename(): void {
-    this.name.fire(terminalName(this.target, { canType: this.canType, waking: this.waking }));
+    const next = terminalName(
+      this.target,
+      { canType: this.canType, waking: this.waking, stopped: this.stopped },
+      this.deps.accountLabel?.(),
+    );
+    if (next === this.lastName) return;
+    this.lastName = next;
+    this.name.fire(next);
+  }
+
+  /** The account count crossed 1 ↔ 2: the tab gains or loses the account label (decision 28). */
+  relabel(): void {
+    this.rename();
+  }
+
+  private end(): void {
+    this.stopped = true;
+    this.rename();
+  }
+
+  /**
+   * Decision 26: the account's slot holds a new grant. Detach the session attached with the old
+   * client and attach again with the new one, in this tab (it says "reconnecting").
+   */
+  reattach(): void {
+    if (this.closedByUser || this.stopped || !this.session) return;
+    // Already attached with the new grant (the old one's 4401 got here first): nothing to do.
+    if (this.attachedGrant === this.deps.service.currentGrant()) return;
+    this.reattaching = true;
+    this.session.detach();
   }
 
   private async createEcho(): Promise<LocalEchoSession | null> {
@@ -164,12 +213,22 @@ export class HqPty implements vscode.Pseudoterminal {
   }
 
   private async run(): Promise<void> {
-    const client = await this.deps.service.client();
-    if (!client) {
-      this.say(COPY.signedOutWelcome);
+    // A run that starts is the re-attach (or a first attach): no detach from before may end it.
+    this.reattaching = false;
+    let client;
+    try {
+      client = await this.deps.service.client();
+    } catch (err) {
+      await this.deps.service.handleError(err);
+      const ours =
+        err instanceof AccountGoneError ||
+        err instanceof NeedsSignInError ||
+        err instanceof SecretsBusyError;
+      this.say(ours ? err.message : COPY.signedOutWelcome);
       this.closed.fire(1);
       return;
     }
+    this.attachedGrant = this.deps.service.grantOfClient(client);
     const { team, session } = this.target;
     const teamName = cleanLabel(team.workspace.name) || team.alias;
     this.echo = await this.createEcho();
@@ -242,6 +301,7 @@ export class HqPty implements vscode.Pseudoterminal {
     try {
       end = await attach.run();
     } catch (err) {
+      if (this.again()) return;
       await this.deps.service.handleError(err);
       this.say(err instanceof Error ? err.message : COPY.unreachable);
       this.deps.onState?.('ended');
@@ -249,6 +309,7 @@ export class HqPty implements vscode.Pseudoterminal {
     } finally {
       this.echo?.close();
     }
+    if (this.again()) return;
     this.deps.onState?.('ended');
     if (this.closedByUser) return;
     if (end.kind === 'refused') {
@@ -257,23 +318,52 @@ export class HqPty implements vscode.Pseudoterminal {
         // The upgrade's token was refused: ask HQ once over HTTP, which knows whether the grant is
         // really gone (and wipes and says so if it is).
         await this.deps.service.refreshOrgs().catch(() => undefined);
+        if (this.renewedUnder()) return;
       }
       this.say(COPY.terminalRefused(end.status));
-      this.name.fire(terminalName(this.target, { canType: this.canType, stopped: true }));
+      this.end();
       return;
     }
     if (end.kind === 'lost') {
       this.say(COPY.connectionLost);
-      this.name.fire(terminalName(this.target, { canType: this.canType, stopped: true }));
+      this.end();
       return;
     }
     if (end.message) this.say(end.message);
-    this.name.fire(terminalName(this.target, { canType: this.canType, stopped: true }));
+    this.end();
     // U28: HQ closed the terminal 4401. Ask HQ once over HTTP now: a confirmed revocation wipes the
-    // sign-in, shows the modal, and closes every terminal and forward (`onRevoked`).
-    if (end.unauthorized) await this.deps.service.refreshOrgs().catch(() => undefined);
+    // account, shows the modal, and closes its terminals and forwards (`onAccountRemoved`). The
+    // OLD grant's 4401 after a renew in another window is not that: attach again (decision 26).
+    if (end.unauthorized) {
+      await this.deps.service.refreshOrgs().catch(() => undefined);
+      this.renewedUnder();
+    }
     // The session ended on the server's side (it stopped, access ended): the tab stays, so the
     // person can read why; closing it is theirs.
+  }
+
+  /**
+   * The account's slot holds another grant than the one this attach used (renewed elsewhere, and
+   * its 4401/401 arrived before the renew was noticed): attach again in this tab. True if so.
+   */
+  private renewedUnder(): boolean {
+    const now = this.deps.service.currentGrant();
+    if (this.closedByUser || now === null || now === this.attachedGrant) return false;
+    this.stopped = false;
+    this.rename();
+    this.say(COPY.reconnecting);
+    void this.run();
+    return true;
+  }
+
+  /** The attach ended because `reattach` asked: say so and attach again with the new grant. */
+  private again(): boolean {
+    if (!this.reattaching || this.closedByUser) return false;
+    this.reattaching = false;
+    this.session = null;
+    this.say(COPY.reconnecting);
+    void this.run();
+    return true;
   }
 
   dispose(): void {

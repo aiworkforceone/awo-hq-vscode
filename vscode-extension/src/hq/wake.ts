@@ -19,7 +19,8 @@ export const WAKE_STILL_MS = 20_000;
 export type WakeOutcome =
   | { kind: 'running' }
   | { kind: 'timeout' }
-  | { kind: 'no-machine' }
+  /** HQ has no machine it could resume (stopped, or never started): only a session start helps. */
+  | { kind: 'stopped' }
   | { kind: 'throttled' }
   | { kind: 'unavailable' }
   | { kind: 'refused'; error: HqApiError };
@@ -29,6 +30,37 @@ export interface WakeDeps {
   sleep: (ms: number) => Promise<void>;
   /** A line of progress for the person (the notification's message). */
   report: (message: string) => void;
+}
+
+export interface WakeNotice {
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  /** Buttons, in order: start a session on the team (it starts a stopped machine), open it in HQ. */
+  actions: Array<'newSession' | 'openInHq'>;
+}
+
+/** What Wake Team says for an outcome (`name` is the team's cleaned label). */
+export function wakeNotice(outcome: WakeOutcome, name: string, team: Team): WakeNotice {
+  switch (outcome.kind) {
+    case 'running':
+      return { level: 'info', message: COPY.woke(name), actions: [] };
+    case 'timeout':
+      return { level: 'warning', message: COPY.wakeTimeout(name), actions: [] };
+    case 'stopped':
+      return {
+        level: 'warning',
+        message: COPY.wakeStopped(name),
+        actions: team.workspace.rights.forward ? ['newSession', 'openInHq'] : ['openInHq'],
+      };
+    case 'throttled':
+      return { level: 'warning', message: COPY.wakeThrottled, actions: [] };
+    case 'unavailable':
+      return { level: 'warning', message: COPY.wakeUnavailable, actions: [] };
+    case 'refused':
+      return outcome.error.status === 403
+        ? { level: 'error', message: COPY.forwardNotAllowed(name), actions: [] }
+        : { level: 'error', message: outcome.error.message, actions: [] };
+  }
 }
 
 export function teamPath(team: Team): string {
@@ -49,7 +81,7 @@ export async function wakeTeam(client: HqClient, team: Team, deps: WakeDeps): Pr
     if (!(err instanceof HqApiError)) throw err;
     if (err.status === 404) return { kind: 'unavailable' };
     if (err.status === 429) return { kind: 'throttled' };
-    if (err.code === 'RUNNER_UNAVAILABLE') return { kind: 'no-machine' };
+    if (err.code === 'RUNNER_UNAVAILABLE') return { kind: 'stopped' };
     return { kind: 'refused', error: err };
   }
   if (answer.state === 'running') return { kind: 'running' };

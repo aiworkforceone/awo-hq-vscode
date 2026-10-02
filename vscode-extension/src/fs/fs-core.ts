@@ -16,7 +16,12 @@
  *   events     `fs-changed` invalidates and fires; `resync` (after any gap) re-reads what was cached.
  */
 import { createHash } from 'node:crypto';
-import { HqApiError, NotLoggedInError } from '@hq/client/api.js';
+import {
+  HqApiError,
+  NotLoggedInError,
+  RefreshBusyError,
+  RefreshNeedsRenewingError,
+} from '@hq/client/api.js';
 import type { Team } from '@hq/client/teams.js';
 import {
   FS_MAX_WRITE_BYTES,
@@ -24,6 +29,12 @@ import {
   type FsStat,
 } from '@kpa/shared/remote-fs.types';
 import { COPY } from '../copy.js';
+import {
+  AccountGoneError,
+  NeedsSignInError,
+  SecretsBusyError,
+  SlotRenewedError,
+} from '../hq/session-store.js';
 import { cleanLabel, CONTROL_RANGES, rangesSource, UNSAFE_RANGES } from '../util/text.js';
 import { ContentCache, ListingCache, parentOf, type CachedStat } from './caches.js';
 import type { EventsHub } from './events-client.js';
@@ -116,6 +127,12 @@ const THROTTLE_RETRIES = 3;
 const THROTTLE_WAIT_MAX_MS = 10_000;
 /** The 60 s refresh re-lists the root and at most this many other recently listed folders. */
 const REFRESH_FOLDERS_MAX = 20;
+/**
+ * Live re-test #2 (round 3): a team that refused because it was off is asked again (a background
+ * stat of its root, which never wakes it) this often after a sign that it may be up, for this long.
+ */
+export const TEAM_UP_PROBE_MS = 5_000;
+export const TEAM_UP_BUDGET_MS = 180_000;
 
 type Priority = 'listing' | 'normal';
 
@@ -209,6 +226,12 @@ export class HqFsCore {
   readonly contents = new ContentCache();
   private readonly ownWrites = new Map<string, { etag: string; at: number }>();
   private readonly listeners = new Set<(changes: FsChangeOut[]) => void>();
+  private readonly answered = new Set<(team: Team) => void>();
+  private readonly upListeners = new Set<(team: Team) => void>();
+  /** Teams that refused a person's request because they could not serve (off, updating). */
+  private readonly down = new Set<string>();
+  /** A probe round per team: until when it asks (a forced sign pushes this out). */
+  private readonly probeUntil = new Map<string, number>();
   private readonly now: () => number;
   /** Watched teams (refcounted), for the root refresh while their stream is down. */
   private readonly watched = new Map<string, { team: Team; n: number }>();
@@ -246,6 +269,87 @@ export class HqFsCore {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.listings = new ListingCache(this.now);
     deps.events.onFrame((f) => void this.onEvent(f));
+  }
+
+  /**
+   * The team's machine answered a file request (it is awake and serving). The provider uses it to
+   * retry tabs it refused while the team was asleep (live re-test #2).
+   */
+  onTeamAnswered(listener: (team: Team) => void): { dispose(): void } {
+    this.answered.add(listener);
+    return { dispose: () => void this.answered.delete(listener) };
+  }
+
+  /**
+   * A team that refused because it could not serve answers again (a TRANSITION: once per episode).
+   * The provider retries what it refused then, with fresh tries (live re-test #2, round 3).
+   */
+  onTeamUp(listener: (team: Team) => void): { dispose(): void } {
+    this.upListeners.add(listener);
+    return { dispose: () => void this.upListeners.delete(listener) };
+  }
+
+  /**
+   * A sign that a team which refused may be up now (a wake was asked for or answered, a terminal
+   * attached, the listing or the events stream says running). Nothing in VS Code asks a failed tab
+   * or root again by itself, so the core asks: a background stat of the root every 5 s for 3 min,
+   * until one answers (then `onTeamUp`). A team that never refused is never asked. `force` (a
+   * person's action) starts a new 3 min even right after one ran out.
+   */
+  expectUp(team: Team, opts: { force?: boolean } = {}): void {
+    const id = team.workspace.id;
+    if (!this.down.has(id)) return;
+    const running = this.probeUntil.has(id);
+    if (running && !opts.force) return;
+    this.probeUntil.set(id, this.now() + TEAM_UP_BUDGET_MS);
+    if (!running) void this.probeUntilUp(team);
+  }
+
+  private async probeUntilUp(team: Team): Promise<void> {
+    const id = team.workspace.id;
+    const generation = this.generation;
+    try {
+      while (
+        this.down.has(id) &&
+        generation === this.generation &&
+        this.now() < (this.probeUntil.get(id) ?? 0)
+      ) {
+        try {
+          // The extension's own read: never a wake, never presence (`X-HQ-Activity: background`).
+          await this.call(team, () => this.deps.api.stat(team, '', { background: true }), {
+            read: true,
+          });
+          return; // `call` saw the answer: `onTeamUp` has fired
+        } catch (err) {
+          this.reportAuth(err);
+          // Review P1: an account error is the sign-in service's to settle (one prompt, one
+          // revocation check), never asked again every 5 s.
+          if (!this.probeAgainAfter(err)) return;
+        }
+        await this.sleep(TEAM_UP_PROBE_MS);
+      }
+    } finally {
+      this.probeUntil.delete(id);
+    }
+  }
+
+  /**
+   * Worth another probe: the team still cannot serve (409 off or updating), HQ throttled us, or the
+   * network failed on the way. Anything else (an account error, a 401 or 426, another refusal)
+   * ends the round.
+   */
+  private probeAgainAfter(err: unknown): boolean {
+    if (err instanceof FsApiError) {
+      if (err.status === 409) return this.isOff(err) || this.isIssue(err);
+      // 502-504: the gateway in front of HQ (a network failure on the way, not an answer).
+      return isThrottled(err) || err.status === 502 || err.status === 503 || err.status === 504;
+    }
+    return !(
+      err instanceof HqApiError ||
+      err instanceof NotLoggedInError ||
+      err instanceof FsCoreError ||
+      isAccountError(err)
+    );
   }
 
   onDidChange(listener: (changes: FsChangeOut[]) => void): { dispose(): void } {
@@ -507,11 +611,19 @@ export class HqFsCore {
     const gate = this.gateFor(team);
     const generation = this.generation;
     let out: T;
+    let renewRetried = false;
     for (let attempt = 0; ; attempt++) {
       try {
         out = await gate.run(opts.priority ?? 'normal', run);
         break;
       } catch (err) {
+        // Another window renewed this account's slot (hq-vscode-multi-account decision 26): the
+        // service rebuilds its client and the request is retried ONCE with the new grant.
+        if (err instanceof SlotRenewedError && !renewRetried) {
+          renewRetried = true;
+          this.deps.onApiError?.(err);
+          continue;
+        }
         if (opts.read && attempt < THROTTLE_RETRIES && isThrottled(err)) {
           await this.sleep(retryAfterMs(err));
           continue;
@@ -524,6 +636,9 @@ export class HqFsCore {
     }
     if (generation !== this.generation) throw new SignedOutError();
     this.setIssue(team, null);
+    const wasDown = this.down.delete(team.workspace.id);
+    for (const l of [...this.answered]) l(team);
+    if (wasDown) for (const l of [...this.upListeners]) l(team);
     return out;
   }
 
@@ -615,7 +730,7 @@ export class HqFsCore {
    * update prompt). Background paths call this too: a refused re-list is never swallowed (L2c).
    */
   private reportAuth(err: unknown): void {
-    if (err instanceof HqApiError) {
+    if (err instanceof HqApiError || isAccountError(err)) {
       this.deps.onApiError?.(err);
       return;
     }
@@ -630,6 +745,11 @@ export class HqFsCore {
     if (err instanceof NotLoggedInError)
       return new FsCoreError('unavailable', COPY.signedOutWelcome);
     this.reportAuth(err);
+    if (isAccountError(err)) {
+      // The shared client's own sentences are the CLI's ("Run hq login"): never shown here.
+      const cli = err instanceof RefreshNeedsRenewingError || err instanceof RefreshBusyError;
+      return new FsCoreError('unavailable', cli ? COPY.renewSignIn : err.message);
+    }
     if (err instanceof HqApiError) return new FsCoreError('unavailable', err.message);
     if (!(err instanceof FsApiError)) {
       return new FsCoreError('unavailable', COPY.unreachable);
@@ -647,6 +767,7 @@ export class HqFsCore {
       case 422:
         return new FsCoreError('no-permissions', err.message);
       case 409:
+        if (this.isOff(err) || this.isIssue(err)) this.down.add(team.workspace.id);
         if (err.code === 'RUNNER_UNAVAILABLE') {
           this.deps.ui.teamOff(team, action);
           return new FsCoreError(
@@ -1127,6 +1248,7 @@ export class HqFsCore {
   dispose(): void {
     this.stopRootRefresh();
     this.watched.clear();
+    this.probeUntil.clear(); // a probe round ends at its next turn
   }
 
   private teamById(workspaceId: string): Team | undefined {
@@ -1167,6 +1289,15 @@ export class HqFsCore {
     if (frame.type === 'resync') {
       const team = this.teamById(frame.workspaceId);
       if (team) await this.resync(team);
+      return;
+    }
+    // HQ says the machine runs: a team that refused is asked again (it may still be booting).
+    if (
+      (frame.type === 'workspace-state' || frame.type === 'subscribed') &&
+      frame.state === 'running'
+    ) {
+      const team = this.teamById(frame.workspaceId);
+      if (team) this.expectUp(team, { force: true });
     }
   }
 
@@ -1213,6 +1344,8 @@ export class HqFsCore {
   clear(): void {
     this.generation += 1;
     this.issues.clear();
+    this.down.clear();
+    this.probeUntil.clear();
     this.absent.clear();
     this.realNames.clear();
     this.shownOf.clear();
@@ -1223,6 +1356,22 @@ export class HqFsCore {
     this.ownWrites.clear();
     this.etags.clear();
   }
+}
+
+/**
+ * The account cannot make this request right now (signed out elsewhere, needs signing in again,
+ * keychain busy, renewing): the service decides what to say; the file is Unavailable, never
+ * "unreachable", and nothing was sent.
+ */
+function isAccountError(err: unknown): err is Error {
+  return (
+    err instanceof AccountGoneError ||
+    err instanceof NeedsSignInError ||
+    err instanceof SecretsBusyError ||
+    err instanceof SlotRenewedError ||
+    err instanceof RefreshNeedsRenewingError ||
+    err instanceof RefreshBusyError
+  );
 }
 
 function isThrottled(err: unknown): boolean {

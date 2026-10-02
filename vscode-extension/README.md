@@ -5,7 +5,8 @@ anything on your team machines. This is a pre-release.
 
 - **Sign in** with the same device approval as the `hq` command line tool: run **HQ: Sign In**,
   enter the code on the HQ page that opens, and approve this computer. It gets its own access,
-  which you can remove at any time in HQ, under Account, Devices.
+  which you can remove at any time in HQ, under Account, Devices. You can sign in to more than one
+  HQ account; each window uses one, chosen in the status bar.
 - **Teams**: the AI Workforce One HQ sidebar lists your organizations, their teams (running,
   starting or off) and each team's sessions.
 - **Team files**: **Open Team Files** adds a team's folder to the Explorer. Open, edit and save its
@@ -33,6 +34,9 @@ kept in the editor's secret storage on this computer, and team file contents onl
   macOS and Windows and the Secret Service (for example GNOME Keyring or KWallet) on Linux. On Linux
   without a keyring, the editor stores secrets with weaker protection; the extension then says so
   once. Remove this computer in HQ, under Account, Devices, to end its access from anywhere.
+- **More than one account.** Each HQ account signed in here is its own device access, with its own
+  row in HQ under Account, Devices, and can be removed on its own. Folders, terminals and port
+  forwards always work as the account that opened them.
 - **Team files.** The extension never runs anything from team files. Files that hold masked secret
   values, and protected template files, open read only.
 - **Forwarded ports.** A forwarded port listens on `127.0.0.1` only, so other computers cannot reach

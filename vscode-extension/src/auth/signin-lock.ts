@@ -17,6 +17,10 @@
  *    only one waiter moves a given file; the mover checks what it moved and puts back (`link`, never
  *    overwriting) a lock that turns out not to be the one it meant to break.
  *
+ * The record also names the sign-in's INTENT kind (`first`, `add`, `renew`, `as`; hq-vscode-multi-account
+ * decision 12): never an email or a user id. 0.1.1's `parse` reads only `pid`/`expiresAt`, so the
+ * extra field is safe for an older window sharing the file.
+ *
  * Real time, not an injected clock: file mtimes are wall-clock.
  */
 import {
@@ -48,6 +52,8 @@ export interface SignInLockOptions {
   takeoverWaitMs?: number;
   /** Another window chose "Sign in here instead": end this window's flow. Called at most once. */
   onCancelRequested?: () => void;
+  /** What this sign-in is for, recorded in the lock (a kind only). */
+  intent?: 'first' | 'add' | 'renew' | 'as';
 }
 
 export interface SignInLock {
@@ -134,6 +140,7 @@ function tryCreate(file: string, opts: SignInLockOptions): SignInLock | null {
     owner: randomBytes(8).toString('hex'),
     pid: process.pid,
     expiresAt: Date.now() + (opts.ttlMs ?? SIGNIN_LOCK_TTL_MS),
+    ...(opts.intent ? { intent: opts.intent } : {}),
   });
   let fd: number;
   try {
@@ -208,7 +215,14 @@ export async function takeOverSignInLock(
   if (first.kind === 'acquired') return first;
   const target = inspect(file, staleMs);
   if (target) {
-    writeFileSync(cancelFileOf(file), target.raw, { mode: 0o600 });
+    // Review I1: never write through whatever already sits at the cancel path (a link, a stale
+    // request): remove it, then create it exclusively.
+    rmSync(cancelFileOf(file), { force: true });
+    try {
+      writeFileSync(cancelFileOf(file), target.raw, { mode: 0o600, flag: 'wx' });
+    } catch {
+      /* another window is asking the same holder: its request does the same */
+    }
     const deadline = Date.now() + (opts.takeoverWaitMs ?? SIGNIN_TAKEOVER_WAIT_MS);
     while (Date.now() < deadline && inspect(file, staleMs)?.raw === target.raw) await sleep(100);
     breakIf(file, `${file}.takeover-${randomBytes(4).toString('hex')}`, (aside) => {

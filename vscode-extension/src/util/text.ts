@@ -48,3 +48,14 @@ export function cleanLabel(value: unknown, max = 200): string {
     .trim()
     .slice(0, max);
 }
+
+/**
+ * A string about to be shown in a VS Code NOTIFICATION (security L1). Notification text is not
+ * Markdown, but VS Code turns `[label](command:…|https://…|file:…)` into a live link
+ * (`parseLinkedText`, which honours no escapes: a backslash before a bracket still links). So the
+ * square brackets of anything interpolated become their fullwidth forms: nothing can form a link,
+ * and the text reads the same.
+ */
+export function notificationText(value: string): string {
+  return value.replace(/\[/g, '\uFF3B').replace(/\]/g, '\uFF3D');
+}

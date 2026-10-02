@@ -1,557 +1,459 @@
 /**
- * The sign-in lifecycle against a scripted HQ (U1-U3 unit tier, D1/D2/D14/D15):
+ * The sign-in lifecycle against a loopback HQ (U1-U3 unit tier, D1/D2/D14/D15), now per account
+ * (hq-vscode-multi-account):
  *
  *   - sign-in asks for the extension's OWN grant (`hq-vscode`), opens `/device` never prefilled,
- *     copies the code, and keeps the key and the tokens in SecretStorage only (globalState holds no
- *     token and no key, U1's assertion);
+ *     copies the code, and keeps the key and the tokens in SecretStorage only, in a `user` slot
+ *     (globalState holds no token and no key, U1's assertion; nothing under the 0.1.x keys, MA-S7);
  *   - every call says `X-HQ-Client: vscode/<v>`;
  *   - two windows refreshing at once send exactly ONE `/token/refresh` (D2) and both keep working;
- *   - a 401 wipes everything and closes terminals and forwards (`onRevoked`); a 426 is said once;
+ *   - a confirmed 401 wipes THAT account and closes its things (`onAccountRemoved`); a 426 is said
+ *     once;
  *   - sign-out revokes the grant in HQ (device-signed DELETE) and then wipes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { RemoteOrg } from '@kpa/shared/remote.types';
-import { HqService, type HqServiceDeps, type HqUi } from '../../src/hq/hq-service.js';
 import { COPY } from '../../src/copy.js';
-import { SessionStore, type MementoLike, type SecretsLike } from '../../src/hq/session-store.js';
+import { HqAccounts } from '../../src/hq/accounts.js';
+import { SessionStore } from '../../src/hq/session-store.js';
+import {
+  fakeUi,
+  memento,
+  openWindow,
+  PROFILE_A,
+  secretsHub,
+  seedUserSlot,
+  startFakeHq,
+  tempLockDir,
+  USER_A,
+  userRef,
+  windowState,
+  type FakeHq,
+} from './harness.js';
 
-const HOST = 'https://hq-test.aiworkforceone.com';
-
-/** One SecretStorage shared by every "window", firing onDidChange to all of them. */
-function sharedSecrets(): SecretsLike & { data: Map<string, string> } {
-  const data = new Map<string, string>();
-  const listeners = new Set<(e: { key: string }) => unknown>();
-  return {
-    data,
-    get: async (k) => data.get(k),
-    store: async (k, v) => {
-      data.set(k, v);
-      for (const l of listeners) l({ key: k });
-    },
-    delete: async (k) => {
-      data.delete(k);
-      for (const l of listeners) l({ key: k });
-    },
-    onDidChange: (l) => {
-      listeners.add(l);
-      return { dispose: () => void listeners.delete(l) };
-    },
-  };
-}
-
-function memento(): MementoLike & { data: Map<string, unknown> } {
-  const data = new Map<string, unknown>();
-  return {
-    data,
-    get: <T>(k: string) => data.get(k) as T | undefined,
-    update: async (k, v) => {
-      if (v === undefined) data.delete(k);
-      else data.set(k, v);
-    },
-  };
-}
-
-interface Seen {
-  method: string;
-  path: string;
-  headers: Record<string, string>;
-  body: string;
-}
-
-const ORGS: RemoteOrg[] = [
-  {
-    id: 'o1',
-    slug: 'awo',
-    name: 'AI Workforce One',
-    role: 'owner',
-    remoteAccess: { allowed: true },
-    workspaces: [
-      {
-        id: '3f9a1c2e-1111-4222-8333-444455556666',
-        alias: 'hq-3f9a1c2e',
-        name: 'Backend team',
-        state: 'running',
-        rights: { forward: true, attach: true },
-        supported: true,
-      },
-    ],
-  },
-];
-
-function fakeHq(
-  opts: {
-    accessTtlMs?: number;
-    orgsStatus?: number;
-    deleteStatus?: number;
-    probeStatus?: number;
-    /** The approval waits for this (a person still at the browser). */
-    pollGate?: Promise<void>;
-  } = {},
-) {
-  const seen: Seen[] = [];
-  let refreshes = 0;
-  let n = 0;
-  const fetchFn = (async (url: string, init: RequestInit = {}) => {
-    const u = new URL(url);
-    const headers = Object.fromEntries(
-      Object.entries((init.headers as Record<string, string>) ?? {}).map(([k, v]) => [
-        k.toLowerCase(),
-        v,
-      ]),
-    );
-    seen.push({
-      method: init.method ?? 'GET',
-      path: u.pathname,
-      headers,
-      body: String(init.body ?? ''),
-    });
-    const json = (status: number, body: unknown) =>
-      new Response(JSON.stringify(body), { status, headers: { 'x-hq-nonce': `n${(n += 1)}` } });
-    switch (u.pathname) {
-      case '/api/remote/device/start':
-        return json(200, {
-          deviceCode: 'dev-code-secret',
-          userCode: 'WDJB-MJHT',
-          verificationUrl: `${HOST}/device`,
-          verificationUrlComplete: `${HOST}/device?code=WDJB-MJHT`,
-          expiresIn: 600,
-          interval: 5,
-        });
-      case '/api/remote/device/poll':
-        if (opts.pollGate) await opts.pollGate;
-        return json(200, {
-          status: 'approved',
-          grantId: 'grant-1',
-          accessToken: `hqa_${'a'.repeat(43)}`,
-          accessExpiresAt: new Date(Date.now() + (opts.accessTtlMs ?? 15 * 60_000)).toISOString(),
-          refreshToken: `hqr_${'r'.repeat(43)}`,
-          user: { id: 'u1', email: 'jean@example.com', name: 'Jean' },
-          orgs: ORGS,
-        });
-      case '/api/remote/nonce':
-        return json(200, { nonce: `nonce-${(n += 1)}`, expiresIn: 60 });
-      case '/api/remote/token/refresh':
-        refreshes += 1;
-        // Slow enough that the second window is waiting on the lock, not racing past it.
-        await new Promise((r) => setTimeout(r, 150));
-        return json(200, {
-          accessToken: `hqa_${'z'.repeat(43)}`,
-          accessExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-          refreshToken: `hqr_${'z'.repeat(43)}`,
-        });
-      case '/api/remote/orgs':
-        return opts.orgsStatus
-          ? json(opts.orgsStatus, {
-              error: 'nope',
-              code: opts.orgsStatus === 401 ? 'REMOTE_TOKEN_INVALID' : 'UPGRADE_REQUIRED',
-            })
-          : json(200, ORGS);
-      case '/api/remote/grants/grant-1':
-        return opts.deleteStatus
-          ? json(opts.deleteStatus, { error: 'no', code: 'REMOTE_TOKEN_INVALID' })
-          : new Response(null, { status: 204 });
-      case '/api/remote/probe':
-        return json(opts.probeStatus ?? 200, opts.probeStatus ? { error: 'no' } : {});
-      default:
-        return json(404, { error: 'not found' });
-    }
-  }) as unknown as typeof fetch;
-  return { fetchFn, seen, refreshes: () => refreshes };
-}
-
-function fakeUi() {
-  const ui = {
-    codes: [] as string[],
-    opened: [] as string[],
-    clipboard: [] as string[],
-    infos: [] as string[],
-    modals: [] as string[],
-    asked: [] as string[],
-    /** Offers of "Sign in here instead", and what the person picks. */
-    offered: [] as string[],
-    signInHere: false,
-    cancelCode: null as (() => void) | null,
-    showDeviceCode: (code: string, onCancel: () => void) => {
-      ui.codes.push(code);
-      ui.cancelCode = onCancel;
-      return { close: () => undefined };
-    },
-    openExternal: async (url: string) => void ui.opened.push(url),
-    copyToClipboard: async (text: string) => void ui.clipboard.push(text),
-    info: (m: string) => void ui.infos.push(m),
-    askToSignIn: async (m: string) => {
-      ui.asked.push(m);
-      return false;
-    },
-    modal: (m: string) => void ui.modals.push(m),
-    offerSignInHere: async (m: string) => {
-      ui.offered.push(m);
-      return ui.signInHere;
-    },
-  };
-  return ui satisfies HqUi;
-}
-
-let lockDir: string;
-beforeEach(() => {
-  lockDir = mkdtempSync(path.join(tmpdir(), 'hq-vscode-lock-'));
+let fake: FakeHq;
+let lock: ReturnType<typeof tempLockDir>;
+beforeEach(async () => {
+  fake = await startFakeHq();
+  lock = tempLockDir();
 });
-afterEach(() => rmSync(lockDir, { recursive: true, force: true }));
+afterEach(async () => {
+  await fake.close();
+  lock.done();
+});
 
-function service(
-  secrets: SecretsLike,
-  mem: MementoLike,
-  fetchFn: typeof fetch,
-  ui = fakeUi(),
-  extra: Partial<HqServiceDeps> = {},
-): { svc: HqService; ui: ReturnType<typeof fakeUi>; store: SessionStore } {
-  const store = new SessionStore(secrets, mem);
-  const svc = new HqService({
-    store,
-    ui,
-    host: () => ({ ok: true, host: HOST }),
-    extensionVersion: '0.1.0',
-    appName: 'Cursor',
-    fetch: fetchFn,
-    sleep: async () => undefined,
-    lockDir,
-    hostname: () => 'jeans-mbp',
-    platform: 'darwin',
-    ...extra,
-  });
-  return { svc, ui, store };
-}
+const starts = () => fake.seen.filter((x) => x.path === '/api/remote/device/start').length;
 
 describe('sign-in (D1, U1)', () => {
   it('asks for its own grant, opens /device unprefilled, and keeps secrets out of globalState', async () => {
-    const hq = fakeHq();
-    const secrets = sharedSecrets();
+    const hub = secretsHub();
     const mem = memento();
-    const { svc, ui } = service(secrets, mem, hq.fetchFn);
-    expect(await svc.signIn()).toBe('approved');
+    const w = openWindow(fake, hub, mem, lock.dir, { appName: 'Cursor' });
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('approved');
 
-    const start = hq.seen.find((s) => s.path === '/api/remote/device/start')!;
+    const start = fake.seen.find((s) => s.path === '/api/remote/device/start')!;
     const body = JSON.parse(start.body) as Record<string, string>;
     expect(body.clientName).toBe('hq-vscode');
     expect(body.deviceLabel).toBe('Cursor on jeans-mbp');
     expect(body.devicePubkey).toMatch(/^ssh-ed25519 /);
-    expect(start.headers['x-hq-client']).toBe('vscode/0.1.0');
-    // The code is typed on the page, never prefilled (T2); it is copied for the person.
-    expect(ui.opened).toEqual([`${HOST}/device`]);
-    expect(ui.codes).toEqual(['WDJB-MJHT']);
-    expect(ui.clipboard).toEqual(['WDJB-MJHT']);
+    expect(start.headers['x-hq-client']).toBe('vscode/0.2.0');
+    // The code is typed on the page, never prefilled (T2).
+    expect(w.ui.opened).toEqual([`${fake.url}/device`]);
+    expect(w.ui.codes).toEqual(['WDJB-MJHT']);
 
-    // SecretStorage holds the pair and the key; globalState holds no secret at all.
-    expect(secrets.data.get(`hq:${HOST}:tokens`)).toContain('hqa_');
-    expect(secrets.data.get(`hq:${HOST}:device`)).toContain('OPENSSH PRIVATE KEY');
-    const everything = JSON.stringify([...mem.data.entries()]);
-    expect(everything).not.toMatch(/hqa_|hqr_|PRIVATE KEY|dev-code-secret/);
-    expect(svc.signedIn()).toBe(true);
-    expect(svc.teams().map((t) => t.alias)).toEqual(['hq-3f9a1c2e']);
-    expect(ui.infos).toEqual(['Signed in to AI Workforce One HQ as jean@example.com.']);
+    // A `user` slot holds the pair and the key, each stamped with the grant; the 0.1.x keys are
+    // never created (MA-S7); globalState holds no secret at all.
+    const pk = w.store.profileKey()!;
+    const slot = `hq:${fake.url}:u:${pk}:${USER_A.id}:`;
+    const grantId = w.accounts.active()!.account.grantId;
+    expect(JSON.parse(hub.data.get(`${slot}tokens`)!)).toMatchObject({ grantId });
+    expect(JSON.parse(hub.data.get(`${slot}device`)!).grantId).toBe(grantId);
+    expect(JSON.parse(hub.data.get(`${slot}device`)!).openssh).toContain('OPENSSH PRIVATE KEY');
+    expect(hub.data.has(`hq:${fake.url}:tokens`)).toBe(false);
+    expect(hub.data.has(`hq:${fake.url}:device`)).toBe(false);
+    const everything = JSON.stringify([...mem.data.entries(), ...w.state.data.entries()]);
+    expect(everything).not.toMatch(/hqa_|hqr_|PRIVATE KEY|dev-code-/);
+    expect(w.accounts.active()?.email).toBe(USER_A.email);
+    expect(
+      w.accounts
+        .active()
+        ?.service.teams()
+        .map((t) => t.alias),
+    ).toEqual(['hq-3f9a1c2e']);
+    expect(w.ui.infos).toEqual([`Signed in to AI Workforce One HQ as ${USER_A.email}.`]);
   });
 
   it('every call after sign-in carries X-HQ-Client and asks for its next nonce', async () => {
-    const hq = fakeHq();
-    const { svc } = service(sharedSecrets(), memento(), hq.fetchFn);
-    await svc.signIn();
-    await svc.refreshOrgs();
-    const orgs = hq.seen.filter((s) => s.path === '/api/remote/orgs');
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir);
+    await w.accounts.signIn({ kind: 'first' });
+    await w.accounts.active()!.service.refreshOrgs();
+    const orgs = fake.seen.filter((s) => s.path === '/api/remote/orgs');
     expect(orgs).toHaveLength(1);
-    expect(orgs[0]!.headers['x-hq-client']).toBe('vscode/0.1.0');
+    expect(orgs[0]!.headers['x-hq-client']).toBe('vscode/0.2.0');
     expect(orgs[0]!.headers['x-hq-want-nonce']).toBe('1');
     expect(orgs[0]!.headers['x-hq-cli-version']).toBeUndefined();
+  });
+
+  it('a poll that fails on the network (a dropped kept-alive socket) is tried again, not the end of the sign-in', async () => {
+    let polls = 0;
+    const flaky = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/device/poll') && (polls += 1) <= 2) {
+        throw new TypeError('fetch failed');
+      }
+      return fetch(url, init);
+    }) as typeof fetch;
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir, { fetch: flaky });
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('approved');
+    expect(polls).toBe(3);
+  });
+
+  it('a code that expires right after a network failure says the approval may have gone through (review MUST 5)', async () => {
+    let polls = 0;
+    const lost = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/device/poll')) {
+        polls += 1;
+        if (polls === 1) throw new TypeError('fetch failed');
+        return new Response(JSON.stringify({ error: 'expired' }), { status: 410 });
+      }
+      return fetch(url, init);
+    }) as typeof fetch;
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir, { fetch: lost });
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('expired');
+    expect(w.ui.modals).toEqual([COPY.signInExpiredAfterNetwork]);
+    // A plain expiry still says only that.
+    const plain = openWindow(fake, secretsHub(), memento(), lock.dir, {
+      fetch: (async (url: string | URL, init?: RequestInit) =>
+        String(url).endsWith('/device/poll')
+          ? new Response(JSON.stringify({ error: 'expired' }), { status: 410 })
+          : fetch(url, init)) as typeof fetch,
+    });
+    await plain.accounts.signIn({ kind: 'first' });
+    expect(plain.ui.modals).toEqual([COPY.signInExpired]);
+  });
+
+  it('a poll that keeps failing on the network ends the sign-in with the reason, never silently', async () => {
+    const down = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/device/poll')) throw new TypeError('fetch failed');
+      return fetch(url, init);
+    }) as typeof fetch;
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir, { fetch: down });
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('failed');
+    expect(w.ui.modals).toEqual([COPY.signInFailed(COPY.unreachable)]);
+  });
+
+  it('a throttled device start (5 pending per network) says wait a minute, not an error string', async () => {
+    fake.startStatus = 429;
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir);
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('throttled');
+    expect(w.ui.modals).toEqual([COPY.signInThrottled]);
   });
 });
 
 describe('SessionStore fresh reads (review M-b)', () => {
   it('load(host, {fresh:true}) bypasses the 60 s in-memory copy; needsRenewing survives a round trip', async () => {
-    const data = new Map<string, string>();
-    // A SecretStorage whose onDidChange does NOT cross windows (the fallback case).
-    const secrets: SecretsLike = {
-      get: async (k) => data.get(k),
-      store: async (k, v) => void data.set(k, v),
-      delete: async (k) => void data.delete(k),
-      onDidChange: () => ({ dispose: () => undefined }),
-    };
-    const store = new SessionStore(secrets, memento()).tokenStore();
-    const pair = (r: string) => ({
-      accessToken: `hqa_${r.repeat(43)}`,
-      accessExpiresAt: new Date(Date.now() + 900_000).toISOString(),
-      refreshToken: `hqr_${r.repeat(43)}`,
-    });
-    data.set(`hq:${HOST}:tokens`, JSON.stringify(pair('a')));
-    expect((await store.load(HOST))?.refreshToken).toBe(pair('a').refreshToken);
+    const hub = secretsHub();
+    const secrets = hub.window({ crossWindow: false });
+    const mem = memento();
+    const ref = userRef(fake.url, USER_A, PROFILE_A);
+    const store = new SessionStore(secrets, mem);
+    await mem.update('hq:profileKey', PROFILE_A);
+    const g = await seedUserSlot(fake, store, ref, USER_A);
+    const ts = store.tokenStore(ref, g.id);
+    expect((await ts.load(fake.url))?.refreshToken).toBe(g.refresh);
     // Another window rotates; the event never reaches this one.
-    data.set(`hq:${HOST}:tokens`, JSON.stringify({ ...pair('b'), needsRenewing: true }));
-    expect((await store.load(HOST))?.refreshToken).toBe(pair('a').refreshToken);
-    const fresh = await store.load(HOST, { fresh: true });
-    expect(fresh?.refreshToken).toBe(pair('b').refreshToken);
+    const key = `hq:${fake.url}:u:${PROFILE_A}:${USER_A.id}:tokens`;
+    hub.data.set(
+      key,
+      JSON.stringify({
+        ...JSON.parse(hub.data.get(key)!),
+        refreshToken: 'hqr_b',
+        needsRenewing: true,
+      }),
+    );
+    expect((await ts.load(fake.url))?.refreshToken).toBe(g.refresh);
+    const fresh = await ts.load(fake.url, { fresh: true });
+    expect(fresh?.refreshToken).toBe('hqr_b');
     expect(fresh?.needsRenewing).toBe(true);
+    // A store closed over one slot refuses any other host (security B-1: never a fallback).
+    await expect(Promise.resolve(ts.load('https://hq.aiworkforceone.com'))).rejects.toThrow(
+      /host mismatch/,
+    );
   });
 });
 
 describe('refresh across windows (D2, U2)', () => {
-  it('two windows refreshing at the same moment send exactly one /token/refresh', async () => {
-    const hq = fakeHq({ accessTtlMs: 60_000 }); // inside the 2-minute refresh margin
-    const secrets = sharedSecrets();
+  it('two windows refreshing the same account at the same moment send exactly one /token/refresh', async () => {
+    fake.refreshDelayMs = 150;
+    const hub = secretsHub();
     const mem = memento();
-    const a = service(secrets, mem, hq.fetchFn);
-    await a.svc.signIn();
-    const b = service(secrets, mem, hq.fetchFn);
+    await mem.update('hq:profileKey', PROFILE_A);
+    const a = openWindow(fake, hub, mem, lock.dir);
+    await seedUserSlot(fake, a.store, userRef(fake.url, USER_A, PROFILE_A), USER_A, {
+      accessTtlMs: 60_000, // inside the 2-minute refresh margin
+    });
+    a.accounts.rederive('focus');
+    const b = openWindow(fake, hub, mem, lock.dir);
     const [ta, tb] = await Promise.all([
-      (await a.svc.client())!.accessToken(),
-      (await b.svc.client())!.accessToken(),
+      (await a.accounts.list()[0]!.service.client()).accessToken(),
+      (await b.accounts.list()[0]!.service.client()).accessToken(),
     ]);
-    expect(hq.refreshes()).toBe(1);
-    expect(ta).toBe(`hqa_${'z'.repeat(43)}`);
-    expect(tb).toBe(ta);
+    expect(fake.refreshes()).toBe(1);
+    expect(ta).toBe(tb);
   });
 });
 
 describe('one device flow across windows (nonprod 2026-09-30: two grants from one sign-in)', () => {
-  it('a second window never starts its own flow while one runs; once done, it adopts the sign-in', async () => {
+  it('a second window never starts its own flow while one runs; once done, `first` adopts it', async () => {
     let approve!: () => void;
-    const hq = fakeHq({ pollGate: new Promise<void>((r) => (approve = r)) });
-    const secrets = sharedSecrets();
+    fake.pollGate = new Promise<void>((r) => (approve = r));
+    const hub = secretsHub();
     const mem = memento();
-    const a = service(secrets, mem, hq.fetchFn);
-    const b = service(secrets, mem, hq.fetchFn);
-    const first = a.svc.signIn();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(await b.svc.signIn()).toBe('busy');
+    const a = openWindow(fake, hub, mem, lock.dir);
+    const b = openWindow(fake, hub, mem, lock.dir);
+    const first = a.accounts.signIn({ kind: 'first' });
+    await vi.waitFor(() => expect(a.ui.codes).toHaveLength(1));
+    expect((await b.accounts.signIn({ kind: 'first' })).outcome).toBe('busy');
     expect(b.ui.offered).toEqual([COPY.signInOtherWindow]);
     approve();
-    expect(await first).toBe('approved');
-    // The other window finished it: this one is signed in with no second grant.
-    expect(await b.svc.signIn()).toBe('approved');
-    expect(hq.seen.filter((x) => x.path === '/api/remote/device/start')).toHaveLength(1);
+    expect((await first).outcome).toBe('approved');
+    // The other window finished it: this one adopts it, with no second grant.
+    expect((await b.accounts.signIn({ kind: 'first' })).outcome).toBe('approved');
+    expect(b.accounts.active()?.email).toBe(USER_A.email);
+    expect(starts()).toBe(1);
   });
 });
 
-/** The sign-in lock file of the test editor ('Cursor') on HOST, named as the service names it. */
+/** The sign-in lock file of the test editor ('Code') on the fake host: the 0.1.1 name. */
 function signInLockFile(): string {
-  const id = createHash('sha256').update(`Cursor|${HOST}`).digest('hex').slice(0, 12);
-  return path.join(lockDir, `signin-${id}.lock`);
+  const id = createHash('sha256').update(`Code|${fake.url}`).digest('hex').slice(0, 12);
+  return path.join(lock.dir, `signin-${id}.lock`);
 }
 
 /** A sleep that never ends on its own: the flow only moves on when it is cancelled. */
 const forever = () => new Promise<void>(() => undefined);
 
-const starts = (hq: ReturnType<typeof fakeHq>) =>
-  hq.seen.filter((x) => x.path === '/api/remote/device/start').length;
-
 describe('a stuck sign-in lock (0.1.1: "Signing in from another VS Code window" and nothing else)', () => {
   it('a window whose flow hangs (browser prompt never answered) does not hold the lock past its TTL', async () => {
-    const hq = fakeHq();
-    const secrets = sharedSecrets();
+    const hub = secretsHub();
     const mem = memento();
-    const lock = { ttlMs: 300, heartbeatMs: 50 };
-    const hungUi = fakeUi();
-    hungUi.openExternal = () => new Promise(() => undefined); // the open-website prompt, never answered
-    const a = service(secrets, mem, hq.fetchFn, hungUi, { sleep: forever, signInLock: lock });
-    void a.svc.signIn();
+    const signInLock = { ttlMs: 300, heartbeatMs: 50 };
+    const a = openWindow(fake, hub, mem, lock.dir, { sleep: forever, signInLock });
+    a.ui.openExternal = () => new Promise(() => undefined);
+    void a.accounts.signIn({ kind: 'first' });
     await vi.waitFor(() => expect(a.ui.codes).toHaveLength(1));
-    const b = service(secrets, mem, hq.fetchFn, fakeUi(), { signInLock: lock });
-    expect(await b.svc.signIn()).toBe('busy'); // inside the TTL, the live window keeps it
+    const b = openWindow(fake, hub, mem, lock.dir, { signInLock });
+    expect((await b.accounts.signIn({ kind: 'first' })).outcome).toBe('busy');
     await new Promise((r) => setTimeout(r, 400));
-    expect(await b.svc.signIn()).toBe('approved'); // past it, the lock is taken over
-    expect(starts(hq)).toBe(2);
-    expect(b.svc.signedIn()).toBe(true);
+    expect((await b.accounts.signIn({ kind: 'first' })).outcome).toBe('approved');
+    expect(starts()).toBe(2);
+    expect(b.accounts.active()).not.toBeNull();
   });
 
   it('a lock left by a window that is gone (its process exited) is taken over at once', async () => {
-    const hq = fakeHq();
-    const secrets = sharedSecrets();
-    const mem = memento();
-    // The editor's previous sign-in lock (0.1.0 format, "<pid>:<token>"), still fresh: the window
-    // crashed a moment ago and nothing heartbeats it any more.
     const gone = spawnSync(process.execPath, ['-e', '0']).pid;
     writeFileSync(signInLockFile(), `${gone}:0123456789abcdef`);
-    const { svc } = service(secrets, mem, hq.fetchFn);
-    expect(await svc.signIn()).toBe('approved');
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir);
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('approved');
   });
 
   it('another window really signing in: "Sign in here instead" cancels it and signs in here', async () => {
-    const hq = fakeHq();
-    const secrets = sharedSecrets();
+    const hub = secretsHub();
     const mem = memento();
-    const lock = { heartbeatMs: 20, takeoverWaitMs: 5_000 };
-    const a = service(secrets, mem, hq.fetchFn, fakeUi(), { sleep: forever, signInLock: lock });
-    const first = a.svc.signIn();
+    const signInLock = { heartbeatMs: 20, takeoverWaitMs: 5_000 };
+    const a = openWindow(fake, hub, mem, lock.dir, { sleep: forever, signInLock });
+    const first = a.accounts.signIn({ kind: 'add' });
     await vi.waitFor(() => expect(a.ui.codes).toHaveLength(1));
-    const b = service(secrets, mem, hq.fetchFn, fakeUi(), { signInLock: lock });
+    const b = openWindow(fake, hub, mem, lock.dir, { signInLock });
     b.ui.signInHere = true;
-    expect(await b.svc.signIn()).toBe('busy');
+    expect((await b.accounts.signIn({ kind: 'first' })).outcome).toBe('busy');
     expect(b.ui.offered).toEqual([COPY.signInOtherWindow]);
-    // The other window gave up its flow (it said where the sign-in went) and this one finished.
-    expect(await first).toBe('cancelled');
+    expect((await first).outcome).toBe('cancelled');
     expect(a.ui.infos).toEqual([COPY.signInMovedToOtherWindow]);
-    await vi.waitFor(() => expect(b.svc.signedIn()).toBe(true));
-    expect(starts(hq)).toBe(2);
+    await vi.waitFor(() => expect(b.accounts.active()).not.toBeNull());
+    expect(starts()).toBe(2);
   });
 
   it('"Sign in here instead" against a window that never answers (0.1.0) takes the lock after a wait', async () => {
-    const hq = fakeHq();
-    const secrets = sharedSecrets();
-    const mem = memento();
-    // A live process (this one) holding a 0.1.0 lock that ignores cancel requests.
     writeFileSync(signInLockFile(), `${process.pid}:fedcba9876543210`);
-    const b = service(secrets, mem, hq.fetchFn, fakeUi(), { signInLock: { takeoverWaitMs: 200 } });
+    const b = openWindow(fake, secretsHub(), memento(), lock.dir, {
+      signInLock: { takeoverWaitMs: 200 },
+    });
     b.ui.signInHere = true;
-    expect(await b.svc.signIn()).toBe('busy');
-    await vi.waitFor(() => expect(b.svc.signedIn()).toBe(true));
+    expect((await b.accounts.signIn({ kind: 'first' })).outcome).toBe('busy');
+    await vi.waitFor(() => expect(b.accounts.active()).not.toBeNull());
   });
 
   it('clicking Sign in again in the window that is signing in shows its code again', async () => {
-    const hq = fakeHq();
-    const { svc, ui } = service(sharedSecrets(), memento(), hq.fetchFn, fakeUi(), {
-      sleep: forever,
-    });
-    const first = svc.signIn();
-    await vi.waitFor(() => expect(ui.codes).toHaveLength(1));
-    expect(await svc.signIn()).toBe('busy');
-    expect(ui.codes).toEqual(['WDJB-MJHT', 'WDJB-MJHT']);
-    expect(starts(hq)).toBe(1);
-    ui.cancelCode?.();
-    expect(await first).toBe('cancelled');
-    // The cancelled flow let the lock go: the next click starts a new one.
-    expect(readdirSync(lockDir).filter((f) => f.startsWith('signin-'))).toEqual([]);
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir, { sleep: forever });
+    const first = w.accounts.signIn({ kind: 'first' });
+    await vi.waitFor(() => expect(w.ui.codes).toHaveLength(1));
+    expect((await w.accounts.signIn({ kind: 'add' })).outcome).toBe('busy');
+    expect(w.ui.codes).toEqual(['WDJB-MJHT', 'WDJB-MJHT']);
+    expect(starts()).toBe(1);
+    w.ui.cancelCode?.();
+    expect((await first).outcome).toBe('cancelled');
+    expect(readdirSync(lock.dir).filter((f) => f.startsWith('signin-'))).toEqual([]);
   });
 
-  it('a click before the code is known says a sign-in is starting in this window', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const hq = fakeHq();
-    const slowStart = (async (url: string, init?: RequestInit) => {
-      if (url.endsWith('/device/start')) await gate;
-      return hq.fetchFn(url, init);
-    }) as unknown as typeof fetch;
-    const { svc, ui } = service(sharedSecrets(), memento(), slowStart);
-    const first = svc.signIn();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(await svc.signIn()).toBe('busy');
-    expect(ui.infos).toEqual([COPY.signInInProgress]);
-    release();
-    expect(await first).toBe('approved');
+  it('every device-code notice of a flow closes when it ends: approved, cancelled, failed (live test 2026-10-02)', async () => {
+    // Approved.
+    const a = openWindow(fake, secretsHub(), memento(), lock.dir);
+    await a.accounts.signIn({ kind: 'first' });
+    expect(a.ui.codes).toHaveLength(1);
+    expect(a.ui.openNotices).toBe(0);
+    // Cancelled, after the code was shown again twice.
+    const b = openWindow(fake, secretsHub(), memento(), lock.dir, { sleep: forever });
+    const first = b.accounts.signIn({ kind: 'add' });
+    await vi.waitFor(() => expect(b.ui.codes).toHaveLength(1));
+    await b.accounts.signIn({ kind: 'add' });
+    await b.accounts.signIn({ kind: 'add' });
+    expect(b.ui.openNotices).toBe(3);
+    b.ui.cancelCode?.();
+    await first;
+    expect(b.ui.openNotices).toBe(0);
+    // Failed (the code expired).
+    const c = openWindow(fake, secretsHub(), memento(), lock.dir);
+    const realFetch = globalThis.fetch;
+    c.accounts.dispose();
+    const expired = openWindow(fake, secretsHub(), memento(), lock.dir, {
+      fetch: (async (url: string | URL, init?: RequestInit) =>
+        String(url).endsWith('/device/poll')
+          ? new Response(JSON.stringify({ error: 'expired' }), { status: 410 })
+          : realFetch(url, init)) as typeof fetch,
+    });
+    expect((await expired.accounts.signIn({ kind: 'first' })).outcome).toBe('expired');
+    expect(expired.ui.openNotices).toBe(0);
+  });
+
+  it('the lock records the intent kind only (never an email or a user id)', async () => {
+    let approve!: () => void;
+    fake.pollGate = new Promise<void>((r) => (approve = r));
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir);
+    const p = w.accounts.signIn({ kind: 'add' });
+    await vi.waitFor(() => expect(w.ui.codes).toHaveLength(1));
+    const { readFileSync } = await import('node:fs');
+    const record = JSON.parse(readFileSync(signInLockFile(), 'utf8')) as Record<string, unknown>;
+    expect(Object.keys(record).sort()).toEqual(['expiresAt', 'intent', 'owner', 'pid']);
+    expect(record.intent).toBe('add');
+    approve();
+    await p;
   });
 });
 
-describe('what HQ answers means for the sign-in', () => {
-  it('401: everything is wiped, terminals and forwards close, and one modal says so', async () => {
-    const hq = fakeHq({ orgsStatus: 401 });
-    const secrets = sharedSecrets();
+describe('what HQ answers means for the account', () => {
+  async function signedIn() {
+    const hub = secretsHub();
     const mem = memento();
-    const { svc, ui } = service(secrets, mem, hq.fetchFn);
-    await svc.signIn();
-    let revoked = 0;
-    svc.onRevoked(() => (revoked += 1));
-    await expect(svc.refreshOrgs()).rejects.toMatchObject({ status: 401 });
-    expect(revoked).toBe(1);
-    expect(svc.signedIn()).toBe(false);
-    expect([...secrets.data.keys()]).toEqual([]);
-    expect(ui.asked).toEqual(['Your access to HQ from this computer ended. Sign in again.']);
+    const w = openWindow(fake, hub, mem, lock.dir);
+    await w.accounts.signIn({ kind: 'first' });
+    return { ...w, hub, mem, b: w.accounts.active()! };
+  }
+
+  it('401 confirmed: this account is wiped, its things close, and one modal names it', async () => {
+    const { hub, ui, accounts, b } = await signedIn();
+    let removed = 0;
+    accounts.onAccountRemoved(() => (removed += 1));
+    fake.orgsStatus = 401;
+    await expect(b.service.refreshOrgs()).rejects.toMatchObject({ status: 401 });
+    expect(removed).toBe(1);
+    expect(accounts.count()).toBe(0);
+    expect(accounts.active()).toBeNull();
+    expect([...hub.data.keys()]).toEqual([]);
+    expect(ui.asked.map((a) => a.message)).toEqual([COPY.revokedAccount(USER_A.email)]);
   });
 
   it('B1: a signed call that 401s twice while an unsigned read still works is NOT a revocation', async () => {
-    const hq = fakeHq({ probeStatus: 401 });
-    const secrets = sharedSecrets();
-    const { svc, ui } = service(secrets, memento(), hq.fetchFn);
-    await svc.signIn();
-    let revoked = 0;
-    svc.onRevoked(() => (revoked += 1));
+    const { hub, ui, accounts, b } = await signedIn();
+    fake.probeStatus = 401;
+    let removed = 0;
+    accounts.onAccountRemoved(() => (removed += 1));
     await expect(
-      svc.call((c) => c.request('POST', '/api/remote/probe', { signed: true })),
+      b.service.call((c) => c.request('POST', '/api/remote/probe', { signed: true })),
     ).rejects.toMatchObject({ status: 401 });
-    // Retried once with a fresh nonce, then confirmed against GET /api/remote/orgs (which answered).
-    expect(hq.seen.filter((s) => s.path === '/api/remote/probe')).toHaveLength(2);
-    expect(hq.seen.filter((s) => s.path === '/api/remote/orgs').length).toBeGreaterThan(0);
-    expect(revoked).toBe(0);
-    expect(svc.signedIn()).toBe(true);
-    expect(secrets.data.get(`hq:${HOST}:device`)).toContain('OPENSSH PRIVATE KEY');
+    expect(fake.seen.filter((s) => s.path === '/api/remote/probe')).toHaveLength(2);
+    expect(fake.seen.filter((s) => s.path === '/api/remote/orgs').length).toBeGreaterThan(0);
+    expect(removed).toBe(0);
+    expect(accounts.count()).toBe(1);
+    expect([...hub.data.keys()].some((k) => k.endsWith(':device'))).toBe(true);
     expect(ui.asked).toEqual([]);
   });
 
-  it('M-a: a login marked "needs renewing" asks to sign in again and wipes nothing', async () => {
-    const hq = fakeHq({ accessTtlMs: 60_000 });
-    const secrets = sharedSecrets();
-    const { svc, ui } = service(secrets, memento(), hq.fetchFn);
-    await svc.signIn();
-    const key = `hq:${HOST}:tokens`;
-    const pair = JSON.parse(secrets.data.get(key)!) as Record<string, unknown>;
-    await secrets.store(key, JSON.stringify({ ...pair, needsRenewing: true }));
-    await expect(svc.refreshOrgs()).rejects.toThrow(/needs renewing/);
-    expect(hq.refreshes()).toBe(0);
-    expect(ui.asked).toEqual(['Your HQ sign-in needs renewing.']);
-    expect(secrets.data.get(key)).toContain('needsRenewing');
+  it('M-a: an account marked "needs renewing" asks to sign in again AS IT and wipes nothing', async () => {
+    const { hub, ui, b } = await signedIn();
+    const key = [...hub.data.keys()].find((k) => k.endsWith(':tokens'))!;
+    const pair = JSON.parse(hub.data.get(key)!) as Record<string, unknown>;
+    hub.data.set(
+      key,
+      JSON.stringify({
+        ...pair,
+        accessExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        needsRenewing: true,
+      }),
+    );
+    b.service.invalidate();
+    await expect(b.service.refreshOrgs()).rejects.toThrow(/needs renewing/);
+    expect(fake.refreshes()).toBe(0);
+    expect(ui.asked.map((a) => a.message)).toEqual([COPY.renewSignInAccount(USER_A.email)]);
+    expect(hub.data.get(key)).toContain('needsRenewing');
   });
 
   it('426: the update sentence, once however many calls are refused', async () => {
-    const hq = fakeHq({ orgsStatus: 426 });
-    const { svc, ui } = service(sharedSecrets(), memento(), hq.fetchFn);
-    await svc.signIn();
-    await expect(svc.refreshOrgs()).rejects.toMatchObject({ status: 426 });
-    await expect(svc.refreshOrgs()).rejects.toMatchObject({ status: 426 });
-    expect(ui.modals).toEqual([
-      'This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view.',
-    ]);
-    expect(svc.signedIn()).toBe(true);
+    const { ui, accounts, b } = await signedIn();
+    fake.orgsStatus = 426;
+    await expect(b.service.refreshOrgs()).rejects.toMatchObject({ status: 426 });
+    await expect(b.service.refreshOrgs()).rejects.toMatchObject({ status: 426 });
+    expect(ui.modals).toEqual([COPY.tooOld]);
+    expect(accounts.count()).toBe(1);
   });
 
   it('sign-out revokes the grant with a signed DELETE, then wipes', async () => {
-    const hq = fakeHq();
-    const secrets = sharedSecrets();
-    const { svc, ui } = service(secrets, memento(), hq.fetchFn);
-    await svc.signIn();
-    await svc.signOut();
-    const del = hq.seen.find((s) => s.method === 'DELETE')!;
-    expect(del.path).toBe('/api/remote/grants/grant-1');
-    expect(del.headers['x-hq-device-sig']).toBeDefined();
-    expect([...secrets.data.keys()]).toEqual([]);
-    expect(svc.signedIn()).toBe(false);
+    const { hub, ui, accounts, b } = await signedIn();
+    await accounts.signOut(b.ref, { confirm: true });
+    const grantId = b.account.grantId;
+    const del = fake.seen.find((s) => s.method === 'DELETE')!;
+    expect(del.path).toBe(`/api/remote/grants/${grantId}`);
+    expect(del.signer).toBe(grantId);
+    expect(del.bearer).toBe(grantId);
+    expect([...hub.data.keys()]).toEqual([]);
+    expect(accounts.count()).toBe(0);
+    // One account: no confirmation (decision 16).
+    expect(ui.confirms).toEqual([]);
     expect(ui.infos.at(-1)).toMatch(/Signed out/);
   });
 
   it('B1: sign-out never reports success on an UNCONFIRMED 401 (the grant may still be live)', async () => {
-    const hq = fakeHq({ deleteStatus: 401 });
-    const secrets = sharedSecrets();
-    const { svc, ui } = service(secrets, memento(), hq.fetchFn);
-    await svc.signIn();
-    await svc.signOut();
-    expect(hq.seen.filter((s) => s.method === 'DELETE')).toHaveLength(2);
-    expect(ui.infos.at(-1)).toBe(
-      'Signed out on this computer. HQ could not be reached to end this computer’s access; remove it in HQ, under Account, Devices.',
-    );
+    const { ui, accounts, b } = await signedIn();
+    fake.deleteStatus = 401;
+    await accounts.signOut(b.ref, { confirm: true });
+    expect(fake.seen.filter((s) => s.method === 'DELETE')).toHaveLength(2);
+    expect(ui.infos.at(-1)).toBe(COPY.signOutOffline);
   });
 
   it('B1: a sign-out 401 that HQ confirms (the login is already gone) is a normal sign-out', async () => {
-    const hq = fakeHq({ deleteStatus: 401, orgsStatus: 401 });
-    const { svc, ui } = service(sharedSecrets(), memento(), hq.fetchFn);
-    await svc.signIn();
-    await svc.signOut();
+    const { ui, accounts, b } = await signedIn();
+    fake.deleteStatus = 401;
+    fake.orgsStatus = 401;
+    await accounts.signOut(b.ref, { confirm: true });
     expect(ui.infos.at(-1)).toMatch(/^Signed out of AI Workforce One HQ/);
   });
 
   it('a host outside the allow-list is never contacted', async () => {
-    const hq = fakeHq();
-    const store = new SessionStore(sharedSecrets(), memento());
     const ui = fakeUi();
-    const svc = new HqService({
-      store,
+    const accounts = new HqAccounts({
+      store: new SessionStore(secretsHub().window(), memento()),
       ui,
       host: () => ({ ok: false, host: 'https://evil.example' }),
-      extensionVersion: '0.1.0',
+      extensionVersion: '0.2.0',
       appName: 'Code',
-      fetch: hq.fetchFn,
-      lockDir,
+      windowState: windowState(),
+      lockDir: lock.dir,
+      pollMs: 0,
     });
-    expect(await svc.signIn()).toBe('host-not-allowed');
-    expect(hq.seen).toEqual([]);
+    expect((await accounts.signIn({ kind: 'first' })).outcome).toBe('host-not-allowed');
+    expect(fake.seen).toEqual([]);
     expect(ui.modals[0]).toMatch(/not an HQ address/);
   });
 });

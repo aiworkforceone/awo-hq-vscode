@@ -2278,7 +2278,7 @@ var require_websocket = __commonJS({
     var http = require("http");
     var net2 = require("net");
     var tls = require("tls");
-    var { randomBytes: randomBytes4, createHash: createHash5 } = require("crypto");
+    var { randomBytes: randomBytes6, createHash: createHash6 } = require("crypto");
     var { Duplex, Readable } = require("stream");
     var { URL: URL2 } = require("url");
     var PerMessageDeflate = require_permessage_deflate();
@@ -2816,7 +2816,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes4(16).toString("base64");
+      const key = randomBytes6(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -2946,7 +2946,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash5("sha1").update(key + GUID).digest("base64");
+        const digest = createHash6("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3315,7 +3315,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter9 = require("events");
     var http = require("http");
     var { Duplex } = require("stream");
-    var { createHash: createHash5 } = require("crypto");
+    var { createHash: createHash6 } = require("crypto");
     var extension = require_extension();
     var PerMessageDeflate = require_permessage_deflate();
     var subprotocol = require_subprotocol();
@@ -3622,7 +3622,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash5("sha1").update(key + GUID).digest("base64");
+        const digest = createHash6("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -8787,91 +8787,65 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode11 = __toESM(require("vscode"), 1);
+var vscode15 = __toESM(require("vscode"), 1);
 
-// src/auth/auth-provider.ts
-var vscode = __toESM(require("vscode"), 1);
-var AUTH_PROVIDER_ID = "aiworkforceone-hq";
-var AUTH_PROVIDER_LABEL = "AI Workforce One HQ";
-var SESSION_SENTINEL = "hq-session";
-var HqAuthenticationProvider = class {
-  constructor(service) {
-    this.service = service;
-    this.last = this.current();
-    service.onDidChange(() => {
-      const next = this.current();
-      const before = this.last;
-      this.last = next;
-      if (before?.id === next?.id) return;
-      this.changed.fire({
-        added: next && !before ? [next] : [],
-        removed: before && !next ? [before] : [],
-        changed: before && next ? [next] : []
-      });
-    });
-  }
-  service;
-  changed = new vscode.EventEmitter();
-  onDidChangeSessions = this.changed.event;
-  last;
-  current() {
-    const account = this.service.account();
-    if (!account) return null;
-    return {
-      id: account.grantId,
-      accessToken: SESSION_SENTINEL,
-      account: { id: account.user.id, label: account.user.email },
-      scopes: []
-    };
-  }
-  async getSessions() {
-    const s = this.current();
-    return s ? [s] : [];
-  }
-  async createSession() {
-    await this.service.signIn();
-    const s = this.current();
-    if (!s) throw new Error("Sign-in did not finish.");
-    return s;
-  }
-  async removeSession() {
-    await this.service.signOut();
-  }
-  dispose() {
-    this.changed.dispose();
-  }
-};
-
-// src/auth/keyring.ts
-var import_node_fs = require("node:fs");
-var import_node_os = __toESM(require("node:os"), 1);
-var import_node_path = __toESM(require("node:path"), 1);
+// src/accounts-ui.ts
+var vscode2 = __toESM(require("vscode"), 1);
 
 // src/copy.ts
 var COPY = {
   // ── sign-in ──────────────────────────────────────────────────────────────────────────────────
   signedOutWelcome: "Sign in to see your teams.",
   deviceCode: (code) => `Enter ${code} in the browser (copied). Waiting for approval.`,
-  deviceCodeCancel: "Cancel",
   signInDenied: "The sign-in was denied in the browser.",
   signInExpired: "This sign-in code expired. Sign in again.",
+  // Review MUST 5: the approval may have reached HQ while this editor could not hear the answer.
+  signInExpiredAfterNetwork: "This sign-in code expired while HQ could not be reached, so the approval may have gone through without reaching this editor. If this computer shows in HQ, under Account, Devices, remove it there, then sign in again.",
   signInUnavailable: "HQ for VS Code is not available on this HQ yet.",
   signInFailed: (detail) => `Could not sign in: ${detail}`,
   signedIn: (email) => `Signed in to AI Workforce One HQ as ${email}.`,
   signedOut: "Signed out of AI Workforce One HQ. This computer can no longer reach your teams.",
+  // One account of several (live test 2026-10-02: the sentence above said "your teams" while the
+  // other accounts' teams were still right there).
+  signedOutAccount: (email) => `Signed out of ${email}. Other accounts stay signed in.`,
   signOutOffline: "Signed out on this computer. HQ could not be reached to end this computer\u2019s access; remove it in HQ, under Account, Devices.",
   hostNotAllowed: (host) => `"${host}" is not an HQ address this editor may use. Set hq.host to https://hq.aiworkforceone.com or add it to hq.allowedHosts.`,
   hostChanged: "The HQ address changed. Sign in again to use it.",
   keyringMissing: "Your HQ sign-in is stored without the system keychain on this computer.",
   renewSignIn: "Your HQ sign-in needs renewing.",
-  signInOtherWindow: "Signing in to AI Workforce One HQ from another VS Code window. Finish there and this window picks it up, or sign in here instead.",
+  // hq-vscode-multi-account: an `add` sign-in becomes active only in the window that started it.
+  signInOtherWindow: "Signing in to AI Workforce One HQ from another VS Code window. Wait for it to finish, or sign in here instead.",
   signInHereAction: "Sign in here instead",
   signInMovedToOtherWindow: "Sign-in moved to another VS Code window. Finish it there.",
   signInInProgress: "Already signing in to AI Workforce One HQ in this window. Waiting for the code.",
-  revoked: "Your access to HQ from this computer ended. Sign in again.",
   signInAction: "Sign in",
   tooOld: "This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view.",
   unreachable: "HQ could not be reached. Check your connection and try again.",
+  signInThrottled: "Too many HQ sign-ins were started from this network. Wait a minute and try again.",
+  // ── accounts (hq-vscode-multi-account) ───────────────────────────────────────────────────────
+  pickAccount: "Choose an account",
+  pickAccountForCommand: "Choose an account for this window",
+  accountActiveNote: "Active in this window",
+  addAnotherAccount: "Add another account...",
+  addedAccount: (email) => `Signed in to AI Workforce One HQ as ${email}. This window now uses it.`,
+  accountAlreadySignedIn: (email) => `The browser approved this sign-in as ${email}, who is already signed in here, so it was not kept. To add another account, sign in to HQ in your browser as that account first.`,
+  // Jean 2026-10-01: the first sentence verbatim; the grant approved as someone else is revoked.
+  renewMismatch: (expected, got) => `You approved as ${got}, but this account is ${expected}. Sign in to HQ in your browser as ${expected}, then try again.`,
+  renewMismatchUnknown: (got) => `You approved as ${got}, but this sign-in was for another account. Sign in to HQ in your browser as that account, then try again.`,
+  signInUnstorableUser: "HQ answered with an account this editor cannot store. It was not kept.",
+  revokeNewFailed: "HQ could not be reached to undo that sign-in. Remove the newest computer in HQ, under Account, Devices.",
+  slotInUse: "This sign-in could not be stored: another VS Code profile on this computer holds one for the same account. It was not kept.",
+  fsAccountGone: (email) => `This folder belongs to ${email}, who is not signed in on this computer.`,
+  fsAccountUnknown: "This folder belongs to an HQ account that is not signed in on this computer. Open it again from the Teams view.",
+  signInAsAction: (email) => `Sign in as ${email}`,
+  revokedAccount: (email) => `Your access to HQ as ${email} ended on this computer. Sign in again, or switch to another account.`,
+  renewSignInAccount: (email) => `Your HQ sign-in as ${email} needs renewing.`,
+  needsSignInDescription: "Sign in again",
+  keychainBusy: (email) => `Could not read your HQ sign-in for ${email} from the keychain. Unlock it and try again.`,
+  confirmSignOut: (email) => `Sign out of ${email}? Its HQ terminals and port forwards close in every window.`,
+  statusOtherAccount: "other account",
+  accountsExistNoneActive: "You have other HQ accounts signed in on this computer.",
+  manageDevicesBrowserNote: (email) => `Opens HQ in your browser. If your browser is signed in as someone other than ${email}, sign in there first.`,
   // ── teams tree ───────────────────────────────────────────────────────────────────────────────
   noOrgs: "No org has developer access on yet. An org owner turns it on in HQ, under Settings, Security.",
   stateRunning: "running",
@@ -8890,12 +8864,17 @@ var COPY = {
   stillOnIt: "Still on it...",
   woke: (team) => `${team} is running.`,
   wakeTimeout: (team) => `${team} did not start within 3 minutes. Check it in HQ and try again.`,
-  wakeNoMachine: (team) => `${team} has no machine yet. Open the team in HQ and start a session to start it.`,
+  // ALSO-3 (live re-test, round 3): HQ's wake only resumes a machine that went to sleep (it never
+  // starts a stopped one, D23); a session start is what starts it, in HQ or here.
+  wakeStopped: (team) => `${team} is stopped. Wake only resumes a sleeping team: start a session to start its machine.`,
+  startSessionAction: "Start a Session",
+  openInHqAction: "Open in HQ",
   wakeThrottled: "Too many wake requests for this team. Wait a few minutes and try again.",
   wakeTeam: "Wake Team",
   wakeUnavailable: "Waking a team from VS Code is not available on this HQ yet. Open one of its session terminals to wake it.",
   // ── terminal ─────────────────────────────────────────────────────────────────────────────────
-  terminalName: (team, session) => `HQ \xB7 ${team} \xB7 ${session}`,
+  // Decision 21: the account's short label, only while 2 or more accounts are signed in.
+  terminalName: (team, session, label) => label ? `HQ \xB7 ${label} \xB7 ${team} \xB7 ${session}` : `HQ \xB7 ${team} \xB7 ${session}`,
   terminalSuffixViewOnly: " \xB7 view only",
   terminalSuffixWaking: " \xB7 waking",
   terminalSuffixStopped: " \xB7 stopped",
@@ -8938,7 +8917,7 @@ var COPY = {
   addressCopied: (url) => `Copied ${url}`,
   // ── team files (hq://) ───────────────────────────────────────────────────────────────────────
   openTeamFiles: "Open Team Files",
-  teamFolderName: (team, org) => `${team} (${org})`,
+  teamFolderName: (team, org, label) => label ? `${team} (${org}) \xB7 ${label}` : `${team} (${org})`,
   fsTeamGone: "This team is not available on this sign-in. Sign in, or refresh the Teams view.",
   fsOffOpen: (team) => `${team} is off. Wake it to open this file.`,
   fsOffSave: (team) => `${team} is off. Wake it to save this file.`,
@@ -8984,79 +8963,107 @@ var COPY = {
   statusTooltip: "AI Workforce One HQ"
 };
 
-// src/auth/keyring.ts
-var KEYRING_WARNED_KEY = "hq:keyringWarned";
-function keyringLikelyMissing(input) {
-  if (input.platform !== "linux") return false;
-  if (!input.env.DBUS_SESSION_BUS_ADDRESS?.trim()) return true;
-  return input.argvJson !== null && /"password-store"\s*:\s*"basic"/.test(input.argvJson);
+// src/hq/account-ref.ts
+var import_node_crypto = require("node:crypto");
+
+// ../hq-client/src/safe-text.ts
+var CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu;
+function oneLine(value) {
+  return value.replace(CONTROLS, " ");
 }
-function argvJsonDir(appName) {
-  if (/cursor/i.test(appName)) return ".cursor";
-  if (/vscodium/i.test(appName)) return ".vscode-oss";
-  if (/windsurf/i.test(appName)) return ".windsurf";
-  if (/visual studio code/i.test(appName)) return ".vscode";
-  return null;
+var ALIAS_RE = /^hq-[0-9a-f]{8,12}$/;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var ORG_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+// src/hq/account-ref.ts
+var PROFILE_KEY_RE = /^p[0-9a-f]{8}$/;
+function newProfileKey() {
+  return `p${(0, import_node_crypto.randomBytes)(4).toString("hex")}`;
 }
-function keyringMissingHere(appName) {
-  const dir = argvJsonDir(appName);
-  let argvJson = null;
-  if (dir !== null && process.platform === "linux") {
-    try {
-      argvJson = (0, import_node_fs.readFileSync)(import_node_path.default.join(import_node_os.default.homedir(), dir, "argv.json"), "utf8");
-    } catch {
-      argvJson = null;
-    }
+var USER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+var TAG_RE = /^a[0-9a-f]{12}$/;
+var SLUG_BODY = ORG_SLUG_RE.source.replace(/^\^|\$$/g, "");
+var AUTHORITY_TAGGED = new RegExp(`^(a[0-9a-f]{12})@(${SLUG_BODY})$`);
+var AUTHORITY_LEGACY = new RegExp(`^(${SLUG_BODY})$`);
+function accountTag(host, userId) {
+  return `a${(0, import_node_crypto.createHash)("sha256").update(`${host}|${userId}`).digest("hex").slice(0, 12)}`;
+}
+function slotPrefix(ref) {
+  if (ref.slot === "legacy") return `hq:${ref.host}:`;
+  if (!USER_ID_RE.test(ref.userId) || !PROFILE_KEY_RE.test(ref.profileKey)) {
+    throw new Error("bad slot");
   }
-  return keyringLikelyMissing({ platform: process.platform, env: process.env, argvJson });
+  return `hq:${ref.host}:u:${ref.profileKey}:${ref.userId}:`;
 }
-async function warnIfKeyringMissing(deps) {
-  if (deps.memento.get(KEYRING_WARNED_KEY) === true) return;
-  if (!deps.missing()) return;
-  await deps.memento.update(KEYRING_WARNED_KEY, true);
-  deps.warn(COPY.keyringMissing);
+function legacyLockName(purpose, appName, host) {
+  return `${purpose}-${(0, import_node_crypto.createHash)("sha256").update(`${appName}|${host}`).digest("hex").slice(0, 12)}.lock`;
+}
+function refreshLockName(appName, ref) {
+  if (ref.slot === "legacy") return legacyLockName("refresh", appName, ref.host);
+  const seed = `${appName}|${ref.host}|${ref.profileKey}|${ref.userId}`;
+  return `refresh-${(0, import_node_crypto.createHash)("sha256").update(seed).digest("hex").slice(0, 12)}.lock`;
+}
+function parseHqAuthority(authority) {
+  const t = AUTHORITY_TAGGED.exec(authority);
+  if (t) return { kind: "tagged", tag: t[1], orgSlug: t[2] };
+  const l = AUTHORITY_LEGACY.exec(authority);
+  if (l) return { kind: "legacy", orgSlug: l[1] };
+  return { kind: "invalid" };
+}
+var isTag = (s) => typeof s === "string" && TAG_RE.test(s);
+function sameAccount(a, b) {
+  return a.host === b.host && a.userId === b.userId;
+}
+function shortAccountLabel(email, allEmails) {
+  const short = (e) => {
+    const at = e.lastIndexOf("@");
+    if (at <= 0) return e;
+    const domain = e.slice(at + 1).split(".")[0] ?? "";
+    return domain ? `${e.slice(0, at)}@${domain}` : e;
+  };
+  const mine = short(email);
+  const clash = allEmails.some((other) => other !== email && short(other) === mine);
+  return clash ? email : mine;
 }
 
-// src/hq/hosts.ts
-var DEFAULT_HOST = "https://hq.aiworkforceone.com";
-var BUILT_IN_HOSTS = [
-  DEFAULT_HOST,
-  "https://hq-test.aiworkforceone.com"
+// src/fs/hq-fs-provider.ts
+var vscode = __toESM(require("vscode"), 1);
+
+// src/util/text.ts
+var CONTROL_RANGES = [
+  [0, 31],
+  [127, 159]
 ];
-var LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
-var HTTPS = /^https:\/\/[a-z0-9.-]{1,253}(:\d{1,5})?$/;
-function normalizeHqHost(value) {
-  if (typeof value !== "string") return null;
-  const v = value.trim().replace(/\/+$/, "").toLowerCase();
-  if (HTTPS.test(v) || LOOPBACK.test(v)) return v;
-  return null;
+var UNSAFE_RANGES = [
+  [173, 173],
+  [847, 847],
+  [1564, 1564],
+  [6158, 6158],
+  [8203, 8207],
+  [8232, 8238],
+  [8288, 8297],
+  [65279, 65279]
+];
+var esc = (n) => `\\u${n.toString(16).padStart(4, "0")}`;
+var rangesSource = (ranges) => ranges.map(([a, b]) => a === b ? esc(a) : `${esc(a)}-${esc(b)}`).join("");
+var charClass = (ranges) => new RegExp(`[${rangesSource(ranges)}]`, "g");
+var CONTROL_TEXT = charClass(CONTROL_RANGES);
+var UNSAFE_TEXT = charClass(UNSAFE_RANGES);
+function cleanLabel(value, max = 200) {
+  if (typeof value !== "string") return "";
+  return value.replace(CONTROL_TEXT, " ").replace(UNSAFE_TEXT, "").replace(/\s+/g, " ").trim().slice(0, max);
 }
-function resolveHqHost(configured, allowedExtra) {
-  const raw = typeof configured === "string" && configured.trim() !== "" ? configured : DEFAULT_HOST;
-  const host = normalizeHqHost(raw);
-  if (host === null) return { ok: false, host: String(raw) };
-  const extra = Array.isArray(allowedExtra) ? allowedExtra.map(normalizeHqHost).filter((h) => h !== null) : [];
-  const allowed = /* @__PURE__ */ new Set([...BUILT_IN_HOSTS, ...extra]);
-  if (LOOPBACK.test(host) && !extra.includes(host)) return { ok: false, host };
-  return allowed.has(host) ? { ok: true, host } : { ok: false, host };
-}
-function isOnHost(url, host) {
-  let u;
-  let h;
-  try {
-    u = new URL(url);
-    h = new URL(host);
-  } catch {
-    return false;
-  }
-  return u.origin === h.origin && (u.protocol === "https:" || u.protocol === "http:");
+function notificationText(value) {
+  return value.replace(/\[/g, "\uFF3B").replace(/\]/g, "\uFF3D");
 }
 
-// src/hq/hq-service.ts
-var import_node_crypto5 = require("node:crypto");
-var import_node_fs5 = require("node:fs");
-var import_node_os2 = __toESM(require("node:os"), 1);
-var import_node_path3 = __toESM(require("node:path"), 1);
+// src/fs/fs-core.ts
+var import_node_crypto6 = require("node:crypto");
+
+// ../hq-client/src/api.ts
+var import_node_crypto4 = require("node:crypto");
+var import_node_fs2 = require("node:fs");
+var import_node_path = __toESM(require("node:path"), 1);
 
 // ../shared/src/remote.types.ts
 var REMOTE_ACCESS_TTL_SEC = 15 * 60;
@@ -9069,23 +9076,18 @@ var HQ_HEADER_DEVICE_SIG = "x-hq-device-sig";
 var HQ_HEADER_CONNECT_CODE = "x-hq-connect-code";
 var HQ_HEADER_CLIENT = "x-hq-client";
 var HQ_HEADER_WANT_NONCE = "x-hq-want-nonce";
-function deviceSignaturePayload(nonce, method, path4, bodySha256Hex) {
+function deviceSignaturePayload(nonce, method, path5, bodySha256Hex) {
   return `${nonce}
 ${method.toUpperCase()}
-${path4}
+${path5}
 ${bodySha256Hex.toLowerCase()}`;
 }
 function workspaceAlias(workspaceId, hexChars = 8) {
   return `hq-${workspaceId.replace(/-/g, "").slice(0, hexChars).toLowerCase()}`;
 }
 
-// ../hq-client/src/api.ts
-var import_node_crypto3 = require("node:crypto");
-var import_node_fs3 = require("node:fs");
-var import_node_path2 = __toESM(require("node:path"), 1);
-
 // ../hq-client/src/device-key.ts
-var import_node_crypto = require("node:crypto");
+var import_node_crypto2 = require("node:crypto");
 function sshString(buf) {
   const len = Buffer.alloc(4);
   len.writeUInt32BE(buf.length, 0);
@@ -9103,7 +9105,7 @@ function publicBlob(pub32) {
   return Buffer.concat([sshString(KEY_TYPE), sshString(pub32)]);
 }
 function toOpenSshPrivateKey(seed32, pub32, comment) {
-  const check = (0, import_node_crypto.randomBytes)(4);
+  const check = (0, import_node_crypto2.randomBytes)(4);
   const priv = Buffer.concat([
     check,
     check,
@@ -9157,7 +9159,7 @@ function fromOpenSshPrivateKey(pem) {
   return { seed32: Buffer.from(both.subarray(0, 32)), pub32: Buffer.from(pub.value) };
 }
 function keyObjectFromSeed(seed32, pub32) {
-  return (0, import_node_crypto.createPrivateKey)({
+  return (0, import_node_crypto2.createPrivateKey)({
     key: {
       kty: "OKP",
       crv: "Ed25519",
@@ -9171,7 +9173,7 @@ function publicLineOf(pub32) {
   return `ssh-ed25519 ${publicBlob(pub32).toString("base64")}`;
 }
 function generateDeviceKeyMaterial() {
-  const { publicKey, privateKey } = (0, import_node_crypto.generateKeyPairSync)("ed25519");
+  const { publicKey, privateKey } = (0, import_node_crypto2.generateKeyPairSync)("ed25519");
   const jwkPriv = privateKey.export({ format: "jwk" });
   return {
     seed32: Buffer.from(jwkPriv.d, "base64url"),
@@ -9183,16 +9185,16 @@ function deviceKeyFromOpenSsh(pem) {
   return { publicLine: publicLineOf(pub32), privateKey: keyObjectFromSeed(seed32, pub32) };
 }
 function sha256Hex(data) {
-  return (0, import_node_crypto.createHash)("sha256").update(data).digest("hex");
+  return (0, import_node_crypto2.createHash)("sha256").update(data).digest("hex");
 }
-function signRequest(key, nonce, method, path4, body) {
-  const payload = deviceSignaturePayload(nonce, method, path4, sha256Hex(body));
-  return (0, import_node_crypto.sign)(null, Buffer.from(payload, "utf8"), key).toString("base64");
+function signRequest(key, nonce, method, path5, body) {
+  const payload = deviceSignaturePayload(nonce, method, path5, sha256Hex(body));
+  return (0, import_node_crypto2.sign)(null, Buffer.from(payload, "utf8"), key).toString("base64");
 }
 
 // ../hq-client/src/file-lock.ts
-var import_node_fs2 = require("node:fs");
-var import_node_crypto2 = require("node:crypto");
+var import_node_fs = require("node:fs");
+var import_node_crypto3 = require("node:crypto");
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 var FileLockBusyError = class extends Error {
   constructor(file) {
@@ -9204,40 +9206,40 @@ var FileLockBusyError = class extends Error {
 };
 function breakStale(file, staleMs, aside) {
   try {
-    (0, import_node_fs2.renameSync)(file, aside);
+    (0, import_node_fs.renameSync)(file, aside);
   } catch {
     return;
   }
   try {
-    if (Date.now() - (0, import_node_fs2.statSync)(aside).mtimeMs <= staleMs) {
+    if (Date.now() - (0, import_node_fs.statSync)(aside).mtimeMs <= staleMs) {
       try {
-        (0, import_node_fs2.linkSync)(aside, file);
+        (0, import_node_fs.linkSync)(aside, file);
       } catch {
       }
     }
   } finally {
-    (0, import_node_fs2.rmSync)(aside, { force: true });
+    (0, import_node_fs.rmSync)(aside, { force: true });
   }
 }
 async function acquireFileLock(file, opts = {}) {
   const staleMs = opts.staleMs ?? 1e4;
   const heartbeatMs = opts.heartbeatMs ?? Math.max(250, Math.floor(staleMs / 3));
   const deadline = Date.now() + (opts.waitMs ?? 1e4);
-  const mine = `${process.pid}:${(0, import_node_crypto2.randomBytes)(8).toString("hex")}`;
+  const mine = `${process.pid}:${(0, import_node_crypto3.randomBytes)(8).toString("hex")}`;
   let delay = 10;
   for (; ; ) {
     try {
-      const fd = (0, import_node_fs2.openSync)(file, "wx", 384);
+      const fd = (0, import_node_fs.openSync)(file, "wx", 384);
       try {
-        (0, import_node_fs2.writeSync)(fd, mine);
+        (0, import_node_fs.writeSync)(fd, mine);
       } finally {
-        (0, import_node_fs2.closeSync)(fd);
+        (0, import_node_fs.closeSync)(fd);
       }
       const beat = setInterval(() => {
         try {
-          if ((0, import_node_fs2.readFileSync)(file, "utf8") !== mine) return;
+          if ((0, import_node_fs.readFileSync)(file, "utf8") !== mine) return;
           const now = /* @__PURE__ */ new Date();
-          (0, import_node_fs2.utimesSync)(file, now, now);
+          (0, import_node_fs.utimesSync)(file, now, now);
         } catch {
         }
       }, heartbeatMs);
@@ -9245,7 +9247,7 @@ async function acquireFileLock(file, opts = {}) {
       return () => {
         clearInterval(beat);
         try {
-          if ((0, import_node_fs2.readFileSync)(file, "utf8") === mine) (0, import_node_fs2.rmSync)(file, { force: true });
+          if ((0, import_node_fs.readFileSync)(file, "utf8") === mine) (0, import_node_fs.rmSync)(file, { force: true });
         } catch {
         }
       };
@@ -9254,7 +9256,7 @@ async function acquireFileLock(file, opts = {}) {
     }
     let age = 0;
     try {
-      age = Date.now() - (0, import_node_fs2.statSync)(file).mtimeMs;
+      age = Date.now() - (0, import_node_fs.statSync)(file).mtimeMs;
     } catch {
       continue;
     }
@@ -9338,7 +9340,7 @@ var HqClient = class {
   }
   /** The lock file's name for THIS host (one login per host, so one lock per host). */
   refreshLockName() {
-    return this.lockName ?? `refresh-${(0, import_node_crypto3.createHash)("sha256").update(this.host).digest("hex").slice(0, 12)}.lock`;
+    return this.lockName ?? `refresh-${(0, import_node_crypto4.createHash)("sha256").update(this.host).digest("hex").slice(0, 12)}.lock`;
   }
   /** The headers this client sends on every call (a copy). */
   headers() {
@@ -9377,10 +9379,10 @@ var HqClient = class {
    * presents the token.
    */
   async refreshAcrossProcesses() {
-    (0, import_node_fs3.mkdirSync)(this.lockDir, { recursive: true, mode: 448 });
+    (0, import_node_fs2.mkdirSync)(this.lockDir, { recursive: true, mode: 448 });
     let release;
     try {
-      release = await acquireFileLock(import_node_path2.default.join(this.lockDir, this.refreshLockName()), {
+      release = await acquireFileLock(import_node_path.default.join(this.lockDir, this.refreshLockName()), {
         staleMs: this.opts.lockStaleMs ?? REFRESH_LOCK_STALE_MS,
         waitMs: this.opts.lockWaitMs ?? REFRESH_LOCK_WAIT_MS,
         heartbeatMs: REFRESH_LOCK_HEARTBEAT_MS
@@ -9462,17 +9464,17 @@ var HqClient = class {
     });
     if (!nonceRes.ok) throw await this.toError(nonceRes);
     const { nonce } = await nonceRes.json();
-    const path4 = "/api/remote/token/refresh";
+    const path5 = "/api/remote/token/refresh";
     const body = JSON.stringify({ refreshToken: t.refreshToken });
     let res;
     try {
-      res = await this.fetchWithTimeout(`${this.host}${path4}`, {
+      res = await this.fetchWithTimeout(`${this.host}${path5}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           ...this.clientHeaders,
           [HQ_HEADER_NONCE]: nonce,
-          [HQ_HEADER_DEVICE_SIG]: signRequest(this.key, nonce, "POST", path4, body)
+          [HQ_HEADER_DEVICE_SIG]: signRequest(this.key, nonce, "POST", path5, body)
         },
         body
       });
@@ -9511,20 +9513,20 @@ var HqClient = class {
     return (await res.json()).nonce;
   }
   /** Headers for a signed WebSocket upgrade (`GET <path>`, empty body). */
-  async upgradeHeaders(path4, org, extra = {}) {
+  async upgradeHeaders(path5, org, extra = {}) {
     const token = await this.accessToken();
     const nonce = await this.takeNonce();
     return {
       Authorization: `Bearer ${token}`,
       [HQ_HEADER_ORG]: org,
       [HQ_HEADER_NONCE]: nonce,
-      [HQ_HEADER_DEVICE_SIG]: signRequest(this.key, nonce, "GET", path4, ""),
+      [HQ_HEADER_DEVICE_SIG]: signRequest(this.key, nonce, "GET", path5, ""),
       ...this.clientHeaders,
       ...extra
     };
   }
-  async request(method, path4, opts = {}) {
-    const res = await this.send(method, path4, {
+  async request(method, path5, opts = {}) {
+    const res = await this.send(method, path5, {
       ...opts.body !== void 0 ? { json: opts.body } : {},
       ...opts.org ? { org: opts.org } : {},
       ...opts.signed ? { signed: true } : {}
@@ -9540,7 +9542,7 @@ var HqClient = class {
    * status (the caller reads 304/412/...); only the one fresh-nonce retry of a signed 401 happens
    * here (security review B1).
    */
-  async send(method, path4, opts = {}) {
+  async send(method, path5, opts = {}) {
     const token = await this.accessToken();
     const body = opts.raw !== void 0 ? Buffer.from(opts.raw) : opts.json === void 0 ? "" : JSON.stringify(opts.json);
     const hasBody = opts.raw !== void 0 || opts.json !== void 0;
@@ -9556,9 +9558,9 @@ var HqClient = class {
       if (opts.signed) {
         const nonce = freshNonce ? await this.fetchNonce() : await this.takeNonce();
         headers[HQ_HEADER_NONCE] = nonce;
-        headers[HQ_HEADER_DEVICE_SIG] = signRequest(this.key, nonce, method, path4, body);
+        headers[HQ_HEADER_DEVICE_SIG] = signRequest(this.key, nonce, method, path5, body);
       }
-      const r = await this.fetchFn(`${this.host}${path4}`, {
+      const r = await this.fetchFn(`${this.host}${path5}`, {
         method,
         headers,
         ...hasBody ? { body: typeof body === "string" ? body : new Uint8Array(body) } : {}
@@ -9602,10 +9604,10 @@ var HqClient = class {
     );
   }
 };
-async function postJson(fetchFn, url, body, clientHeaders = {}) {
+async function postJson(fetchFn, url, body, clientHeaders2 = {}) {
   const res = await fetchFn(url, {
     method: "POST",
-    headers: { "content-type": "application/json", ...clientHeaders },
+    headers: { "content-type": "application/json", ...clientHeaders2 },
     body: JSON.stringify(body)
   });
   let parsed = void 0;
@@ -9617,243 +9619,18 @@ async function postJson(fetchFn, url, body, clientHeaders = {}) {
   return { status: res.status, body: parsed };
 }
 
-// ../hq-client/src/safe-text.ts
-var CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu;
-function oneLine(value) {
-  return value.replace(CONTROLS, " ");
-}
-var ALIAS_RE = /^hq-[0-9a-f]{8,12}$/;
-var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-var ORG_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+// ../shared/src/remote-fs.types.ts
+var FS_MAX_TEXT_BYTES = 8 * 1024 * 1024;
+var FS_READ_CHUNK_BYTES = 4 * 1024 * 1024;
+var FS_MAX_BINARY_BYTES = 64 * 1024 * 1024;
+var FS_MAX_WRITE_BYTES = 16 * 1024 * 1024;
+var HQ_HEADER_MASKED = "x-hq-masked";
+var HQ_HEADER_ACTIVITY = "x-hq-activity";
+var HQ_ACTIVITY_BACKGROUND = "background";
+var REMOTE_EVENTS_WS_PATH = "/ws/remote/events";
 
-// ../hq-client/src/teams.ts
-function isWellFormedTeam(t) {
-  return ORG_SLUG_RE.test(t.org.slug) && UUID_RE.test(t.workspace.id) && ALIAS_RE.test(t.alias);
-}
-function partitionTeams(orgs) {
-  const all = orgs.flatMap((raw) => {
-    const org = { ...raw, name: oneLine(String(raw.name ?? "")) };
-    return (raw.workspaces ?? []).map((w) => ({
-      org,
-      workspace: { ...w, name: oneLine(String(w.name ?? "")) }
-    }));
-  });
-  const counts = /* @__PURE__ */ new Map();
-  for (const t of all) {
-    const a = workspaceAlias(t.workspace.id);
-    counts.set(a, (counts.get(a) ?? 0) + 1);
-  }
-  const aliased = all.map((t) => {
-    const short = workspaceAlias(t.workspace.id);
-    return {
-      ...t,
-      alias: (counts.get(short) ?? 0) > 1 ? workspaceAlias(t.workspace.id, 12) : short
-    };
-  });
-  return {
-    teams: aliased.filter(isWellFormedTeam),
-    skipped: aliased.filter((t) => !isWellFormedTeam(t))
-  };
-}
-
-// src/auth/device-flow.ts
-function deviceLabelFor(appName, hostname) {
-  const clean = (s) => (
-    // eslint-disable-next-line no-control-regex -- the label is shown to an approver
-    s.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim()
-  );
-  const label = `${clean(appName) || "VS Code"} on ${clean(hostname) || "this computer"}`;
-  return label.slice(0, 64);
-}
-async function runDeviceFlow(deps, input) {
-  const start = await postJson(
-    deps.fetch,
-    `${deps.host}/api/remote/device/start`,
-    { clientName: "hq-vscode", ...input },
-    deps.clientHeaders
-  );
-  if (start.status === 404) return { kind: "unavailable" };
-  if (start.status === 426) return { kind: "too-old" };
-  if (start.status !== 200) {
-    return { kind: "failed", detail: start.body?.error ?? `HTTP ${start.status}` };
-  }
-  const s = start.body;
-  const pageUrl = isOnHost(s.verificationUrl, deps.host) ? s.verificationUrl : `${deps.host}/device`;
-  await deps.onCode(s.userCode, pageUrl);
-  let interval = Math.max(5, s.interval);
-  const deadline = deps.now() + s.expiresIn * 1e3;
-  while (deps.now() < deadline) {
-    await deps.sleep(interval * 1e3);
-    if (deps.cancelled()) return { kind: "cancelled" };
-    const poll = await postJson(
-      deps.fetch,
-      `${deps.host}/api/remote/device/poll`,
-      { deviceCode: s.deviceCode },
-      deps.clientHeaders
-    );
-    if (poll.status === 200 && poll.body.status === "approved") {
-      return { kind: "approved", approved: poll.body };
-    }
-    if (poll.status === 200 && (poll.body.status === "authorization_pending" || poll.body.status === "slow_down")) {
-      interval = Math.max(interval, poll.body.interval);
-      continue;
-    }
-    if (poll.status === 403) return { kind: "denied" };
-    if (poll.status === 410) return { kind: "expired" };
-    if (poll.status === 426) return { kind: "too-old" };
-    if (poll.status === 429) {
-      interval += 5;
-      continue;
-    }
-    return { kind: "failed", detail: poll.body?.error ?? `HTTP ${poll.status}` };
-  }
-  return { kind: "expired" };
-}
-
-// src/auth/signin-lock.ts
-var import_node_fs4 = require("node:fs");
-var import_node_crypto4 = require("node:crypto");
-var SIGNIN_LOCK_TTL_MS = (REMOTE_DEVICE_CODE_TTL_SEC + 60) * 1e3;
-var SIGNIN_LOCK_STALE_MS = 3e4;
-var SIGNIN_LOCK_HEARTBEAT_MS = 5e3;
-var SIGNIN_TAKEOVER_WAIT_MS = 2e4;
-var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err.code === "EPERM";
-  }
-}
-function parse(raw) {
-  try {
-    const r = JSON.parse(raw);
-    return {
-      pid: typeof r.pid === "number" && r.pid > 0 ? r.pid : null,
-      expiresAt: typeof r.expiresAt === "number" ? r.expiresAt : null
-    };
-  } catch {
-    const legacy = /^(\d+):[0-9a-f]+$/.exec(raw.trim());
-    const pid = legacy ? Number(legacy[1]) : 0;
-    return { pid: pid > 0 ? pid : null, expiresAt: null };
-  }
-}
-function inspect(file, staleMs) {
-  let raw;
-  let mtimeMs;
-  try {
-    mtimeMs = (0, import_node_fs4.statSync)(file).mtimeMs;
-    raw = (0, import_node_fs4.readFileSync)(file, "utf8");
-  } catch {
-    return null;
-  }
-  const { pid, expiresAt } = parse(raw);
-  const now = Date.now();
-  if (pid !== null && !pidAlive(pid)) return { raw, stale: "owner-gone" };
-  if (now - mtimeMs > staleMs) return { raw, stale: "no-heartbeat" };
-  if (expiresAt !== null && now > expiresAt) return { raw, stale: "expired" };
-  return { raw, stale: null };
-}
-function breakIf(file, aside, shouldBreak) {
-  try {
-    (0, import_node_fs4.renameSync)(file, aside);
-  } catch {
-    return;
-  }
-  try {
-    if (!shouldBreak(aside)) {
-      try {
-        (0, import_node_fs4.linkSync)(aside, file);
-      } catch {
-      }
-    }
-  } finally {
-    (0, import_node_fs4.rmSync)(aside, { force: true });
-  }
-}
-var cancelFileOf = (file) => `${file}.cancel`;
-function tryCreate(file, opts) {
-  const raw = JSON.stringify({
-    owner: (0, import_node_crypto4.randomBytes)(8).toString("hex"),
-    pid: process.pid,
-    expiresAt: Date.now() + (opts.ttlMs ?? SIGNIN_LOCK_TTL_MS)
-  });
-  let fd;
-  try {
-    fd = (0, import_node_fs4.openSync)(file, "wx", 384);
-  } catch (err) {
-    if (err.code === "EEXIST") return null;
-    throw err;
-  }
-  try {
-    (0, import_node_fs4.writeSync)(fd, raw);
-  } finally {
-    (0, import_node_fs4.closeSync)(fd);
-  }
-  let cancelAsked = false;
-  const beat = setInterval(() => {
-    try {
-      if ((0, import_node_fs4.readFileSync)(file, "utf8") !== raw) return;
-      const now = /* @__PURE__ */ new Date();
-      (0, import_node_fs4.utimesSync)(file, now, now);
-    } catch {
-      return;
-    }
-    try {
-      if ((0, import_node_fs4.readFileSync)(cancelFileOf(file), "utf8") !== raw || cancelAsked) return;
-      cancelAsked = true;
-      (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
-      opts.onCancelRequested?.();
-    } catch {
-    }
-  }, opts.heartbeatMs ?? SIGNIN_LOCK_HEARTBEAT_MS);
-  beat.unref?.();
-  return {
-    release: () => {
-      clearInterval(beat);
-      try {
-        if ((0, import_node_fs4.readFileSync)(file, "utf8") === raw) (0, import_node_fs4.rmSync)(file, { force: true });
-      } catch {
-      }
-    }
-  };
-}
-function acquireSignInLock(file, opts = {}) {
-  const staleMs = opts.staleMs ?? SIGNIN_LOCK_STALE_MS;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const lock = tryCreate(file, opts);
-    if (lock) return { kind: "acquired", lock };
-    const held = inspect(file, staleMs);
-    if (!held) continue;
-    if (held.stale === null) return { kind: "busy" };
-    breakIf(file, `${file}.stale-${(0, import_node_crypto4.randomBytes)(4).toString("hex")}`, (aside) => {
-      const moved = inspect(aside, staleMs);
-      return moved !== null && moved.stale !== null;
-    });
-  }
-  return { kind: "busy" };
-}
-async function takeOverSignInLock(file, opts = {}) {
-  const staleMs = opts.staleMs ?? SIGNIN_LOCK_STALE_MS;
-  const first = acquireSignInLock(file, opts);
-  if (first.kind === "acquired") return first;
-  const target = inspect(file, staleMs);
-  if (target) {
-    (0, import_node_fs4.writeFileSync)(cancelFileOf(file), target.raw, { mode: 384 });
-    const deadline = Date.now() + (opts.takeoverWaitMs ?? SIGNIN_TAKEOVER_WAIT_MS);
-    while (Date.now() < deadline && inspect(file, staleMs)?.raw === target.raw) await sleep2(100);
-    breakIf(file, `${file}.takeover-${(0, import_node_crypto4.randomBytes)(4).toString("hex")}`, (aside) => {
-      try {
-        return (0, import_node_fs4.readFileSync)(aside, "utf8") === target.raw;
-      } catch {
-        return false;
-      }
-    });
-    (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
-  }
-  return acquireSignInLock(file, opts);
-}
+// src/hq/session-store.ts
+var import_node_crypto5 = require("node:crypto");
 
 // src/util/emitter.ts
 var Emitter = class {
@@ -9876,18 +9653,64 @@ var Emitter = class {
 };
 
 // src/hq/session-store.ts
+var AccountGoneError = class extends Error {
+  constructor() {
+    super("This HQ account was signed out in another window.");
+    this.name = "AccountGoneError";
+  }
+};
+var SlotRenewedError = class extends Error {
+  constructor() {
+    super("This HQ sign-in was renewed in another window.");
+    this.name = "SlotRenewedError";
+  }
+};
+var SecretsBusyError = class extends Error {
+  constructor() {
+    super("Could not read the HQ sign-in from the keychain.");
+    this.name = "SecretsBusyError";
+  }
+};
+var NeedsSignInError = class extends Error {
+  constructor() {
+    super("This HQ sign-in needs renewing.");
+    this.name = "NeedsSignInError";
+  }
+};
 var TOKEN_CACHE_MS = 6e4;
-function tokensKey(host) {
-  return `hq:${host}:tokens`;
+var TOMBSTONES_MAX = 20;
+var PROFILE_KEY = "hq:profileKey";
+function tokensKey(ref) {
+  return `${slotPrefix(ref)}tokens`;
 }
-function deviceKeyKey(host) {
-  return `hq:${host}:device`;
+function deviceKeyKey(ref) {
+  return `${slotPrefix(ref)}device`;
 }
-function accountKey(host) {
-  return `hq:${host}:account`;
+function accountKey(ref) {
+  return `${slotPrefix(ref)}account`;
 }
-function orgsKey(host) {
-  return `hq:${host}:orgs`;
+function orgsKey(ref) {
+  return `${slotPrefix(ref)}orgs`;
+}
+function portsKey(ref, list) {
+  return `${slotPrefix(ref)}ports:${list}`;
+}
+function legacyUserKey(host) {
+  return `hq:${host}:legacyUser`;
+}
+function tombstoneKey(host, tag) {
+  return `hq:${host}:t:${tag}`;
+}
+function lastActiveKey(host) {
+  return `hq:${host}:lastActive`;
+}
+function deviceFingerprint(openssh) {
+  try {
+    const line = deviceKeyFromOpenSsh(openssh).publicLine;
+    return `sha256:${(0, import_node_crypto5.createHash)("sha256").update(line).digest("hex")}`;
+  } catch {
+    return null;
+  }
 }
 function parseTokens(raw) {
   if (!raw) return null;
@@ -9897,11 +9720,24 @@ function parseTokens(raw) {
       accessToken: t.accessToken,
       refreshToken: t.refreshToken,
       accessExpiresAt: t.accessExpiresAt,
-      ...t.needsRenewing === true ? { needsRenewing: true } : {}
+      ...t.needsRenewing === true ? { needsRenewing: true } : {},
+      ...typeof t.grantId === "string" ? { grantId: t.grantId } : {}
     } : null;
   } catch {
     return null;
   }
+}
+function unstamp(t) {
+  return {
+    accessToken: t.accessToken,
+    refreshToken: t.refreshToken,
+    accessExpiresAt: t.accessExpiresAt,
+    ...t.needsRenewing ? { needsRenewing: true } : {}
+  };
+}
+function validAccount(a) {
+  const r = a;
+  return !!r && typeof r.grantId === "string" && !!r.user && typeof r.user.id === "string" && typeof r.user.email === "string";
 }
 var SessionStore = class {
   constructor(secrets, memento, now = Date.now) {
@@ -9909,391 +9745,507 @@ var SessionStore = class {
     this.memento = memento;
     this.now = now;
     this.subscription = secrets.onDidChange((e) => {
-      if (this.cached && e.key === tokensKey(this.cached.host)) this.cached = null;
+      for (const prefix of [...this.cached.keys()]) {
+        if (e.key === `${prefix}tokens`) this.cached.delete(prefix);
+      }
+      this.secretChanged.fire(e.key);
     });
   }
   secrets;
   memento;
   now;
-  cached = null;
+  cached = /* @__PURE__ */ new Map();
   subscription;
+  secretChanged = new Emitter();
+  /** A SecretStorage key changed (this window or, in VS Code, another one). */
+  onSecretChanged = this.secretChanged.event;
   dispose() {
     this.subscription.dispose();
+    this.secretChanged.dispose();
   }
-  /** The `TokenStore` the shared `HqClient` reads and writes. */
-  tokenStore() {
+  /** `secrets.get`, with a THROW turned into `SecretsBusyError` (never into "gone"). */
+  async secret(key) {
+    try {
+      return await this.secrets.get(key);
+    } catch {
+      throw new SecretsBusyError();
+    }
+  }
+  // ── profile key (decision 22) ──────────────────────────────────────────────────────────────────
+  profileKey() {
+    const k = this.memento.get(PROFILE_KEY);
+    return typeof k === "string" && PROFILE_KEY_RE.test(k) ? k : null;
+  }
+  /** Only under the sign-in lock: re-read, and write `fresh` only when still absent. */
+  async ensureProfileKey(fresh) {
+    const have = this.profileKey();
+    if (have) return have;
+    const k = fresh();
+    await this.memento.update(PROFILE_KEY, k);
+    return k;
+  }
+  // ── the account list (decision 4) ──────────────────────────────────────────────────────────────
+  /**
+   * Accounts on `host`: legacy `hq:<host>:account` + every `hq:<host>:u:<profileKey>:<id>:account`
+   * of THIS profile, deduped by user id (a `user` slot wins over legacy).
+   */
+  accounts(host, profileKey) {
+    const out = /* @__PURE__ */ new Map();
+    const userPrefix = profileKey ? `hq:${host}:u:${profileKey}:` : null;
+    for (const key of this.memento.keys()) {
+      if (!userPrefix || !key.startsWith(userPrefix) || !key.endsWith(":account")) continue;
+      const userId = key.slice(userPrefix.length, -":account".length);
+      if (!USER_ID_RE.test(userId)) continue;
+      const account = this.memento.get(key);
+      if (!validAccount(account) || account.user.id !== userId) continue;
+      out.set(userId, { ref: { host, userId, slot: "user", profileKey }, account });
+    }
+    const legacy = this.memento.get(`hq:${host}:account`);
+    if (validAccount(legacy) && USER_ID_RE.test(legacy.user.id) && !out.has(legacy.user.id)) {
+      out.set(legacy.user.id, {
+        ref: { host, userId: legacy.user.id, slot: "legacy", profileKey: profileKey ?? "" },
+        account: legacy
+      });
+    }
+    return [...out.values()];
+  }
+  /** The slot's `account` record (an in-memory Memento read), or null when it is gone. */
+  accountRecord(ref) {
+    const a = this.memento.get(accountKey(ref));
+    if (!validAccount(a)) return null;
+    return a.user.id === ref.userId ? a : null;
+  }
+  // ── tokens ─────────────────────────────────────────────────────────────────────────────────────
+  /**
+   * The `TokenStore` one `HqClient` uses, CLOSED OVER ONE SLOT. It refuses any other host (it never
+   * falls back). For a `user` slot every load compares the pair's `grantId` stamp with `grantId`
+   * and throws `SlotRenewedError` on a mismatch; every save writes that stamp back beside the pair.
+   */
+  tokenStore(ref, grantId, keyFp = null) {
+    const check = (host) => {
+      if (host !== ref.host) throw new Error("token store host mismatch");
+    };
+    const stamped = async (fresh) => {
+      if (ref.slot === "legacy" && keyFp !== null && (fresh || !this.cacheValid(ref))) {
+        const device = await this.loadDeviceKey(ref);
+        if (!device || deviceFingerprint(device.openssh) !== keyFp) throw new NeedsSignInError();
+      }
+      const t = await this.loadStamped(ref, fresh);
+      if (!t) return null;
+      if (ref.slot === "user" && t.grantId !== grantId) throw new SlotRenewedError();
+      return unstamp(t);
+    };
     return {
-      // Review M-b: the refresh lock's re-read asks for `fresh`, never the in-memory copy.
-      load: (host, opts) => opts?.fresh ? this.reloadTokens(host) : this.loadTokens(host),
-      save: (host, tokens) => this.saveTokens(host, tokens)
+      load: async (host, opts) => {
+        check(host);
+        return stamped(opts?.fresh === true);
+      },
+      save: async (host, tokens) => {
+        check(host);
+        await this.saveTokens(ref, tokens, grantId);
+      }
     };
   }
-  async loadTokens(host) {
-    const c = this.cached;
-    if (c && c.host === host && this.now() - c.at < TOKEN_CACHE_MS) return c.tokens;
-    const tokens = parseTokens(await this.secrets.get(tokensKey(host)));
-    this.cached = { host, tokens, at: this.now() };
+  cacheValid(ref) {
+    const c = this.cached.get(slotPrefix(ref));
+    return c !== void 0 && this.now() - c.at < TOKEN_CACHE_MS;
+  }
+  /** The slot's pair with its stamp (cached up to 60 s unless `fresh`). */
+  async loadStamped(ref, fresh = false) {
+    const prefix = slotPrefix(ref);
+    const c = this.cached.get(prefix);
+    if (!fresh && c && this.now() - c.at < TOKEN_CACHE_MS) return c.tokens;
+    const tokens = parseTokens(await this.secret(`${prefix}tokens`));
+    this.cached.set(prefix, { tokens, at: this.now() });
     return tokens;
   }
-  /** Re-read the pair from SecretStorage now (another window may have rotated it). */
-  async reloadTokens(host) {
-    this.cached = null;
-    return this.loadTokens(host);
+  async saveTokens(ref, tokens, grantId) {
+    const value = ref.slot === "user" && grantId ? { grantId, ...unstamp(tokens) } : unstamp(tokens);
+    await this.secrets.store(tokensKey(ref), JSON.stringify(value));
+    this.cached.set(slotPrefix(ref), { tokens: value, at: this.now() });
   }
-  async saveTokens(host, tokens) {
-    await this.secrets.store(tokensKey(host), JSON.stringify(tokens));
-    this.cached = { host, tokens, at: this.now() };
-  }
-  async loadDeviceKey(host) {
-    return await this.secrets.get(deviceKeyKey(host)) ?? null;
-  }
-  async saveDeviceKey(host, openSshText) {
-    await this.secrets.store(deviceKeyKey(host), openSshText);
-  }
-  account(host) {
-    const a = this.memento.get(accountKey(host));
-    return a && typeof a.grantId === "string" && a.user && typeof a.user.email === "string" ? a : null;
-  }
-  async saveAccount(host, account) {
-    await this.memento.update(accountKey(host), account);
-  }
-  cachedOrgs(host) {
-    const o = this.memento.get(orgsKey(host));
-    return Array.isArray(o) ? o : [];
-  }
-  async saveOrgs(host, orgs) {
-    await this.memento.update(orgsKey(host), orgs);
-  }
-  /** Forget everything this host's sign-in left behind: secrets first, then the cached listing. */
-  async wipe(host) {
-    this.cached = null;
-    await this.secrets.delete(tokensKey(host));
-    await this.secrets.delete(deviceKeyKey(host));
-    await this.memento.update(accountKey(host), void 0);
-    await this.memento.update(orgsKey(host), void 0);
-  }
-};
-
-// src/hq/hq-service.ts
-var REFRESH_TIMEOUT_MS = 1e4;
-var RACE_REREADS = 10;
-var RACE_REREAD_MS = 500;
-var HqService = class {
-  constructor(deps) {
-    this.deps = deps;
-  }
-  deps;
-  changed = new Emitter();
-  revokedEmitter = new Emitter();
-  /** Signed in / out, or the team listing changed. */
-  onDidChange = this.changed.event;
-  /** The grant ended: close every terminal and forward, forget every cache. */
-  onRevoked = this.revokedEmitter.event;
-  clientCache = null;
-  signingIn = false;
-  /** The flow running in THIS window: its code (once known) and how to cancel it. */
-  flow = null;
-  tooOldShown = false;
-  revokedShown = false;
-  /** The allowed host, or null (a host outside the allow-list is never contacted). */
-  host() {
-    const v = this.deps.host();
-    return v.ok ? v.host : null;
-  }
-  account() {
-    const host = this.host();
-    return host ? this.deps.store.account(host) : null;
-  }
-  signedIn() {
-    return this.account() !== null;
-  }
-  clientHeaders() {
-    return {
-      [HQ_HEADER_CLIENT]: `vscode/${this.deps.extensionVersion}`,
-      [HQ_HEADER_WANT_NONCE]: "1"
-    };
-  }
-  /** The signed-in client for the current host, or null when signed out. */
-  lockDir() {
-    return this.deps.lockDir ?? import_node_path3.default.join(import_node_os2.default.homedir(), ".hq", "vscode");
-  }
-  /** One lock file per (editor, host) and purpose, shared by every window of this editor. */
-  lockName(purpose, host) {
-    return `${purpose}-${(0, import_node_crypto5.createHash)("sha256").update(`${this.deps.appName}|${host}`).digest("hex").slice(0, 12)}.lock`;
-  }
-  async client() {
-    const host = this.host();
-    if (!host || !this.deps.store.account(host)) return null;
-    if (this.clientCache?.host === host) return this.clientCache.client;
-    const pem = await this.deps.store.loadDeviceKey(host);
-    if (!pem) return null;
-    const key = deviceKeyFromOpenSsh(pem);
-    const client = new HqClient({
-      host,
-      key: key.privateKey,
-      store: this.deps.store.tokenStore(),
-      lockDir: this.lockDir(),
-      lockName: this.lockName("refresh", host),
-      clientHeaders: this.clientHeaders(),
-      refreshTimeoutMs: REFRESH_TIMEOUT_MS,
-      raceRereads: RACE_REREADS,
-      raceRereadMs: RACE_REREAD_MS,
-      ...this.deps.fetch ? { fetch: this.deps.fetch } : {},
-      ...this.deps.now ? { now: this.deps.now } : {}
-    });
-    this.clientCache = { host, client };
-    return client;
-  }
-  /** The teams this sign-in can reach, from the last listing (no request). */
-  teams() {
-    const host = this.host();
-    if (!host) return [];
-    return partitionTeams(this.deps.store.cachedOrgs(host)).teams.filter(
-      (t) => t.org.remoteAccess.allowed
-    );
-  }
-  orgs() {
-    const host = this.host();
-    return host ? this.deps.store.cachedOrgs(host) : [];
-  }
-  /** `GET /api/remote/orgs`, cached in globalState (no secret). */
-  async refreshOrgs() {
-    const host = this.host();
-    const orgs = await this.call(
-      async (c) => (await c.request("GET", "/api/remote/orgs")).body
-    );
-    if (host) await this.deps.store.saveOrgs(host, orgs);
-    this.changed.fire();
-    return orgs;
+  // ── device key ─────────────────────────────────────────────────────────────────────────────────
+  /**
+   * The device key and its stamp. Legacy: raw OpenSSH text, no stamp. `null` = the secret is gone
+   * (or unreadable as a key); a THROWING `secrets.get` is `SecretsBusyError` (decision 18).
+   */
+  async loadDeviceKey(ref) {
+    const raw = await this.secret(deviceKeyKey(ref));
+    if (!raw) return null;
+    if (ref.slot === "legacy") return { openssh: raw, grantId: null };
+    try {
+      const d = JSON.parse(raw);
+      return typeof d.grantId === "string" && typeof d.openssh === "string" ? { openssh: d.openssh, grantId: d.grantId } : null;
+    } catch {
+      return null;
+    }
   }
   /**
-   * Run one HQ call, turning the answers that change the sign-in into what the person sees. The
-   * error is rethrown for the caller's own message, except where this already said everything.
+   * Decision 18 from the record and both secrets. A `user` slot whose stamps disagree is mid-renew
+   * (`busy`); a legacy slot whose key fingerprint is not the recorded one is `needs-sign-in`.
    */
-  async call(fn) {
-    const client = await this.client();
-    if (!client) throw new NotLoggedInError(COPY.signedOutWelcome);
+  async health(ref) {
+    const record = this.accountRecord(ref);
+    if (!record) return "needs-sign-in";
     try {
-      return await fn(client);
+      const device = await this.loadDeviceKey(ref);
+      const tokens = parseTokens(await this.secret(tokensKey(ref)));
+      if (!device || !tokens) return "needs-sign-in";
+      if (ref.slot === "user") {
+        return device.grantId === record.grantId && tokens.grantId === record.grantId ? "ok" : "busy";
+      }
+      if (await this.legacyKeyVerdict(ref.host, device.openssh) !== "mismatch") return "ok";
+      this.cached.delete(slotPrefix(ref));
+      return "needs-sign-in";
     } catch (err) {
-      await this.handleError(err);
+      if (err instanceof SecretsBusyError) return "busy";
       throw err;
     }
   }
-  /** What an error means for the sign-in (see the header). */
-  async handleError(err) {
-    if (err instanceof RefreshBusyError || err instanceof RefreshNeedsRenewingError) {
-      void this.askToSignIn(COPY.renewSignIn, false);
-      return;
-    }
-    if (err instanceof HqApiError) {
-      if (err.code === "REFRESH_RACE") {
-        void this.askToSignIn(COPY.renewSignIn, false);
-        return;
-      }
-      if (err.status === 401) {
-        if (await this.revocationConfirmed()) await this.revoked();
-        return;
-      }
-      if (err.status === 426) {
-        this.showTooOld();
-      }
-      return;
-    }
-    if (err instanceof NotLoggedInError) {
-      const host = this.host();
-      if (host && this.deps.store.account(host)) await this.revoked();
-    }
+  // ── legacy user (decision 29) ──────────────────────────────────────────────────────────────────
+  legacyUser(host) {
+    const u = this.memento.get(legacyUserKey(host));
+    return u && typeof u.userId === "string" && typeof u.email === "string" && typeof u.devicePubFp === "string" ? u : null;
   }
-  /** B1: is the login really gone? Only HQ's unsigned answer says so (`confirmRevoked`). */
-  async revocationConfirmed() {
-    const client = await this.client().catch(() => null);
-    return client === null ? true : client.confirmRevoked();
-  }
-  showTooOld() {
-    if (this.tooOldShown) return;
-    this.tooOldShown = true;
-    this.deps.ui.modal(COPY.tooOld);
-  }
-  /** The grant is gone: wipe, close everything, say so once. */
-  async revoked() {
-    const host = this.host();
-    if (host) await this.deps.store.wipe(host);
-    this.clientCache = null;
-    this.revokedEmitter.fire();
-    this.changed.fire();
-    if (this.revokedShown) return;
-    this.revokedShown = true;
-    const again = await this.deps.ui.askToSignIn(COPY.revoked, true);
-    this.revokedShown = false;
-    if (again) void this.signIn();
-  }
-  async askToSignIn(message, modal) {
-    if (await this.deps.ui.askToSignIn(message, modal)) void this.signIn();
-  }
-  /** "HQ: Sign In" (D1). A click never does nothing: it starts, re-shows or explains a flow. */
-  async signIn(opts = {}) {
-    const verdict = this.deps.host();
-    if (!verdict.ok) {
-      this.deps.ui.modal(COPY.hostNotAllowed(verdict.host));
-      return "host-not-allowed";
-    }
-    if (this.signingIn) {
-      const flow = this.flow;
-      if (flow?.code) this.deps.ui.showDeviceCode(flow.code, flow.cancel);
-      else this.deps.ui.info(COPY.signInInProgress);
-      return "busy";
-    }
-    this.signingIn = true;
-    const host = verdict.host;
-    let cancelled = false;
-    let wake = () => void 0;
-    const woken = new Promise((r) => wake = r);
-    const cancel = () => {
-      cancelled = true;
-      wake();
+  /**
+   * Record the 0.1.x user once (first 0.2.0 activation that finds a legacy account). Nothing else is
+   * written, and no secret is touched beyond reading the key to fingerprint it.
+   */
+  async recordLegacyUser(host) {
+    const have = this.legacyUser(host);
+    if (have) return have;
+    const record = this.memento.get(`hq:${host}:account`);
+    if (!validAccount(record)) return null;
+    const ref = { host, userId: record.user.id, slot: "legacy", profileKey: "" };
+    const device = await this.loadDeviceKey(ref);
+    const fp = device ? deviceFingerprint(device.openssh) : null;
+    if (!fp) return null;
+    const user = {
+      userId: record.user.id,
+      email: record.user.email,
+      devicePubFp: fp,
+      grantId: record.grantId
     };
-    let movedAway = false;
-    const lockOpts = {
-      ...this.deps.signInLock,
-      onCancelRequested: () => {
-        movedAway = true;
-        cancel();
-      }
-    };
-    let acquired;
-    try {
-      (0, import_node_fs5.mkdirSync)(this.lockDir(), { recursive: true, mode: 448 });
-      const file = import_node_path3.default.join(this.lockDir(), this.lockName("signin", host));
-      acquired = opts.takeOver ? await takeOverSignInLock(file, lockOpts) : acquireSignInLock(file, lockOpts);
-    } catch (err) {
-      this.signingIn = false;
-      this.deps.ui.modal(COPY.signInFailed(err instanceof Error ? err.message : COPY.unreachable));
-      return "failed";
-    }
-    if (acquired.kind === "busy") {
-      this.signingIn = false;
-      void this.deps.ui.offerSignInHere(COPY.signInOtherWindow).then((here) => {
-        if (here) void this.signIn({ takeOver: true });
+    await this.memento.update(legacyUserKey(host), user);
+    return user;
+  }
+  /**
+   * Does the shared legacy key still belong to this profile's legacy sign-in? SecretStorage is shared
+   * across profiles, the `account` record is not (P0 check 3). A 0.1.1 window in THIS profile that
+   * signed in again as the same user changed the record too: the fingerprint is re-recorded.
+   */
+  async legacyKeyVerdict(host, openssh) {
+    const fp = deviceFingerprint(openssh);
+    const user = this.legacyUser(host);
+    if (!fp) return "mismatch";
+    if (!user) return "ok";
+    if (fp === user.devicePubFp) return "ok";
+    const record = this.memento.get(`hq:${host}:account`);
+    if (validAccount(record) && record.user.id === user.userId && record.grantId !== user.grantId) {
+      await this.memento.update(legacyUserKey(host), {
+        ...user,
+        email: record.user.email,
+        devicePubFp: fp,
+        grantId: record.grantId
       });
-      return "busy";
+      return "rerecorded";
     }
-    const release = () => acquired.lock.release();
-    if (this.deps.store.account(host) && await this.deps.store.loadDeviceKey(host)) {
-      release();
-      this.signingIn = false;
-      this.clientCache = null;
-      this.changed.fire();
-      return "approved";
-    }
-    let shown = null;
-    this.flow = { code: null, cancel };
-    const sleep4 = this.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    return "mismatch";
+  }
+  /**
+   * Review M2: may THIS profile act on the shared legacy secrets (revoke their grant, delete
+   * them)? Not when their key is someone else's (another profile's 0.1.1), and not when the
+   * keychain cannot be read. A slot with no key left has nothing to protect.
+   */
+  async legacyKeyIsOurs(ref) {
+    if (ref.slot !== "legacy") return true;
     try {
-      const { seed32, pub32 } = generateDeviceKeyMaterial();
-      const hostname = (this.deps.hostname ?? (() => import_node_os2.default.hostname().split(".")[0] ?? ""))();
-      const pem = toOpenSshPrivateKey(seed32, pub32, `hq-vscode@${hostname || "computer"}`);
-      const result = await runDeviceFlow(
-        {
-          fetch: this.deps.fetch ?? globalThis.fetch,
-          host,
-          clientHeaders: this.clientHeaders(),
-          now: this.deps.now ?? Date.now,
-          // A cancel (this window's Cancel, or another window signing in instead) ends the wait.
-          sleep: (ms) => Promise.race([sleep4(ms), woken]),
-          cancelled: () => cancelled,
-          onCode: async (code, pageUrl) => {
-            if (this.flow) this.flow.code = code;
-            await this.deps.ui.copyToClipboard(code);
-            shown = this.deps.ui.showDeviceCode(code, cancel);
-            void this.deps.ui.openExternal(pageUrl).then(void 0, () => void 0);
-          }
-        },
-        {
-          clientVersion: this.deps.extensionVersion,
-          platform: `${this.deps.platform ?? process.platform}-${process.arch}`,
-          deviceLabel: deviceLabelFor(this.deps.appName, hostname),
-          devicePubkey: publicLineOf(pub32)
-        }
+      const device = await this.loadDeviceKey(ref);
+      if (!device) return true;
+      return await this.legacyKeyVerdict(ref.host, device.openssh) !== "mismatch";
+    } catch {
+      return false;
+    }
+  }
+  // ── writing a sign-in ──────────────────────────────────────────────────────────────────────────
+  /**
+   * A new or renewed `user` slot: the key first, then the pair, then the listing, the `account`
+   * record LAST (an account is only ever recorded once everything it needs is stored). Both secrets
+   * carry `grantId`, so a window reading between two writes sees a tear, never a wrong pairing.
+   */
+  async writeUserSlot(ref, w) {
+    if (ref.slot !== "user") throw new Error("0.2.0 never writes the legacy slot");
+    await this.clearSigningOut(ref.host, accountTag(ref.host, ref.userId));
+    await this.secrets.store(
+      deviceKeyKey(ref),
+      JSON.stringify({ grantId: w.grantId, openssh: w.openssh })
+    );
+    await this.saveTokens(ref, w.tokens, w.grantId);
+    await this.memento.update(orgsKey(ref), w.orgs);
+    await this.memento.update(accountKey(ref), {
+      grantId: w.grantId,
+      user: { id: w.user.id, email: w.user.email, name: w.user.name },
+      addedAt: new Date(this.now()).toISOString()
+    });
+    await this.writeTombstone(ref, w.user.email);
+  }
+  /** Copy the Ports view's own (non-secret) lists to the slot an account moved to (decision 3). */
+  async carryPortLists(from, to) {
+    for (const list of ["forwards", "dismissed"]) {
+      const v = this.memento.get(portsKey(from, list));
+      if (Array.isArray(v) && v.length > 0) await this.memento.update(portsKey(to, list), v);
+    }
+  }
+  // ── listing cache ──────────────────────────────────────────────────────────────────────────────
+  cachedOrgs(ref) {
+    const o = this.memento.get(orgsKey(ref));
+    return Array.isArray(o) ? o : [];
+  }
+  async saveOrgs(ref, orgs) {
+    await this.memento.update(orgsKey(ref), orgs);
+  }
+  // ── tombstones, last active (decisions 7, 10) ──────────────────────────────────────────────────
+  tombstone(host, tag) {
+    const t = this.memento.get(tombstoneKey(host, tag));
+    return t && typeof t.userId === "string" && typeof t.email === "string" ? t : null;
+  }
+  /** Written at sign-in and refreshed at sign-out; pruned to the newest 20 by a prefix scan. */
+  async writeTombstone(ref, email) {
+    const tag = accountTag(ref.host, ref.userId);
+    await this.memento.update(tombstoneKey(ref.host, tag), {
+      userId: ref.userId,
+      email,
+      at: new Date(this.now()).toISOString()
+    });
+    const prefix = `hq:${ref.host}:t:`;
+    const all = this.memento.keys().filter((k) => k.startsWith(prefix)).map((k) => ({ k, at: this.memento.get(k)?.at ?? "" })).sort((a, b) => a.at < b.at ? 1 : a.at > b.at ? -1 : 0);
+    for (const old of all.slice(TOMBSTONES_MAX)) await this.memento.update(old.k, void 0);
+  }
+  lastActive(host) {
+    const t = this.memento.get(lastActiveKey(host));
+    return typeof t === "string" ? t : null;
+  }
+  async setLastActive(host, tag) {
+    await this.memento.update(lastActiveKey(host), tag);
+  }
+  // ── sign-out markers (security L2) ─────────────────────────────────────────────────────────────
+  /**
+   * "This account is being signed out" (a TAG and a time, nothing else), written before its record
+   * goes and cleared after its wipe. A window that dies in between leaves it, and the next activation
+   * finishes the wipe (`HqAccounts`).
+   */
+  async markSigningOut(host, tag, grantId) {
+    await this.memento.update(`hq:${host}:signingOut:${tag}`, {
+      at: new Date(this.now()).toISOString(),
+      grantId
+    });
+  }
+  /**
+   * Markers older than `minAgeMs` (a sign-out that has had all the time it needs to finish):
+   * `grantId` null when the marker is malformed. Younger ones are some window's sign-out IN
+   * PROGRESS and are never acted on (review: the sweep raced a live DELETE).
+   */
+  staleSigningOutMarkers(host, minAgeMs) {
+    return this.signingOutTags(host).flatMap((tag) => {
+      const m = this.memento.get(
+        `hq:${host}:signingOut:${tag}`
       );
-      if (result.kind !== "approved") {
-        if (movedAway) this.deps.ui.info(COPY.signInMovedToOtherWindow);
-        else this.reportSignInFailure(result);
-        return result.kind;
-      }
-      const a = result.approved;
-      await this.deps.store.saveDeviceKey(host, pem);
-      await this.deps.store.saveTokens(host, {
-        accessToken: a.accessToken,
-        accessExpiresAt: a.accessExpiresAt,
-        refreshToken: a.refreshToken
-      });
-      await this.deps.store.saveOrgs(host, a.orgs);
-      await this.deps.store.saveAccount(host, { grantId: a.grantId, user: a.user });
-      this.clientCache = null;
-      this.changed.fire();
-      this.deps.ui.info(COPY.signedIn(a.user.email));
-      return "approved";
-    } catch (err) {
-      this.deps.ui.modal(COPY.signInFailed(err instanceof Error ? err.message : COPY.unreachable));
-      return "failed";
-    } finally {
-      shown?.close();
-      release();
-      this.flow = null;
-      this.signingIn = false;
+      const at = typeof m?.at === "string" ? Date.parse(m.at) : NaN;
+      if (Number.isFinite(at) && this.now() - at < minAgeMs) return [];
+      return [{ tag, grantId: typeof m?.grantId === "string" ? m.grantId : null }];
+    });
+  }
+  async clearSigningOut(host, tag) {
+    await this.memento.update(`hq:${host}:signingOut:${tag}`, void 0);
+  }
+  /** Tags with a sign-out marker on `host`. */
+  signingOutTags(host) {
+    const prefix = `hq:${host}:signingOut:`;
+    return this.memento.keys().filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length));
+  }
+  /**
+   * Drop only the slot's `account` record (live re-test #1): a sign-out removes it BEFORE it asks
+   * HQ to revoke, so other windows learn of the sign-out from the record, not from a refused token.
+   */
+  async forgetAccountRecord(ref) {
+    await this.memento.update(accountKey(ref), void 0);
+  }
+  // ── wipe ───────────────────────────────────────────────────────────────────────────────────────
+  /**
+   * Forget ONE slot: secrets first, then its records and lists. The tombstone stays (refreshed).
+   * A legacy slot whose shared secrets are not this profile's (M2) keeps them: only this profile's
+   * records go.
+   */
+  async wipe(ref, knownEmail) {
+    const email = this.accountRecord(ref)?.user.email ?? knownEmail;
+    this.cached.delete(slotPrefix(ref));
+    if (await this.legacyKeyIsOurs(ref)) {
+      await this.secrets.delete(tokensKey(ref));
+      await this.secrets.delete(deviceKeyKey(ref));
+    }
+    await this.memento.update(accountKey(ref), void 0);
+    await this.memento.update(orgsKey(ref), void 0);
+    await this.memento.update(portsKey(ref, "forwards"), void 0);
+    await this.memento.update(portsKey(ref, "dismissed"), void 0);
+    if (email) await this.writeTombstone(ref, email);
+  }
+};
+
+// src/fs/caches.ts
+var LISTING_TTL_MS = 3e4;
+var CONTENT_MAX_BYTES = 20 * 1024 * 1024;
+var CONTENT_MAX_ENTRIES = 200;
+var ListingCache = class {
+  constructor(now = Date.now) {
+    this.now = now;
+  }
+  now;
+  folders = /* @__PURE__ */ new Map();
+  stats = /* @__PURE__ */ new Map();
+  team(teamId) {
+    let folders = this.folders.get(teamId);
+    if (!folders) {
+      folders = /* @__PURE__ */ new Map();
+      this.folders.set(teamId, folders);
+    }
+    let stats = this.stats.get(teamId);
+    if (!stats) {
+      stats = /* @__PURE__ */ new Map();
+      this.stats.set(teamId, stats);
+    }
+    return { folders, stats };
+  }
+  /** A folder's entries, or undefined when not cached (or older than the TTL while `fresh` is false). */
+  folder(teamId, dir, fresh) {
+    const f = this.folders.get(teamId)?.get(dir);
+    if (!f) return void 0;
+    if (!fresh && this.now() - f.at > LISTING_TTL_MS) return void 0;
+    return f.entries;
+  }
+  /** The last folder listing whatever its age (a machine that is off still shows what it had). */
+  staleFolder(teamId, dir) {
+    return this.folders.get(teamId)?.get(dir)?.entries;
+  }
+  putFolder(teamId, dir, entries) {
+    const t = this.team(teamId);
+    const merged = entries.map((e) => this.keepMasked(t.stats.get(e.path), e));
+    t.folders.set(dir, { entries: merged, at: this.now() });
+    for (const e of merged) t.stats.set(e.path, e);
+    return merged;
+  }
+  stat(teamId, path5) {
+    return this.stats.get(teamId)?.get(path5);
+  }
+  /** Record one stat (a save, a stat call); the masked flag survives while the etag is the same. */
+  putStat(teamId, stat) {
+    const t = this.team(teamId);
+    const merged = this.keepMasked(t.stats.get(stat.path), stat);
+    t.stats.set(stat.path, merged);
+    const dir = parentOf(stat.path);
+    const f = t.folders.get(dir);
+    if (f) {
+      const i = f.entries.findIndex((e) => e.path === stat.path);
+      if (i === -1) f.entries = [...f.entries, merged];
+      else f.entries[i] = merged;
+    }
+    return merged;
+  }
+  markMasked(teamId, path5, etag) {
+    const s = this.stats.get(teamId)?.get(path5);
+    if (s && s.etag === etag) s.masked = true;
+  }
+  /** A path changed on the machine: forget it, its folder's listing, and (for a folder) below it. */
+  invalidate(teamId, path5) {
+    const t = this.team(teamId);
+    t.stats.delete(path5);
+    t.folders.delete(parentOf(path5));
+    const prefix = path5 === "" ? "" : `${path5}/`;
+    for (const key of [...t.folders.keys()]) {
+      if (key === path5 || prefix !== "" && key.startsWith(prefix)) t.folders.delete(key);
+    }
+    for (const key of [...t.stats.keys()]) {
+      if (prefix !== "" && key.startsWith(prefix)) t.stats.delete(key);
     }
   }
-  reportSignInFailure(result) {
-    switch (result.kind) {
-      case "denied":
-        this.deps.ui.modal(COPY.signInDenied);
-        return;
-      case "expired":
-        this.deps.ui.modal(COPY.signInExpired);
-        return;
-      case "unavailable":
-        this.deps.ui.modal(COPY.signInUnavailable);
-        return;
-      case "too-old":
-        this.showTooOld();
-        return;
-      case "failed":
-        this.deps.ui.modal(COPY.signInFailed(result.detail));
-        return;
-      default:
-        return;
+  /** Forget one path's stat only (its folder's listing stays). */
+  dropStat(teamId, path5) {
+    this.stats.get(teamId)?.delete(path5);
+  }
+  /** The `n` most recently listed folders other than the root (the refresh re-reads these). */
+  recentFolders(teamId, n) {
+    return [...this.folders.get(teamId)?.entries() ?? []].filter(([dir]) => dir !== "").sort((a, b) => b[1].at - a[1].at).slice(0, n).map(([dir]) => dir);
+  }
+  /** The folders this team has listed (the resync re-reads exactly these). */
+  cachedFolders(teamId) {
+    return [...this.folders.get(teamId)?.keys() ?? []];
+  }
+  clearTeam(teamId) {
+    this.folders.delete(teamId);
+    this.stats.delete(teamId);
+  }
+  clear() {
+    this.folders.clear();
+    this.stats.clear();
+  }
+  keepMasked(prior, next) {
+    return prior?.masked === true && prior.etag === next.etag ? { ...next, masked: true } : { ...next };
+  }
+};
+function parentOf(path5) {
+  const i = path5.lastIndexOf("/");
+  return i === -1 ? "" : path5.slice(0, i);
+}
+var ContentCache = class {
+  constructor(maxBytes = CONTENT_MAX_BYTES, maxEntries = CONTENT_MAX_ENTRIES) {
+    this.maxBytes = maxBytes;
+    this.maxEntries = maxEntries;
+  }
+  maxBytes;
+  maxEntries;
+  entries = /* @__PURE__ */ new Map();
+  bytes = 0;
+  /** The bytes for exactly this etag (a different etag is a miss). */
+  get(key, etag) {
+    const e = this.entries.get(key);
+    if (!e || etag === void 0 || e.etag !== etag) return void 0;
+    this.entries.delete(key);
+    this.entries.set(key, e);
+    return e.bytes;
+  }
+  /** Whatever was last read for this key, whatever its etag (served only while the machine is off). */
+  last(key) {
+    return this.entries.get(key)?.bytes;
+  }
+  put(key, etag, bytes) {
+    this.drop(key);
+    if (bytes.byteLength > this.maxBytes) return;
+    this.entries.set(key, { etag, bytes });
+    this.bytes += bytes.byteLength;
+    while (this.bytes > this.maxBytes || this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === void 0) break;
+      this.drop(oldest);
     }
   }
-  /** "HQ: Sign Out": revoke THIS grant in HQ, then forget it here. */
-  async signOut() {
-    const host = this.host();
-    if (!host) return;
-    const account = this.deps.store.account(host);
-    let reached = true;
-    if (account) {
-      try {
-        const client = await this.client();
-        await client?.request("DELETE", `/api/remote/grants/${account.grantId}`, { signed: true });
-      } catch (err) {
-        reached = err instanceof HqApiError && (err.status === 404 || err.status === 401 && await this.revocationConfirmed());
-      }
-    }
-    await this.deps.store.wipe(host);
-    this.clientCache = null;
-    this.revokedEmitter.fire();
-    this.changed.fire();
-    this.deps.ui.info(reached ? COPY.signedOut : COPY.signOutOffline);
+  drop(key) {
+    const e = this.entries.get(key);
+    if (!e) return;
+    this.entries.delete(key);
+    this.bytes -= e.bytes.byteLength;
   }
-  /** The host setting changed: a different host needs its own sign-in (decision 26). */
-  hostChanged() {
-    this.clientCache = null;
-    this.revokedEmitter.fire();
-    this.changed.fire();
+  /** Every cached key under a prefix (a team, or a folder that went away). */
+  dropPrefix(prefix) {
+    for (const key of [...this.entries.keys()]) if (key.startsWith(prefix)) this.drop(key);
   }
-  dispose() {
-    this.changed.dispose();
-    this.revokedEmitter.dispose();
+  keys() {
+    return [...this.entries.keys()];
+  }
+  clear() {
+    this.entries.clear();
+    this.bytes = 0;
+  }
+  get size() {
+    return this.bytes;
   }
 };
 
@@ -10405,6 +10357,26 @@ async function closeConnection(client, team, id) {
 var WAKE_POLL_FIRST_MS = 2e3;
 var WAKE_POLL_MS2 = 4e3;
 var WAKE_STILL_MS = 2e4;
+function wakeNotice(outcome, name, team) {
+  switch (outcome.kind) {
+    case "running":
+      return { level: "info", message: COPY.woke(name), actions: [] };
+    case "timeout":
+      return { level: "warning", message: COPY.wakeTimeout(name), actions: [] };
+    case "stopped":
+      return {
+        level: "warning",
+        message: COPY.wakeStopped(name),
+        actions: team.workspace.rights.forward ? ["newSession", "openInHq"] : ["openInHq"]
+      };
+    case "throttled":
+      return { level: "warning", message: COPY.wakeThrottled, actions: [] };
+    case "unavailable":
+      return { level: "warning", message: COPY.wakeUnavailable, actions: [] };
+    case "refused":
+      return outcome.error.status === 403 ? { level: "error", message: COPY.forwardNotAllowed(name), actions: [] } : { level: "error", message: outcome.error.message, actions: [] };
+  }
+}
 function teamPath(team) {
   return `/api/remote/orgs/${encodeURIComponent(team.org.slug)}/workspaces/${team.workspace.id}`;
 }
@@ -10420,7 +10392,7 @@ async function wakeTeam(client, team, deps) {
     if (!(err instanceof HqApiError)) throw err;
     if (err.status === 404) return { kind: "unavailable" };
     if (err.status === 429) return { kind: "throttled" };
-    if (err.code === "RUNNER_UNAVAILABLE") return { kind: "no-machine" };
+    if (err.code === "RUNNER_UNAVAILABLE") return { kind: "stopped" };
     return { kind: "refused", error: err };
   }
   if (answer.state === "running") return { kind: "running" };
@@ -10448,18 +10420,2230 @@ async function wakeTeam(client, team, deps) {
   return { kind: "timeout" };
 }
 
-// src/ports/ports.ts
-var vscode2 = __toESM(require("vscode"), 1);
+// src/fs/fs-api.ts
+var FsApiError = class extends Error {
+  constructor(status, code, message, details) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+    this.name = "FsApiError";
+  }
+  status;
+  code;
+  details;
+};
+function activityHeaders(opts) {
+  return opts?.background === true ? { [HQ_HEADER_ACTIVITY]: HQ_ACTIVITY_BACKGROUND } : void 0;
+}
+async function toError(res) {
+  let body = {};
+  try {
+    body = await res.json();
+  } catch {
+  }
+  const message = typeof body.error === "string" ? body.error : typeof body.message === "string" ? body.message : `HQ answered ${res.status}`;
+  return new FsApiError(
+    res.status,
+    typeof body.code === "string" ? body.code : void 0,
+    message,
+    typeof body.details === "object" && body.details !== null ? body.details : void 0
+  );
+}
+var HqFsApi = class {
+  constructor(client) {
+    this.client = client;
+  }
+  client;
+  base(team) {
+    return `${teamPath(team)}/fs`;
+  }
+  q(path5) {
+    return encodeURIComponent(path5);
+  }
+  async json(res) {
+    if (!res.ok) throw await toError(res);
+    return await res.json();
+  }
+  async tree(team, path5, cursor, opts) {
+    const c = await this.client();
+    const headers = activityHeaders(opts);
+    const res = await c.send(
+      "GET",
+      `${this.base(team)}/tree?path=${this.q(path5)}${cursor ? `&cursor=${this.q(cursor)}` : ""}`,
+      { org: team.org.slug, ...headers ? { headers } : {} }
+    );
+    return this.json(res);
+  }
+  /** Every page of one folder (one request per 1,000 entries). */
+  async listAll(team, path5, opts) {
+    const out = [];
+    let cursor;
+    for (let pages = 0; pages < 1e3; pages++) {
+      const page = await this.tree(team, path5, cursor, opts);
+      out.push(...page.entries);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return out;
+  }
+  async stat(team, path5, opts) {
+    const c = await this.client();
+    const headers = activityHeaders(opts);
+    return this.json(
+      await c.send("GET", `${this.base(team)}/stat?path=${this.q(path5)}`, {
+        org: team.org.slug,
+        ...headers ? { headers } : {}
+      })
+    );
+  }
+  async read(team, path5, ifNoneMatch) {
+    const c = await this.client();
+    const res = await c.send("GET", `${this.base(team)}/file?path=${this.q(path5)}`, {
+      org: team.org.slug,
+      ...ifNoneMatch ? { headers: { "if-none-match": ifNoneMatch } } : {}
+    });
+    if (res.status === 304) return { kind: "not-modified", etag: res.headers.get("etag") ?? "" };
+    if (!res.ok) throw await toError(res);
+    return {
+      kind: "bytes",
+      bytes: new Uint8Array(await res.arrayBuffer()),
+      etag: res.headers.get("etag") ?? "",
+      masked: res.headers.get(HQ_HEADER_MASKED) === "1"
+    };
+  }
+  async write(team, path5, bytes, pre) {
+    const c = await this.client();
+    const res = await c.send("PUT", `${this.base(team)}/file?path=${this.q(path5)}`, {
+      org: team.org.slug,
+      raw: bytes,
+      signed: true,
+      headers: "ifMatch" in pre ? { "if-match": pre.ifMatch } : { "if-none-match": "*" }
+    });
+    return this.json(res);
+  }
+  async mkdir(team, path5) {
+    const c = await this.client();
+    return this.json(
+      await c.send("POST", `${this.base(team)}/dir`, {
+        org: team.org.slug,
+        json: { path: path5 },
+        signed: true
+      })
+    );
+  }
+  async remove(team, path5, recursive) {
+    const c = await this.client();
+    const res = await c.send(
+      "DELETE",
+      `${this.base(team)}/entry?path=${this.q(path5)}${recursive ? "&recursive=1" : ""}`,
+      { org: team.org.slug, signed: true }
+    );
+    if (!res.ok) throw await toError(res);
+  }
+  async rename(team, from, to, overwrite) {
+    const c = await this.client();
+    return this.json(
+      await c.send("POST", `${this.base(team)}/rename`, {
+        org: team.org.slug,
+        json: { from, to, overwrite },
+        signed: true
+      })
+    );
+  }
+  async search(team, req) {
+    const c = await this.client();
+    return this.json(
+      await c.send("POST", `${this.base(team)}/search/text`, {
+        org: team.org.slug,
+        json: req,
+        signed: true
+      })
+    );
+  }
+};
 
-// ../hq-client/src/forward.ts
-var import_node_net = __toESM(require("node:net"), 1);
+// src/fs/fs-core.ts
+var FsCoreError = class extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.kind = kind;
+    this.name = "FsCoreError";
+  }
+  kind;
+};
+var SignedOutError = class extends FsCoreError {
+  constructor() {
+    super("unavailable", COPY.signedOutWelcome);
+  }
+};
+var MAX_EDIT_BYTES = FS_MAX_WRITE_BYTES;
+var OWN_WRITE_MS = 5e3;
+var ABSENT_TTL_MS = 3e4;
+var ABSENT_MAX = 2e3;
+var THROTTLE_RETRIES = 3;
+var THROTTLE_WAIT_MAX_MS = 1e4;
+var REFRESH_FOLDERS_MAX = 20;
+var TEAM_UP_PROBE_MS = 5e3;
+var TEAM_UP_BUDGET_MS = 18e4;
+var TeamGate = class {
+  constructor(max) {
+    this.max = max;
+  }
+  max;
+  active = 0;
+  queue = [];
+  async run(priority, fn) {
+    if (this.active >= this.max) {
+      await new Promise((go) => {
+        const item = { priority, go };
+        if (priority === "listing") {
+          const i = this.queue.findIndex((q) => q.priority !== "listing");
+          if (i === -1) this.queue.push(item);
+          else this.queue.splice(i, 0, item);
+        } else this.queue.push(item);
+      });
+    }
+    this.active += 1;
+    try {
+      return await fn();
+    } finally {
+      this.active -= 1;
+      this.queue.shift()?.go();
+    }
+  }
+};
+var UNSAFE_NAME = new RegExp(
+  `[${rangesSource(CONTROL_RANGES)}${rangesSource(UNSAFE_RANGES)}/\\\\]`
+);
+function isSafeName(name) {
+  return name !== "" && name !== "." && name !== ".." && !UNSAFE_NAME.test(name);
+}
+var UNSAFE_CHARS = new RegExp(UNSAFE_NAME.source, "g");
+var REPLACEMENT = String.fromCharCode(65533);
+function shownName(name) {
+  return isSafeName(name) ? name : name.replace(UNSAFE_CHARS, REPLACEMENT);
+}
+function suffixedName(cleaned, real, hexLength = 6) {
+  const h = (0, import_node_crypto6.createHash)("sha256").update(real).digest("hex").slice(0, hexLength);
+  const dot = cleaned.lastIndexOf(".");
+  return dot > 0 ? `${cleaned.slice(0, dot)} ~${h}${cleaned.slice(dot)}` : `${cleaned} ~${h}`;
+}
+var CONTROL_IN_PATH = new RegExp(`[${rangesSource(CONTROL_RANGES)}]`);
+function hasControlChars(realPath) {
+  return CONTROL_IN_PATH.test(realPath);
+}
+function controlNameError() {
+  return new FsCoreError("no-permissions", COPY.fsControlName);
+}
+function isDotSegment(seg) {
+  return seg === "" || seg === "." || seg === "..";
+}
+function baseName(path5) {
+  const i = path5.lastIndexOf("/");
+  return i === -1 ? path5 : path5.slice(i + 1);
+}
+var HqFsCore = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.now = deps.now ?? Date.now;
+    this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.listings = new ListingCache(this.now);
+    deps.events.onFrame((f) => void this.onEvent(f));
+  }
+  deps;
+  listings;
+  contents = new ContentCache();
+  ownWrites = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  answered = /* @__PURE__ */ new Set();
+  upListeners = /* @__PURE__ */ new Set();
+  /** Teams that refused a person's request because they could not serve (off, updating). */
+  down = /* @__PURE__ */ new Set();
+  /** A probe round per team: until when it asks (a forced sign pushes this out). */
+  probeUntil = /* @__PURE__ */ new Map();
+  now;
+  /** Watched teams (refcounted), for the root refresh while their stream is down. */
+  watched = /* @__PURE__ */ new Map();
+  refreshTimer = null;
+  /** The last issue per team (absent = none), so the UI hears a change once. */
+  issues = /* @__PURE__ */ new Map();
+  gates = /* @__PURE__ */ new Map();
+  /** `team:path` → until when a 404 is believed (the negative cache). */
+  absent = /* @__PURE__ */ new Map();
+  /** Listings being fetched now: a probe below one waits for it instead of asking. */
+  listing = /* @__PURE__ */ new Map();
+  /** Stats being fetched now: the same path asked twice at once is asked once. */
+  stating = /* @__PURE__ */ new Map();
+  sleep;
+  /** VS-18: `team:realDir\0shown` → the real name behind a cleaned one. */
+  realNames = /* @__PURE__ */ new Map();
+  /** The reverse: `team:realDir\0real` → the name it is shown under. */
+  shownOf = /* @__PURE__ */ new Map();
+  /** Hostile names given a suffix, kept while the real name exists (W2: stable names). */
+  suffixed = /* @__PURE__ */ new Set();
+  /**
+   * LOW 1c: `team:shownPath` → the REAL path whose bytes were served under it. A shown name can move
+   * to another file between listings (a plain file later takes the cleaned name); a save of the old
+   * tab must never land on the new file.
+   */
+  servedFrom = /* @__PURE__ */ new Map();
+  /**
+   * Bumped by `clear()` (sign-out, revocation). An answer to a request that started before it is
+   * dropped, never written into the caches it just emptied (security review L3).
+   */
+  generation = 0;
+  /**
+   * The team's machine answered a file request (it is awake and serving). The provider uses it to
+   * retry tabs it refused while the team was asleep (live re-test #2).
+   */
+  onTeamAnswered(listener) {
+    this.answered.add(listener);
+    return { dispose: () => void this.answered.delete(listener) };
+  }
+  /**
+   * A team that refused because it could not serve answers again (a TRANSITION: once per episode).
+   * The provider retries what it refused then, with fresh tries (live re-test #2, round 3).
+   */
+  onTeamUp(listener) {
+    this.upListeners.add(listener);
+    return { dispose: () => void this.upListeners.delete(listener) };
+  }
+  /**
+   * A sign that a team which refused may be up now (a wake was asked for or answered, a terminal
+   * attached, the listing or the events stream says running). Nothing in VS Code asks a failed tab
+   * or root again by itself, so the core asks: a background stat of the root every 5 s for 3 min,
+   * until one answers (then `onTeamUp`). A team that never refused is never asked. `force` (a
+   * person's action) starts a new 3 min even right after one ran out.
+   */
+  expectUp(team, opts = {}) {
+    const id = team.workspace.id;
+    if (!this.down.has(id)) return;
+    const running = this.probeUntil.has(id);
+    if (running && !opts.force) return;
+    this.probeUntil.set(id, this.now() + TEAM_UP_BUDGET_MS);
+    if (!running) void this.probeUntilUp(team);
+  }
+  async probeUntilUp(team) {
+    const id = team.workspace.id;
+    const generation = this.generation;
+    try {
+      while (this.down.has(id) && generation === this.generation && this.now() < (this.probeUntil.get(id) ?? 0)) {
+        try {
+          await this.call(team, () => this.deps.api.stat(team, "", { background: true }), {
+            read: true
+          });
+          return;
+        } catch (err) {
+          this.reportAuth(err);
+          if (!this.probeAgainAfter(err)) return;
+        }
+        await this.sleep(TEAM_UP_PROBE_MS);
+      }
+    } finally {
+      this.probeUntil.delete(id);
+    }
+  }
+  /**
+   * Worth another probe: the team still cannot serve (409 off or updating), HQ throttled us, or the
+   * network failed on the way. Anything else (an account error, a 401 or 426, another refusal)
+   * ends the round.
+   */
+  probeAgainAfter(err) {
+    if (err instanceof FsApiError) {
+      if (err.status === 409) return this.isOff(err) || this.isIssue(err);
+      return isThrottled(err) || err.status === 502 || err.status === 503 || err.status === 504;
+    }
+    return !(err instanceof HqApiError || err instanceof NotLoggedInError || err instanceof FsCoreError || isAccountError(err));
+  }
+  onDidChange(listener) {
+    this.listeners.add(listener);
+    return { dispose: () => void this.listeners.delete(listener) };
+  }
+  fire(changes) {
+    if (changes.length === 0) return;
+    const shown = changes.map((c) => ({ ...c, path: this.toShown(c.team, c.path) }));
+    for (const l of [...this.listeners]) l(shown);
+  }
+  nameKey(team, dir, name) {
+    return `${team.workspace.id}:${dir}\0${name}`;
+  }
+  /** Drop every shown-name record of `path` itself and of everything below it (M1). */
+  forgetShownNames(team, path5) {
+    const id = team.workspace.id;
+    if (path5 !== "") {
+      const own = this.nameKey(team, parentOf(path5), baseName(path5));
+      const shown = this.shownOf.get(own);
+      if (shown !== void 0) this.realNames.delete(this.nameKey(team, parentOf(path5), shown));
+      this.shownOf.delete(own);
+      this.suffixed.delete(own);
+    }
+    const inside = `${id}:${path5}\0`;
+    const below = path5 === "" ? `${id}:` : `${id}:${path5}/`;
+    for (const map of [this.realNames, this.shownOf, this.suffixed]) {
+      for (const k of [...map.keys()]) {
+        if (k.startsWith(inside) || k.startsWith(below)) map.delete(k);
+      }
+    }
+  }
+  /**
+   * The path VS Code shows for a real one (W4: search results use it too, one URI per file). A
+   * hostile segment in a folder we hold no listing of lists that folder ONCE first (LOW 3), so a
+   * search hit never opens under its plain twin's name.
+   */
+  async shownPath(team, realPath) {
+    const generation = this.generation;
+    const budget = { listed: false };
+    let dir = "";
+    for (const seg of realPath === "" ? [] : realPath.split("/")) {
+      if (!isSafeName(seg)) await this.listOnce(team, dir, generation, budget);
+      dir = dir === "" ? seg : `${dir}/${seg}`;
+    }
+    return this.toShown(team, realPath);
+  }
+  /**
+   * List `dir` if we hold no listing of it, at most ONCE per resolution (LOW 2): after one lazy
+   * listing, or a failed one, the rest of the path is passed through unchanged. True when a
+   * listing of `dir` is now held.
+   */
+  async listOnce(team, dir, generation, budget) {
+    if (this.listings.staleFolder(team.workspace.id, dir) !== void 0) return true;
+    if (budget.listed) return false;
+    const parts = dir === "" ? [] : dir.split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const until = this.absent.get(this.key(team, parts.slice(0, i).join("/")));
+      if (until !== void 0 && until > this.now()) return false;
+    }
+    budget.listed = true;
+    await this.fetchListing(team, dir, generation).catch(() => void 0);
+    return this.listings.staleFolder(team.workspace.id, dir) !== void 0;
+  }
+  /** Each real segment as the Explorer shows it: plain as is, hostile cleaned (and suffixed). */
+  toShown(team, realPath) {
+    if (realPath === "") return "";
+    let dir = "";
+    const out = [];
+    for (const seg of realPath.split("/")) {
+      out.push(this.shownSegment(team, dir, seg));
+      dir = dir === "" ? seg : `${dir}/${seg}`;
+    }
+    return out.join("/");
+  }
+  shownSegment(team, dir, real) {
+    if (isSafeName(real)) return real;
+    const known = this.shownOf.get(this.nameKey(team, dir, real));
+    if (known !== void 0) return known;
+    const cleaned = shownName(real);
+    const owner = this.realNames.get(this.nameKey(team, dir, cleaned));
+    const plainTaken = (this.listings.staleFolder(team.workspace.id, dir) ?? []).some(
+      (e) => baseName(e.path) === cleaned
+    );
+    return owner !== void 0 && owner !== real || plainTaken ? suffixedName(cleaned, real) : cleaned;
+  }
+  /** `toReal` from what is mapped already, never a request (the Explorer decoration asks it). */
+  toRealKnown(team, shown) {
+    let real = "";
+    for (const seg of shown === "" ? [] : shown.split("/")) {
+      const next = this.realNames.get(this.nameKey(team, real, seg)) ?? seg;
+      real = real === "" ? next : `${real}/${next}`;
+    }
+    return real;
+  }
+  /**
+   * Is this shown path a file HQ can list but never open (a control character in its real name)?
+   * The Explorer marks it; every open, save, rename and delete refuses it without a request.
+   */
+  isUnopenable(team, shown) {
+    return hasControlChars(this.toRealKnown(team, shown));
+  }
+  /**
+   * The real path behind a path VS Code gave us (the reverse of `toShown`, via the listings). A
+   * cleaned segment whose folder was not listed this session (a restored editor tab, after a
+   * sign-out) lists that folder once and looks again (W3).
+   */
+  async toReal(team, shown, generation = this.generation) {
+    if (shown === "") return "";
+    let real = "";
+    const budget = { listed: false };
+    for (const seg of shown.split("/")) {
+      let name = this.realNames.get(this.nameKey(team, real, seg));
+      if (name === void 0 && seg.includes(REPLACEMENT)) {
+        const held = this.listings.staleFolder(team.workspace.id, real) !== void 0;
+        const listedNow = !held && await this.listOnce(team, real, generation, budget);
+        if (listedNow) {
+          name = this.realNames.get(this.nameKey(team, real, seg));
+          const listing = this.listings.staleFolder(team.workspace.id, real) ?? [];
+          const child = real === "" ? seg : `${real}/${seg}`;
+          if (name === void 0 && !listing.some((e) => e.path === child)) {
+            this.noteAbsent(team, child);
+          }
+        }
+      }
+      const next = name ?? seg;
+      real = real === "" ? next : `${real}/${next}`;
+    }
+    return real;
+  }
+  /**
+   * The entries of one folder as VS Code sees them: `.`/`..` dropped, hostile names cleaned and
+   * remembered, so operations reach the real file. Rebuilt from THIS listing only (security review
+   * M1). A hostile name whose cleaned text collides (with a plain name or with another hostile one)
+   * gets a stable, unique suffix from its REAL name, whatever the listing order (W2), and keeps it
+   * for as long as that real name exists.
+   */
+  shownEntries(team, dir, entries) {
+    const prefix = `${team.workspace.id}:${dir}\0`;
+    for (const k of [...this.realNames.keys()]) if (k.startsWith(prefix)) this.realNames.delete(k);
+    for (const k of [...this.shownOf.keys()]) if (k.startsWith(prefix)) this.shownOf.delete(k);
+    const present = new Set(entries.map((e) => this.nameKey(team, dir, baseName(e.path))));
+    for (const k of [...this.suffixed]) {
+      if (k.startsWith(prefix) && !present.has(k)) this.suffixed.delete(k);
+    }
+    const out = [];
+    const taken = /* @__PURE__ */ new Set();
+    const hostile = [];
+    for (const e of entries) {
+      const name = baseName(e.path);
+      if (isSafeName(name)) {
+        taken.add(name);
+        out.push([name, e.type]);
+      } else if (!isDotSegment(name)) hostile.push(e);
+    }
+    hostile.sort((x, y) => baseName(x.path) < baseName(y.path) ? -1 : 1);
+    const cleanedCount = /* @__PURE__ */ new Map();
+    for (const e of hostile) {
+      const c = shownName(baseName(e.path));
+      cleanedCount.set(c, (cleanedCount.get(c) ?? 0) + 1);
+    }
+    for (const e of hostile) {
+      const real = baseName(e.path);
+      const key = this.nameKey(team, dir, real);
+      const cleaned = shownName(real);
+      const suffix = this.suffixed.has(key) || taken.has(cleaned) || (cleanedCount.get(cleaned) ?? 0) > 1;
+      let shown = suffix ? suffixedName(cleaned, real) : cleaned;
+      for (const len of [12, 24, 64]) {
+        if (!taken.has(shown)) break;
+        shown = suffixedName(cleaned, real, len);
+      }
+      if (taken.has(shown)) continue;
+      taken.add(shown);
+      if (suffix) this.suffixed.add(key);
+      this.realNames.set(this.nameKey(team, dir, shown), real);
+      this.shownOf.set(key, shown);
+      out.push([shown, e.type]);
+    }
+    return out;
+  }
+  key(team, path5) {
+    return `${team.workspace.id}:${path5}`;
+  }
+  /** The team an `hq://<org>/<alias>` names, among this sign-in's teams. */
+  team(orgSlug, alias) {
+    const t = this.deps.teams().find((x) => x.org.slug === orgSlug && x.alias === alias);
+    if (!t) throw new FsCoreError("unavailable", COPY.fsTeamGone);
+    return t;
+  }
+  rootReadOnly(team) {
+    return team.workspace.rights.files?.write !== true;
+  }
+  view(team, s) {
+    return {
+      type: s.type,
+      size: s.size,
+      mtimeMs: s.mtimeMs,
+      readonly: this.rootReadOnly(team) || s.readonly !== void 0 || s.masked === true || s.type === "file" && s.size > MAX_EDIT_BYTES
+    };
+  }
+  /**
+   * Every server call. It waits its turn at the team's gate (nonprod 2026-09-30: opening a window
+   * sent 100+ requests at once and HQ throttled them all), a throttled READ waits what HQ asked and
+   * tries again (a write is never replayed), a success clears the team's issue and a typed 409
+   * records one.
+   */
+  async call(team, run, opts = {}) {
+    const gate = this.gateFor(team);
+    const generation = this.generation;
+    let out;
+    let renewRetried = false;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        out = await gate.run(opts.priority ?? "normal", run);
+        break;
+      } catch (err) {
+        if (err instanceof SlotRenewedError && !renewRetried) {
+          renewRetried = true;
+          this.deps.onApiError?.(err);
+          continue;
+        }
+        if (opts.read && attempt < THROTTLE_RETRIES && isThrottled(err)) {
+          await this.sleep(retryAfterMs(err));
+          continue;
+        }
+        if (generation !== this.generation) throw new SignedOutError();
+        const issue = this.issueOf(err);
+        if (issue) this.setIssue(team, issue);
+        throw err;
+      }
+    }
+    if (generation !== this.generation) throw new SignedOutError();
+    this.setIssue(team, null);
+    const wasDown = this.down.delete(team.workspace.id);
+    for (const l of [...this.answered]) l(team);
+    if (wasDown) for (const l of [...this.upListeners]) l(team);
+    return out;
+  }
+  gateFor(team) {
+    let g = this.gates.get(team.workspace.id);
+    if (!g) {
+      g = new TeamGate(this.deps.maxInFlight ?? 6);
+      this.gates.set(team.workspace.id, g);
+    }
+    return g;
+  }
+  // ── known absent (VS Code's own probes: .vscode/*, .github/*, .claude/*, ...) ─────────────────
+  noteAbsent(team, path5) {
+    if (this.absent.size >= ABSENT_MAX) this.absent.clear();
+    this.absent.set(this.key(team, path5), this.now() + ABSENT_TTL_MS);
+  }
+  /** Forget what we believed absent at `path` and below it (it may exist now). */
+  forgetAbsent(team, path5) {
+    const key = this.key(team, path5);
+    this.absent.delete(key);
+    const below = `${key}/`;
+    for (const k of [...this.absent.keys()]) if (k.startsWith(below)) this.absent.delete(k);
+  }
+  /** A listing we may answer from now: live or fresh in the cache, or one being fetched. */
+  async knownListing(team, dir) {
+    const cached = this.listings.folder(team.workspace.id, dir, this.deps.events.isLive(team));
+    if (cached) return cached;
+    const pending = this.listing.get(this.key(team, dir));
+    return pending ? pending.catch(() => void 0) : void 0;
+  }
+  /**
+   * Is `path` certainly not there? Yes when a recent 404 said so, or when the nearest listed
+   * ancestor has no such child (or has a FILE where the path needs a folder). Never a request.
+   */
+  async knownAbsent(team, path5) {
+    if (path5 === "") return false;
+    const until = this.absent.get(this.key(team, path5));
+    if (until !== void 0) {
+      if (until > this.now()) return true;
+      this.absent.delete(this.key(team, path5));
+    }
+    const parts = path5.split("/");
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const listing = await this.knownListing(team, parts.slice(0, i).join("/"));
+      if (!listing) continue;
+      const child = parts.slice(0, i + 1).join("/");
+      const entry = listing.find((e) => e.path === child);
+      if (!entry) return true;
+      return child !== path5 && entry.type !== "dir";
+    }
+    return false;
+  }
+  issueOf(err) {
+    if (!(err instanceof FsApiError) || err.status !== 409) return null;
+    if (err.code === "REMOTE_UNSUPPORTED_RUNNER") return { kind: "needs-update" };
+    if (err.code === "WORKSPACE_UPDATING") {
+      const eta = err.details?.etaSeconds;
+      return {
+        kind: "updating",
+        etaSeconds: typeof eta === "number" && Number.isFinite(eta) && eta > 0 ? eta : null
+      };
+    }
+    return null;
+  }
+  /** Tell the UI only when the KIND changes (a new ETA while updating is not news). */
+  setIssue(team, issue) {
+    const id = team.workspace.id;
+    const prior = this.issues.get(id);
+    if ((prior?.kind ?? null) === (issue?.kind ?? null)) return;
+    if (issue) this.issues.set(id, issue);
+    else this.issues.delete(id);
+    this.deps.ui.teamIssue?.(team, issue);
+  }
+  /** The team's current issue, if any (the folder decoration reads it). */
+  issueFor(team) {
+    return this.issues.get(team.workspace.id);
+  }
+  /**
+   * A 401 or 426 (or any HqApiError) goes to the sign-in service, which decides (revocation,
+   * update prompt). Background paths call this too: a refused re-list is never swallowed (L2c).
+   */
+  reportAuth(err) {
+    if (err instanceof HqApiError || isAccountError(err)) {
+      this.deps.onApiError?.(err);
+      return;
+    }
+    if (err instanceof FsApiError && (err.status === 401 || err.status === 426)) {
+      this.deps.onApiError?.(new HqApiError(err.status, err.code, err.message, err.details));
+    }
+  }
+  /** Map an API failure to the error VS Code shows, telling the sign-in service first. */
+  fail(team, err, action) {
+    if (err instanceof FsCoreError) return err;
+    if (err instanceof NotLoggedInError)
+      return new FsCoreError("unavailable", COPY.signedOutWelcome);
+    this.reportAuth(err);
+    if (isAccountError(err)) {
+      const cli = err instanceof RefreshNeedsRenewingError || err instanceof RefreshBusyError;
+      return new FsCoreError("unavailable", cli ? COPY.renewSignIn : err.message);
+    }
+    if (err instanceof HqApiError) return new FsCoreError("unavailable", err.message);
+    if (!(err instanceof FsApiError)) {
+      return new FsCoreError("unavailable", COPY.unreachable);
+    }
+    const name = cleanLabel(team.workspace.name) || team.alias;
+    switch (err.status) {
+      case 404:
+        return new FsCoreError("not-found", err.message);
+      case 402:
+        return new FsCoreError("no-permissions", COPY.fsPlanReadOnly);
+      case 403:
+        return new FsCoreError("no-permissions", err.message);
+      case 413:
+        return new FsCoreError("too-large", COPY.fsTooLarge);
+      case 422:
+        return new FsCoreError("no-permissions", err.message);
+      case 409:
+        if (this.isOff(err) || this.isIssue(err)) this.down.add(team.workspace.id);
+        if (err.code === "RUNNER_UNAVAILABLE") {
+          this.deps.ui.teamOff(team, action);
+          return new FsCoreError(
+            "unavailable",
+            action === "open" ? COPY.fsOffOpen(name) : COPY.fsOffSave(name)
+          );
+        }
+        if (err.code === "REMOTE_UNSUPPORTED_RUNNER") {
+          return new FsCoreError("unavailable", COPY.updateNeededLong(name));
+        }
+        if (err.code === "WORKSPACE_UPDATING") {
+          const issue = this.issueOf(err);
+          return new FsCoreError(
+            "unavailable",
+            COPY.fsUpdating(name, issue?.kind === "updating" ? issue.etaSeconds : null)
+          );
+        }
+        if (err.code === "CONFLICT") return new FsCoreError("exists", err.message);
+        if (err.code === "NOT_A_DIRECTORY") return new FsCoreError("not-a-dir", err.message);
+        if (err.code === "IS_A_DIRECTORY") return new FsCoreError("is-a-dir", err.message);
+        return new FsCoreError("unavailable", err.message);
+      default:
+        return new FsCoreError("unavailable", err.message);
+    }
+  }
+  isOff(err) {
+    return err instanceof FsApiError && err.status === 409 && err.code === "RUNNER_UNAVAILABLE";
+  }
+  /**
+   * A machine that needs an update or is being updated: the ROOT still mounts (a dir with no
+   * entries) so the Explorer shows the folder with its reason (decoration, notice) instead of a
+   * bare error badge. Anything below the root says the sentence.
+   */
+  isIssue(err) {
+    return this.issueOf(err) !== null;
+  }
+  // ── reads ─────────────────────────────────────────────────────────────────────────────────────
+  async stat(team, shown) {
+    const generation = this.generation;
+    const path5 = await this.toReal(team, shown, generation);
+    const live = this.deps.events.isLive(team);
+    const cached = this.listings.stat(team.workspace.id, path5);
+    if (hasControlChars(path5)) {
+      if (cached) return { ...this.view(team, cached), readonly: true };
+      throw controlNameError();
+    }
+    if (live && cached) return this.view(team, cached);
+    if (path5 === "" && live)
+      return { type: "dir", size: 0, mtimeMs: 0, readonly: this.rootReadOnly(team) };
+    if (await this.knownAbsent(team, path5)) throw new FsCoreError("not-found", path5);
+    try {
+      const s = await this.statOnce(team, path5);
+      if (generation !== this.generation) throw new SignedOutError();
+      return this.view(team, this.listings.putStat(team.workspace.id, s));
+    } catch (err) {
+      if (err instanceof FsApiError && err.status === 404) this.noteAbsent(team, path5);
+      if (this.isOff(err)) {
+        if (cached) return { ...this.view(team, cached), readonly: true };
+        const bytes = this.contents.last(this.key(team, path5));
+        if (bytes) return { type: "file", size: bytes.byteLength, mtimeMs: 0, readonly: true };
+      }
+      if ((this.isOff(err) || this.isIssue(err)) && path5 === "") {
+        return { type: "dir", size: 0, mtimeMs: 0, readonly: this.rootReadOnly(team) };
+      }
+      throw this.fail(team, err, "open");
+    }
+  }
+  /** One stat per path at a time: VS Code asks the same path several times while a folder opens. */
+  statOnce(team, path5) {
+    const key = this.key(team, path5);
+    const pending = this.stating.get(key);
+    if (pending) return pending;
+    const p = this.call(team, () => this.deps.api.stat(team, path5), { read: true }).finally(
+      () => this.stating.delete(key)
+    );
+    this.stating.set(key, p);
+    return p;
+  }
+  async readDirectory(team, shown) {
+    const generation = this.generation;
+    const path5 = await this.toReal(team, shown, generation);
+    if (hasControlChars(path5)) throw controlNameError();
+    const live = this.deps.events.isLive(team);
+    let entries = this.listings.folder(team.workspace.id, path5, live);
+    if (!entries) {
+      if (path5 !== "" && await this.knownAbsent(team, path5)) {
+        throw new FsCoreError("not-found", path5);
+      }
+      try {
+        entries = await this.fetchListing(team, path5, generation);
+        if (generation !== this.generation) throw new SignedOutError();
+      } catch (err) {
+        const stale = this.isOff(err) || isThrottled(err) ? this.listings.staleFolder(team.workspace.id, path5) : void 0;
+        if (!stale && path5 === "" && this.isIssue(err)) {
+          this.fail(team, err, "open");
+          return [];
+        }
+        if (!stale) throw this.fail(team, err, "open");
+        entries = stale;
+      }
+    }
+    return this.shownEntries(team, path5, entries);
+  }
+  /** Fetch one folder's listing (ahead of other requests), cache it, and let probes wait on it. */
+  /** `generation`: the caller's, when the listing answers a request that began before a clear (L3). */
+  /** `background`: the extension's own re-list, not a person's (sent as `X-HQ-Activity`). */
+  fetchListing(team, dir, generation = this.generation, background = false) {
+    const key = this.key(team, dir);
+    const pending = this.listing.get(key);
+    if (pending) {
+      return pending.then((v) => {
+        if (v) return v;
+        return this.fetchListing(team, dir, generation, background);
+      });
+    }
+    let fail;
+    const p = this.call(team, () => this.deps.api.listAll(team, dir, { background }), {
+      read: true,
+      priority: "listing"
+    }).then((list) => {
+      if (generation !== this.generation) throw new SignedOutError();
+      for (const e of list) this.forgetAbsent(team, e.path);
+      const stored = this.listings.putFolder(team.workspace.id, dir, list);
+      this.shownEntries(team, dir, stored);
+      return stored;
+    }).catch((err) => {
+      fail = err;
+      return void 0;
+    }).finally(() => this.listing.delete(key));
+    this.listing.set(key, p);
+    return p.then((v) => {
+      if (v) return v;
+      throw fail;
+    });
+  }
+  async readFile(team, shown) {
+    const generation = this.generation;
+    const path5 = await this.toReal(team, shown, generation);
+    if (hasControlChars(path5)) throw controlNameError();
+    const key = this.key(team, path5);
+    const cached = this.listings.stat(team.workspace.id, path5);
+    if (this.deps.events.isLive(team)) {
+      const hit = this.contents.get(key, cached?.etag);
+      if (hit) {
+        this.servedFrom.set(this.key(team, shown), path5);
+        return hit;
+      }
+    }
+    const last = this.contents.last(key);
+    if (!last && await this.knownAbsent(team, path5)) throw new FsCoreError("not-found", path5);
+    const lastEtag = last ? this.contentEtag(key) : void 0;
+    let r;
+    try {
+      r = await this.call(team, () => this.deps.api.read(team, path5, lastEtag), { read: true });
+    } catch (err) {
+      if (err instanceof FsApiError && err.status === 404) this.noteAbsent(team, path5);
+      if (this.isOff(err) && last) {
+        return last;
+      }
+      throw this.fail(team, err, "open");
+    }
+    if (generation !== this.generation) throw new SignedOutError();
+    if (this.servedFrom.size >= 5e3) this.servedFrom.clear();
+    this.servedFrom.set(this.key(team, shown), path5);
+    if (r.kind === "not-modified") return last ?? new Uint8Array();
+    this.contents.put(key, r.etag, r.bytes);
+    this.etags.set(key, r.etag);
+    if (r.masked) await this.markMasked(team, path5, r.etag);
+    return r.bytes;
+  }
+  /** The etag of what the content cache holds for `key` (kept beside it). */
+  etags = /* @__PURE__ */ new Map();
+  contentEtag(key) {
+    return this.etags.get(key);
+  }
+  async markMasked(team, path5, etag) {
+    let s = this.listings.stat(team.workspace.id, path5);
+    if (!s || s.etag !== etag) {
+      try {
+        s = this.listings.putStat(team.workspace.id, await this.statOnce(team, path5));
+      } catch {
+        return;
+      }
+    }
+    this.listings.markMasked(team.workspace.id, path5, etag);
+    this.deps.ui.masked(team, path5);
+    this.fire([{ team, path: path5, type: "changed" }]);
+  }
+  // ── writes ────────────────────────────────────────────────────────────────────────────────────
+  assertWritable(team) {
+    if (this.rootReadOnly(team)) throw new FsCoreError("no-permissions", COPY.fsViewOnly);
+  }
+  async writeFile(team, shown, bytes, opts) {
+    const generation = this.generation;
+    const path5 = await this.toReal(team, shown, generation);
+    if (hasControlChars(path5)) throw controlNameError();
+    this.assertWritable(team);
+    const served = this.servedFrom.get(this.key(team, shown));
+    if (served !== void 0 && served !== path5) {
+      throw new FsCoreError("unavailable", COPY.fsChangedOnMachine);
+    }
+    if (bytes.byteLength > MAX_EDIT_BYTES) throw new FsCoreError("too-large", COPY.fsTooLarge);
+    let known = this.listings.stat(team.workspace.id, path5);
+    const loaded = this.etags.get(this.key(team, path5));
+    if (!known && loaded !== void 0) {
+      known = { path: path5, type: "file", size: 0, mtimeMs: 0, etag: loaded };
+    }
+    if (!known) {
+      try {
+        known = this.listings.putStat(
+          team.workspace.id,
+          await this.call(team, () => this.deps.api.stat(team, path5))
+        );
+      } catch (err) {
+        if (!(err instanceof FsApiError && err.status === 404)) throw this.fail(team, err, "save");
+      }
+    }
+    if (!known && !opts.create) throw new FsCoreError("not-found", path5);
+    if (known && !opts.overwrite) throw new FsCoreError("exists", path5);
+    if (known?.masked) throw new FsCoreError("no-permissions", COPY.fsMasked);
+    if (known?.readonly) throw new FsCoreError("no-permissions", COPY.fsProtected);
+    let s;
+    try {
+      s = await this.call(
+        team,
+        () => this.deps.api.write(
+          team,
+          path5,
+          bytes,
+          known ? { ifMatch: known.etag } : { createOnly: true }
+        )
+      );
+    } catch (err) {
+      if (err instanceof FsApiError && err.status === 412) {
+        const current = err.details?.current;
+        if (current) this.listings.putStat(team.workspace.id, current);
+        else this.listings.invalidate(team.workspace.id, path5);
+        this.fire([{ team, path: path5, type: "changed" }]);
+        throw new FsCoreError("unavailable", COPY.fsChangedOnMachine);
+      }
+      throw this.fail(team, err, "save");
+    }
+    const key = this.key(team, path5);
+    this.servedFrom.set(this.key(team, shown), path5);
+    this.forgetAbsent(team, path5);
+    this.ownWrites.set(key, { etag: s.etag, at: this.now() });
+    this.listings.putStat(team.workspace.id, s);
+    this.contents.put(key, s.etag, bytes);
+    this.etags.set(key, s.etag);
+  }
+  async createDirectory(team, shown) {
+    const generation = this.generation;
+    const path5 = await this.toReal(team, shown, generation);
+    if (hasControlChars(path5)) throw controlNameError();
+    this.assertWritable(team);
+    this.forgetAbsent(team, path5);
+    try {
+      this.listings.putStat(
+        team.workspace.id,
+        await this.call(team, () => this.deps.api.mkdir(team, path5))
+      );
+    } catch (err) {
+      throw this.fail(team, err, "save");
+    }
+  }
+  async delete(team, shown, recursive) {
+    const generation = this.generation;
+    const path5 = await this.toReal(team, shown, generation);
+    if (hasControlChars(path5)) throw controlNameError();
+    this.assertWritable(team);
+    try {
+      await this.call(team, () => this.deps.api.remove(team, path5, recursive));
+    } catch (err) {
+      throw this.fail(team, err, "save");
+    }
+    this.forget(team, path5);
+    this.fire([{ team, path: path5, type: "deleted" }]);
+  }
+  async rename(team, shownFrom, shownTo, overwrite) {
+    const from = await this.toReal(team, shownFrom);
+    const to = await this.toReal(team, shownTo);
+    if (hasControlChars(from) || hasControlChars(to)) throw controlNameError();
+    this.assertWritable(team);
+    let s;
+    try {
+      s = await this.call(team, () => this.deps.api.rename(team, from, to, overwrite));
+    } catch (err) {
+      throw this.fail(team, err, "save");
+    }
+    this.forget(team, from);
+    this.forgetAbsent(team, to);
+    this.listings.invalidate(team.workspace.id, to);
+    this.listings.putStat(team.workspace.id, s);
+    this.fire([
+      { team, path: from, type: "deleted" },
+      { team, path: to, type: "created" }
+    ]);
+  }
+  /**
+   * Forget what we knew about `path` (and below it). `keepBytes`: a change on the stream keeps the
+   * last bytes, which are only ever served while the team is off (U23, read-only, with the off
+   * notice); while it is up, the next read is a conditional request that brings the new version.
+   */
+  forget(team, path5, opts = {}) {
+    this.listings.invalidate(team.workspace.id, path5);
+    this.forgetShownNames(team, path5);
+    if (opts.keepBytes) return;
+    const key = this.key(team, path5);
+    this.contents.drop(key);
+    this.contents.dropPrefix(`${key}/`);
+    this.etags.delete(key);
+    for (const k of [...this.etags.keys()]) if (k.startsWith(`${key}/`)) this.etags.delete(k);
+  }
+  // ── events ────────────────────────────────────────────────────────────────────────────────────
+  /**
+   * Watch one team's folder (refcounted): its events stream is live while any watch is. While the
+   * stream is NOT live (down, refused, or the server has no watcher running), the root is refreshed
+   * every 60 s instead, so the Explorer never sits on a stale listing.
+   */
+  watch(team) {
+    const sub = this.deps.events.subscribe(team);
+    const id = team.workspace.id;
+    const w = this.watched.get(id);
+    if (w) {
+      w.n += 1;
+      w.team = team;
+    } else this.watched.set(id, { team, n: 1 });
+    this.startRootRefresh();
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        sub.dispose();
+        const cur = this.watched.get(id);
+        if (cur && --cur.n <= 0) this.watched.delete(id);
+        if (this.watched.size === 0) this.stopRootRefresh();
+      }
+    };
+  }
+  startRootRefresh() {
+    if (this.refreshTimer !== null) return;
+    this.refreshTimer = setInterval(() => this.refreshRoots(), this.deps.rootRefreshMs ?? 6e4);
+    this.refreshTimer.unref?.();
+  }
+  stopRootRefresh() {
+    if (this.refreshTimer !== null) clearInterval(this.refreshTimer);
+    this.refreshTimer = null;
+  }
+  /**
+   * Every watched team whose stream is not live (down, refused by the socket cap, no watcher):
+   * re-list its root and its most recently listed folders OURSELVES and fire per child. A
+   * `Changed` on a folder is not enough: VS Code's Explorer does not re-read a folder for it.
+   */
+  refreshRoots() {
+    for (const { team } of this.watched.values()) {
+      if (this.deps.events.isLive(team)) continue;
+      const folders = ["", ...this.listings.recentFolders(team.workspace.id, REFRESH_FOLDERS_MAX)];
+      void this.relistAndFire(team, [...new Set(folders)]);
+    }
+  }
+  /** Re-list each folder we had listed, and fire what differs (plus `changed` for `alsoChanged`). */
+  async relistAndFire(team, dirs, alsoChanged = [], before) {
+    const out = alsoChanged.map((path5) => ({ team, path: path5, type: "changed" }));
+    const diffs = await Promise.all(
+      dirs.map(
+        (dir) => this.relist(
+          team,
+          dir,
+          before ? before.get(dir) : this.listings.staleFolder(team.workspace.id, dir)
+        )
+      )
+    );
+    for (const d of diffs) out.push(...d);
+    this.fire(dedupe(out));
+  }
+  /**
+   * Re-list `dir` and diff it against what VS Code was shown (`prior`): new children `created`,
+   * gone ones `deleted` (and forgotten), a new etag `changed`. A folder never listed is skipped (the
+   * Explorer is not showing it); a machine that cannot answer keeps the old listing.
+   */
+  async relist(team, dir, prior) {
+    if (!prior) return [];
+    let next;
+    try {
+      next = await this.fetchListing(team, dir, this.generation, true);
+    } catch (err) {
+      if (err instanceof SignedOutError) return [];
+      this.reportAuth(err);
+      this.listings.putFolder(team.workspace.id, dir, prior);
+      return [];
+    }
+    const was = new Map(prior.map((e) => [e.path, e]));
+    const out = [];
+    for (const e of next) {
+      if (!isSafePath(e.path)) continue;
+      const old = was.get(e.path);
+      if (!old) out.push({ team, path: e.path, type: "created" });
+      else if (old.etag !== e.etag || old.type !== e.type)
+        out.push({ team, path: e.path, type: "changed" });
+      was.delete(e.path);
+    }
+    for (const gone of was.keys()) {
+      if (!isSafePath(gone)) continue;
+      this.forget(team, gone);
+      out.push({ team, path: gone, type: "deleted" });
+    }
+    return out;
+  }
+  /** Extension deactivation: no timer outlives the window. */
+  dispose() {
+    this.stopRootRefresh();
+    this.watched.clear();
+    this.probeUntil.clear();
+  }
+  teamById(workspaceId) {
+    return this.deps.teams().find((t) => t.workspace.id === workspaceId);
+  }
+  async onEvent(frame) {
+    if (frame.type === "fs-changed") {
+      const team = this.teamById(frame.workspaceId);
+      if (!team) return;
+      const before = /* @__PURE__ */ new Map();
+      const direct = [];
+      for (const change of frame.changes) {
+        if (!isSafePath(change.path)) continue;
+        if (await this.isOwnEcho(team, change.path)) continue;
+        const parent = parentOf(change.path);
+        if (!before.has(parent)) {
+          before.set(parent, this.listings.staleFolder(team.workspace.id, parent));
+        }
+        const hadListing = before.get(parent) !== void 0;
+        this.forgetAbsent(team, change.path);
+        this.forget(team, change.path, { keepBytes: change.kind !== "deleted" });
+        if (change.kind) direct.push({ team, path: change.path, type: change.kind });
+        else if (!hadListing) direct.push({ team, path: change.path, type: "changed" });
+      }
+      const listed = [...before.entries()].filter(([, v]) => v !== void 0).map(([k]) => k);
+      if (listed.length === 0) {
+        this.fire(dedupe(direct));
+        return;
+      }
+      const diffs = await Promise.all(listed.map((dir) => this.relist(team, dir, before.get(dir))));
+      this.fire(dedupe([...direct, ...diffs.flat()]));
+      return;
+    }
+    if (frame.type === "resync") {
+      const team = this.teamById(frame.workspaceId);
+      if (team) await this.resync(team);
+      return;
+    }
+    if ((frame.type === "workspace-state" || frame.type === "subscribed") && frame.state === "running") {
+      const team = this.teamById(frame.workspaceId);
+      if (team) this.expectUp(team, { force: true });
+    }
+  }
+  /** Our own save coming back on the stream: dropped when the file still has our etag. */
+  async isOwnEcho(team, path5) {
+    const key = this.key(team, path5);
+    const own = this.ownWrites.get(key);
+    if (!own) return false;
+    if (this.now() - own.at > OWN_WRITE_MS) {
+      this.ownWrites.delete(key);
+      return false;
+    }
+    try {
+      const s = await this.call(team, () => this.deps.api.stat(team, path5, { background: true }));
+      return s.etag === own.etag;
+    } catch (err) {
+      this.reportAuth(err);
+      return false;
+    }
+  }
+  /**
+   * After any gap (changes were not seen): re-list every folder VS Code was shown and fire per
+   * child, and `changed` for every file whose bytes we hold (an open editor re-reads it). The cache
+   * is kept, not cleared: a team that is off right now still shows what it had (U23).
+   */
+  async resync(team) {
+    const id = team.workspace.id;
+    const prefix = `${id}:`;
+    for (const k of [...this.absent.keys()]) if (k.startsWith(prefix)) this.absent.delete(k);
+    const files = this.contents.keys().filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length));
+    const folders = this.listings.cachedFolders(id);
+    const before = new Map(folders.map((d) => [d, this.listings.staleFolder(id, d)]));
+    for (const f of files) this.listings.dropStat(id, f);
+    await this.relistAndFire(team, folders, files, before);
+  }
+  /** Sign-out or revocation: nothing cached survives. */
+  clear() {
+    this.generation += 1;
+    this.issues.clear();
+    this.down.clear();
+    this.probeUntil.clear();
+    this.absent.clear();
+    this.realNames.clear();
+    this.shownOf.clear();
+    this.suffixed.clear();
+    this.servedFrom.clear();
+    this.listings.clear();
+    this.contents.clear();
+    this.ownWrites.clear();
+    this.etags.clear();
+  }
+};
+function isAccountError(err) {
+  return err instanceof AccountGoneError || err instanceof NeedsSignInError || err instanceof SecretsBusyError || err instanceof SlotRenewedError || err instanceof RefreshNeedsRenewingError || err instanceof RefreshBusyError;
+}
+function isThrottled(err) {
+  return err instanceof FsApiError && err.status === 429;
+}
+function retryAfterMs(err) {
+  const s = err instanceof FsApiError ? err.details?.retryAfterSeconds : void 0;
+  const sec = typeof s === "number" && Number.isFinite(s) && s > 0 ? s : 1;
+  return Math.min(THROTTLE_WAIT_MAX_MS, Math.round(sec * 1e3));
+}
+function isSafePath(path5) {
+  return path5 === "" || !path5.split("/").some(isDotSegment);
+}
+function dedupe(changes) {
+  const seen = /* @__PURE__ */ new Set();
+  return changes.filter((c) => {
+    const k = `${c.team.workspace.id}:${c.type}:${c.path}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// src/fs/hq-fs-provider.ts
+var HQ_SCHEME = "hq";
+var MAX_REOPENS = 2;
+function relPathOf(uri) {
+  const parts = uri.path.split("/").filter((p) => p.length > 0);
+  const alias = parts.shift() ?? "";
+  return { alias, path: parts.join("/") };
+}
+function teamPathOf(team, path5) {
+  return path5 === "" ? `/${team.alias}` : `/${team.alias}/${path5}`;
+}
+function teamRootUri(ref, team) {
+  return teamFileUri(ref, team, "");
+}
+function teamFileUri(ref, team, path5) {
+  return vscode.Uri.from({
+    scheme: HQ_SCHEME,
+    authority: `${accountTag(ref.host, ref.userId)}@${team.org.slug}`,
+    path: teamPathOf(team, path5)
+  });
+}
+function untaggedFolderOpen(orgSlug, alias) {
+  return (vscode.workspace.workspaceFolders ?? []).some(
+    (f) => f.uri.scheme === HQ_SCHEME && f.uri.authority === orgSlug && (alias === void 0 || relPathOf(f.uri).alias === alias)
+  );
+}
+function uriFor(b, team, path5, isLegacyUser) {
+  const untagged = isLegacyUser && untaggedFolderOpen(team.org.slug, team.alias);
+  return vscode.Uri.from({
+    scheme: HQ_SCHEME,
+    authority: untagged ? team.org.slug : `${b.tag}@${team.org.slug}`,
+    path: teamPathOf(team, path5)
+  });
+}
+function rootsFor(b, team, isLegacyUser) {
+  const path5 = teamPathOf(team, "");
+  const tagged = vscode.Uri.from({
+    scheme: HQ_SCHEME,
+    authority: `${b.tag}@${team.org.slug}`,
+    path: path5
+  });
+  if (!isLegacyUser) return [tagged];
+  return [tagged, vscode.Uri.from({ scheme: HQ_SCHEME, authority: team.org.slug, path: path5 })];
+}
+function toType(t) {
+  if (t === "dir") return vscode.FileType.Directory;
+  if (t === "symlink") return vscode.FileType.SymbolicLink;
+  return vscode.FileType.File;
+}
+function toVsError(err, uri) {
+  if (err instanceof vscode.FileSystemError) return err;
+  if (!(err instanceof FsCoreError)) return err instanceof Error ? err : new Error(String(err));
+  switch (err.kind) {
+    case "not-found":
+      return vscode.FileSystemError.FileNotFound(uri);
+    case "exists":
+      return vscode.FileSystemError.FileExists(uri);
+    case "no-permissions":
+      return vscode.FileSystemError.NoPermissions(err.message);
+    case "not-a-dir":
+      return vscode.FileSystemError.FileNotADirectory(uri);
+    case "is-a-dir":
+      return vscode.FileSystemError.FileIsADirectory(uri);
+    case "too-large":
+      return vscode.FileSystemError.NoPermissions(err.message);
+    default:
+      return vscode.FileSystemError.Unavailable(err.message);
+  }
+}
+var HqFileSystemProvider = class {
+  constructor(deps) {
+    this.deps = deps;
+    for (const b of deps.accounts.list()) this.attach(b);
+    this.subscriptions.push(
+      deps.accounts.onAccountAdded((b) => {
+        this.attach(b);
+        this.armWaiting();
+      }),
+      deps.accounts.onAccountRemoved((ref) => this.disarm(accountTag(ref.host, ref.userId))),
+      // A listing arrived, or an account's health changed: a waiting watch may resolve now.
+      deps.accounts.onDidChange(() => {
+        this.armWaiting();
+        this.noteListedStates();
+      })
+    );
+    this.noteListedStates();
+  }
+  deps;
+  emitter = new vscode.EventEmitter();
+  onDidChangeFile = this.emitter.event;
+  pending = [];
+  flushTimer = null;
+  watches = /* @__PURE__ */ new Set();
+  attached = /* @__PURE__ */ new WeakSet();
+  /**
+   * Review W1: URIs this provider answered Unavailable, per account tag, until a read of them
+   * succeeds. Only those tabs are ever re-opened when their account comes back.
+   */
+  refused = /* @__PURE__ */ new Map();
+  reachableEmitter = new vscode.EventEmitter();
+  /**
+   * A team with URIs this provider refused answered again (live re-test #2: a tab refused while its
+   * team was asleep): the account's views may be revived now. Fires with the account's tag.
+   */
+  onRefusedReachable = this.reachableEmitter.event;
+  teamUpEmitter = new vscode.EventEmitter();
+  /** A team that refused because it was off (or updating) serves again (its notice may close). */
+  onTeamUp = this.teamUpEmitter.event;
+  /** `tag:workspaceId` → the state the account's listing last gave the team. */
+  listedState = /* @__PURE__ */ new Map();
+  reachableCheck = /* @__PURE__ */ new Set();
+  /** `tag:workspaceId` whose answer was a team-up (already signalled): no second signal for it. */
+  upSignalled = /* @__PURE__ */ new Set();
+  /** Review N3: revive reopens per refused URI in this episode (2 at most, then left alone). */
+  reopens = /* @__PURE__ */ new Map();
+  subscriptions = [];
+  /**
+   * ALSO-2 (live re-test, round 3): a team the listing now gives as running (or starting) that was
+   * listed otherwise before: its core asks it again if it refused, since VS Code never re-reads a
+   * failed root or tab by itself (a folder added while the team had no machine stayed empty).
+   */
+  noteListedStates() {
+    for (const b of this.deps.accounts.list()) {
+      for (const team of b.service.teams()) {
+        const key = `${b.tag}:${team.workspace.id}`;
+        const prior = this.listedState.get(key);
+        const now = team.workspace.state;
+        this.listedState.set(key, now);
+        if (prior !== void 0 && prior !== now && (now === "running" || now === "starting")) {
+          b.core.expectUp(team, { force: true });
+        }
+      }
+    }
+  }
+  /** Each account's changes, under its own tag (and the bare form for the 0.1.x user). */
+  attach(b) {
+    if (this.attached.has(b)) return;
+    this.attached.add(b);
+    b.core.onDidChange((changes) => this.queue(b, changes));
+    b.core.onTeamAnswered((team) => this.teamAnswered(b, team));
+    b.core.onTeamUp((team) => this.teamUp(b, team));
+  }
+  /**
+   * The team serves again after refusing (live re-test #2, round 3): the reopens spent while it was
+   * off or still booting do not count, and the account's views are revived (the failed tabs, and
+   * the Explorer, whose failed root VS Code does not re-read by itself).
+   */
+  teamUp(b, team) {
+    for (const u of this.refused.get(b.tag) ?? []) {
+      if (this.underTeam(b.tag, team, u)) this.reopens.delete(u);
+    }
+    const key = `${b.tag}:${team.workspace.id}`;
+    this.upSignalled.add(key);
+    setTimeout(() => this.upSignalled.delete(key), 0);
+    this.teamUpEmitter.fire({ tag: b.tag, workspaceId: team.workspace.id });
+    this.reachableEmitter.fire(b.tag);
+  }
+  /** Is this URI in this team's folder (either authority form)? */
+  underTeam(tag, team, u) {
+    return [`${tag}@${team.org.slug}`, team.org.slug].map((a) => `${HQ_SCHEME}://${a}/${team.alias}`).some((r) => u === r || u.startsWith(`${r}/`));
+  }
+  /** The account a URI names (present, or only remembered), or null. */
+  tagOf(uri) {
+    const r = this.deps.accounts.resolveAuthority(uri.authority);
+    return r.kind === "ok" ? r.bundle.tag : r.tag;
+  }
+  refuse(err, uri) {
+    const tag = err.code === "Unavailable" ? this.tagOf(uri) : null;
+    if (tag) {
+      const set = this.refused.get(tag) ?? /* @__PURE__ */ new Set();
+      set.add(uri.toString());
+      this.refused.set(tag, set);
+    }
+    return err;
+  }
+  served(uri) {
+    for (const set of this.refused.values()) set.delete(uri.toString());
+    this.reopens.delete(uri.toString());
+  }
+  /** Still worth reopening: refused, and fewer than 2 revive attempts this episode. */
+  eligible(u) {
+    return (this.reopens.get(u) ?? 0) < MAX_REOPENS;
+  }
+  /** A revive reopened this URI (counted whatever the read then answers). */
+  noteReopened(uri) {
+    const u = uri.toString();
+    this.reopens.set(u, (this.reopens.get(u) ?? 0) + 1);
+  }
+  /** A new episode (the account became usable): its refused URIs may be tried again. */
+  resetReopens(tag) {
+    for (const u of this.refused.get(tag) ?? []) this.reopens.delete(u);
+  }
+  /** Does this account have refused URIs under this team (either authority form)? */
+  refusedUnder(tag, team) {
+    const set = this.refused.get(tag);
+    if (!set || set.size === 0) return false;
+    return [...set].some((u) => this.eligible(u) && this.underTeam(tag, team, u));
+  }
+  /** Checked a tick later, so the read that just served (and cleared) its own URI is not news. */
+  teamAnswered(b, team) {
+    const key = `${b.tag}:${team.workspace.id}`;
+    if (this.reachableCheck.has(key)) return;
+    this.reachableCheck.add(key);
+    setTimeout(() => {
+      this.reachableCheck.delete(key);
+      if (this.upSignalled.delete(key)) return;
+      if (this.refusedUnder(b.tag, team)) this.reachableEmitter.fire(b.tag);
+    }, 0);
+  }
+  /** Does this account have any refused URI left? */
+  hasRefused(tag) {
+    return [...this.refused.get(tag) ?? []].some((u) => this.eligible(u));
+  }
+  /** Was this URI refused (Unavailable) with no successful read since? */
+  isRefused(uri) {
+    const tag = this.tagOf(uri);
+    const u = uri.toString();
+    return tag !== null && (this.refused.get(tag)?.has(u) ?? false) && this.eligible(u);
+  }
+  /** Coalesce 100 ms into one `FileChangeEvent[]` (FEATURE §7a). */
+  queue(b, changes) {
+    const legacy = this.deps.accounts.isLegacyUser(b);
+    for (const c of changes) {
+      const type = c.type === "deleted" ? vscode.FileChangeType.Deleted : c.type === "created" ? vscode.FileChangeType.Created : vscode.FileChangeType.Changed;
+      const path5 = teamPathOf(c.team, c.path);
+      const authorities = [`${b.tag}@${c.team.org.slug}`];
+      if (legacy && untaggedFolderOpen(c.team.org.slug)) authorities.push(c.team.org.slug);
+      for (const authority of authorities) {
+        this.pending.push({ type, uri: vscode.Uri.from({ scheme: HQ_SCHEME, authority, path: path5 }) });
+      }
+    }
+    this.scheduleFlush();
+  }
+  scheduleFlush() {
+    if (this.flushTimer !== null) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      const batch = this.pending;
+      this.pending = [];
+      if (batch.length > 0) this.emitter.fire(batch);
+    }, 100);
+  }
+  /** The account and team a URI names, or Unavailable (zero requests, one notice). */
+  resolve(uri) {
+    const r = this.deps.accounts.resolveAuthority(uri.authority);
+    if (r.kind === "gone") {
+      this.deps.onUnavailable(r);
+      throw vscode.FileSystemError.Unavailable(
+        r.email ? COPY.fsAccountGone(r.email) : COPY.fsAccountUnknown
+      );
+    }
+    const { alias, path: path5 } = relPathOf(uri);
+    return { bundle: r.bundle, team: r.bundle.core.team(r.orgSlug, alias), path: path5 };
+  }
+  /** Arm `w` on its account's core when that account and team resolve; quietly wait otherwise. */
+  arm(w) {
+    if (w.sub) return;
+    const r = this.deps.accounts.resolveAuthority(w.uri.authority);
+    if (r.kind !== "ok") return;
+    let team;
+    try {
+      team = r.bundle.core.team(r.orgSlug, relPathOf(w.uri).alias);
+    } catch {
+      return;
+    }
+    w.sub = r.bundle.core.watch(team);
+    w.tag = r.bundle.tag;
+    if (w.waited) {
+      w.waited = false;
+      this.pending.push({ type: vscode.FileChangeType.Changed, uri: w.uri });
+      this.scheduleFlush();
+    }
+  }
+  armWaiting() {
+    for (const w of this.watches) if (!w.sub) this.arm(w);
+  }
+  /** The account went: its watches wait for it again. */
+  disarm(tag) {
+    for (const w of this.watches) {
+      if (w.tag !== tag) continue;
+      w.sub?.dispose();
+      w.sub = null;
+      w.tag = null;
+      w.waited = true;
+    }
+  }
+  watch(uri) {
+    const w = { uri, tag: null, sub: null, waited: false };
+    this.watches.add(w);
+    this.arm(w);
+    if (!w.sub) w.waited = true;
+    return new vscode.Disposable(() => {
+      w.sub?.dispose();
+      w.sub = null;
+      this.watches.delete(w);
+    });
+  }
+  /** Deferred watches waiting for an account (test seam and diagnostics). */
+  waitingWatches() {
+    return [...this.watches].filter((w) => !w.sub).length;
+  }
+  async stat(uri) {
+    try {
+      const { bundle, team, path: path5 } = this.resolve(uri);
+      const s = await bundle.core.stat(team, path5);
+      return {
+        type: toType(s.type),
+        ctime: s.mtimeMs,
+        mtime: s.mtimeMs,
+        size: s.size,
+        ...s.readonly ? { permissions: vscode.FilePermission.Readonly } : {}
+      };
+    } catch (err) {
+      throw this.refuse(toVsError(err, uri), uri);
+    }
+  }
+  async readDirectory(uri) {
+    try {
+      const { bundle, team, path: path5 } = this.resolve(uri);
+      const entries = (await bundle.core.readDirectory(team, path5)).map(
+        ([n, t]) => [n, toType(t)]
+      );
+      this.served(uri);
+      return entries;
+    } catch (err) {
+      throw this.refuse(toVsError(err, uri), uri);
+    }
+  }
+  async readFile(uri) {
+    try {
+      const { bundle, team, path: path5 } = this.resolve(uri);
+      const bytes = await bundle.core.readFile(team, path5);
+      this.served(uri);
+      return bytes;
+    } catch (err) {
+      throw this.refuse(toVsError(err, uri), uri);
+    }
+  }
+  async writeFile(uri, content, options) {
+    try {
+      const { bundle, team, path: path5 } = this.resolve(uri);
+      await bundle.core.writeFile(team, path5, content, options);
+    } catch (err) {
+      throw this.refuse(toVsError(err, uri), uri);
+    }
+  }
+  async createDirectory(uri) {
+    try {
+      const { bundle, team, path: path5 } = this.resolve(uri);
+      await bundle.core.createDirectory(team, path5);
+    } catch (err) {
+      throw this.refuse(toVsError(err, uri), uri);
+    }
+  }
+  async delete(uri, options) {
+    try {
+      const { bundle, team, path: path5 } = this.resolve(uri);
+      await bundle.core.delete(team, path5, options.recursive);
+    } catch (err) {
+      throw this.refuse(toVsError(err, uri), uri);
+    }
+  }
+  async rename(oldUri, newUri, options) {
+    try {
+      const from = this.resolve(oldUri);
+      const to = this.resolve(newUri);
+      if (from.bundle !== to.bundle || from.team.workspace.id !== to.team.workspace.id) {
+        throw new FsCoreError("no-permissions", COPY.fsViewOnly);
+      }
+      await from.bundle.core.rename(from.team, from.path, to.path, options.overwrite);
+    } catch (err) {
+      throw this.refuse(toVsError(err, oldUri), oldUri);
+    }
+  }
+  dispose() {
+    if (this.flushTimer !== null) clearTimeout(this.flushTimer);
+    for (const w of this.watches) w.sub?.dispose();
+    this.watches.clear();
+    for (const s of this.subscriptions) s.dispose();
+    this.emitter.dispose();
+    this.reachableEmitter.dispose();
+    this.teamUpEmitter.dispose();
+  }
+};
+function teamFolderName(team, label) {
+  return COPY.teamFolderName(
+    cleanLabel(team.workspace.name) || team.alias,
+    cleanLabel(team.org.name) || team.org.slug,
+    label
+  );
+}
+
+// src/accounts-ui.ts
+function switcherItems(accounts) {
+  const active = accounts.active();
+  const rest = accounts.list().filter((b) => b !== active);
+  const rows = (active ? [active, ...rest] : rest).map(
+    (b) => ({
+      label: `$(account) ${cleanLabel(b.email)}`,
+      ...b === active ? { description: COPY.accountActiveNote } : {},
+      ref: b.ref,
+      buttons: [{ iconPath: new vscode2.ThemeIcon("sign-out"), tooltip: COPY.signOut }]
+    })
+  );
+  return [
+    ...rows,
+    { label: "", kind: vscode2.QuickPickItemKind.Separator },
+    { label: `$(add) ${COPY.addAnotherAccount}`, add: true }
+  ];
+}
+function showSwitcher(accounts, opts) {
+  return new Promise((resolve) => {
+    const qp = vscode2.window.createQuickPick();
+    qp.items = switcherItems(accounts);
+    qp.placeholder = opts.title;
+    qp.title = opts.title;
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+      qp.dispose();
+    };
+    qp.onDidTriggerItemButton((e) => {
+      if (!e.item.ref) return;
+      done(void 0);
+      opts.onSignOut(e.item.ref);
+    });
+    qp.onDidAccept(() => {
+      const item = qp.selectedItems[0];
+      done(item?.add ? "add" : item?.ref);
+    });
+    qp.onDidHide(() => done(void 0));
+    qp.show();
+  });
+}
+async function requireAccount(c, fromNode) {
+  if (fromNode) {
+    const b = c.accounts.get(fromNode);
+    if (!b) c.onAccountMissing?.(fromNode);
+    return b;
+  }
+  const active = c.accounts.active();
+  if (active) return active;
+  const choice = await showSwitcher(c.accounts, {
+    title: COPY.pickAccountForCommand,
+    onSignOut: (ref) => void c.accounts.signOut(ref, { confirm: true })
+  });
+  if (choice === void 0) return null;
+  if (choice === "add") {
+    const r = await c.accounts.signIn({ kind: "add" });
+    return r.ref ? c.accounts.get(r.ref) : null;
+  }
+  await c.accounts.setActive(choice);
+  return c.accounts.get(choice);
+}
+async function switchAccount(c, ref) {
+  if (ref) {
+    await c.accounts.setActive(ref);
+    return;
+  }
+  const choice = await showSwitcher(c.accounts, {
+    title: COPY.pickAccount,
+    onSignOut: (r) => void c.accounts.signOut(r, { confirm: true })
+  });
+  if (choice === "add") await c.accounts.signIn({ kind: "add" });
+  else if (choice) await c.accounts.setActive(choice);
+}
+async function primaryAction(c) {
+  if (c.accounts.list().length <= 1) {
+    await vscode2.commands.executeCommand("workbench.view.extension.hq");
+    return;
+  }
+  await switchAccount(c);
+}
+async function signOutAccount(c, ref) {
+  let target = ref;
+  if (!target) {
+    const all = c.accounts.list();
+    if (all.length === 1) target = all[0].ref;
+    else {
+      const picked = await vscode2.window.showQuickPick(
+        all.map((b) => ({ label: cleanLabel(b.email), ref: b.ref })),
+        { placeHolder: COPY.pickAccount }
+      );
+      target = picked?.ref;
+    }
+  }
+  if (target) await c.accounts.signOut(target, { confirm: true });
+}
+function wantedFolderName(n, uri) {
+  if (uri.scheme !== HQ_SCHEME) return null;
+  const r = n.accounts.resolveAuthority(uri.authority);
+  if (r.kind !== "ok") return null;
+  let team;
+  try {
+    team = r.bundle.core.team(r.orgSlug, relPathOf(uri).alias);
+  } catch {
+    return null;
+  }
+  if (relPathOf(uri).path !== "") return null;
+  return teamFolderName(team, n.accounts.shortLabel(r.bundle.ref));
+}
+function namesWeGive(n, uri) {
+  const r = n.accounts.resolveAuthority(uri.authority);
+  if (r.kind !== "ok") return [];
+  try {
+    const team = r.bundle.core.team(r.orgSlug, relPathOf(uri).alias);
+    const email = r.bundle.email;
+    const labels = /* @__PURE__ */ new Set([void 0, email, shortAccountLabel(email, [])]);
+    return [...labels].map((l) => teamFolderName(team, l));
+  } catch {
+    return [];
+  }
+}
+async function renameHqFolders(n) {
+  if (vscode2.workspace.workspaceFile === void 0) return 0;
+  let renamed = 0;
+  const folders = [...vscode2.workspace.workspaceFolders ?? []];
+  for (const f of folders) {
+    const want = wantedFolderName(n, f.uri);
+    if (want === null || want === f.name) continue;
+    if (!namesWeGive(n, f.uri).includes(f.name)) continue;
+    const landed = new Promise((resolve) => {
+      const sub = vscode2.workspace.onDidChangeWorkspaceFolders(() => {
+        sub.dispose();
+        resolve();
+      });
+      setTimeout(() => {
+        sub.dispose();
+        resolve();
+      }, 2e3);
+    });
+    if (vscode2.workspace.updateWorkspaceFolders(f.index, 1, { uri: f.uri, name: want })) {
+      renamed += 1;
+      await landed;
+    }
+  }
+  return renamed;
+}
+function openFolderOf(b, team, isLegacyUser) {
+  return (vscode2.workspace.workspaceFolders ?? []).find((f) => {
+    if (f.uri.scheme !== HQ_SCHEME || relPathOf(f.uri).alias !== team.alias) return false;
+    if (relPathOf(f.uri).path !== "") return false;
+    return f.uri.authority === `${b.tag}@${team.org.slug}` || isLegacyUser && f.uri.authority === team.org.slug;
+  });
+}
+
+// src/auth/auth-provider.ts
+var vscode3 = __toESM(require("vscode"), 1);
+var AUTH_PROVIDER_ID = "aiworkforceone-hq";
+var AUTH_PROVIDER_LABEL = "AI Workforce One HQ";
+var SESSION_SENTINEL = "hq-session";
+var sessionOf = (b) => ({
+  id: b.tag,
+  accessToken: SESSION_SENTINEL,
+  account: { id: b.account.user.id, label: b.account.user.email },
+  scopes: []
+});
+var HqAuthenticationProvider = class {
+  constructor(accounts) {
+    this.accounts = accounts;
+    this.last = this.current();
+    this.subscription = accounts.onDidChange(() => {
+      const next = this.current();
+      const before = this.last;
+      this.last = next;
+      const added = [...next.values()].filter((s) => !before.has(s.session.id));
+      const removed = [...before.values()].filter((s) => !next.has(s.session.id));
+      const changed = [...next.values()].filter((s) => {
+        const was = before.get(s.session.id);
+        return was !== void 0 && (was.session.account.label !== s.session.account.label || was.grantId !== s.grantId);
+      });
+      if (added.length + removed.length + changed.length === 0) return;
+      this.changed.fire({
+        added: added.map((s) => s.session),
+        removed: removed.map((s) => s.session),
+        changed: changed.map((s) => s.session)
+      });
+    });
+  }
+  accounts;
+  changed = new vscode3.EventEmitter();
+  onDidChangeSessions = this.changed.event;
+  last;
+  subscription;
+  current() {
+    return new Map(
+      this.accounts.list().map((b) => [b.tag, { session: sessionOf(b), grantId: b.account.grantId }])
+    );
+  }
+  async getSessions(_scopes, options) {
+    const want = options?.account;
+    const all = this.accounts.list();
+    return (want ? all.filter((b) => b.account.user.id === want.id) : all).map(sessionOf);
+  }
+  async createSession(_scopes, options) {
+    const want = options?.account;
+    const held = want ? this.accounts.list().find((b2) => b2.account.user.id === want.id) : void 0;
+    if (held) return sessionOf(held);
+    const host = this.accounts.host();
+    const intent = want && host ? { kind: "as", tag: accountTag(host, want.id), expectedUserId: want.id } : this.accounts.list().length === 0 ? { kind: "first" } : { kind: "add" };
+    const result = await this.accounts.signIn(intent);
+    const b = result.ref && host ? this.accounts.byTag(accountTag(host, result.ref.userId)) : null;
+    if (!b) throw new Error("Sign-in did not finish.");
+    return sessionOf(b);
+  }
+  /** Sign out of ONLY that account. VS Code's Accounts menu has already asked (P0 check 4). */
+  async removeSession(sessionId) {
+    const all = this.accounts.list();
+    const b = all.find((x) => x.tag === sessionId) ?? all.find((x) => x.account.grantId === sessionId) ?? all.find((x) => x.account.user.id === sessionId);
+    if (b) await this.accounts.signOut(b.ref, { confirm: false });
+  }
+  dispose() {
+    this.subscription.dispose();
+    this.changed.dispose();
+  }
+};
+
+// src/auth/keyring.ts
+var import_node_fs3 = require("node:fs");
+var import_node_os = __toESM(require("node:os"), 1);
+var import_node_path2 = __toESM(require("node:path"), 1);
+var KEYRING_WARNED_KEY = "hq:keyringWarned";
+function keyringLikelyMissing(input) {
+  if (input.platform !== "linux") return false;
+  if (!input.env.DBUS_SESSION_BUS_ADDRESS?.trim()) return true;
+  return input.argvJson !== null && /"password-store"\s*:\s*"basic"/.test(input.argvJson);
+}
+function argvJsonDir(appName) {
+  if (/cursor/i.test(appName)) return ".cursor";
+  if (/vscodium/i.test(appName)) return ".vscode-oss";
+  if (/windsurf/i.test(appName)) return ".windsurf";
+  if (/visual studio code/i.test(appName)) return ".vscode";
+  return null;
+}
+function keyringMissingHere(appName) {
+  const dir = argvJsonDir(appName);
+  let argvJson = null;
+  if (dir !== null && process.platform === "linux") {
+    try {
+      argvJson = (0, import_node_fs3.readFileSync)(import_node_path2.default.join(import_node_os.default.homedir(), dir, "argv.json"), "utf8");
+    } catch {
+      argvJson = null;
+    }
+  }
+  return keyringLikelyMissing({ platform: process.platform, env: process.env, argvJson });
+}
+async function warnIfKeyringMissing(deps) {
+  if (deps.memento.get(KEYRING_WARNED_KEY) === true) return;
+  if (!deps.missing()) return;
+  await deps.memento.update(KEYRING_WARNED_KEY, true);
+  deps.warn(COPY.keyringMissing);
+}
+
+// src/account-notices.ts
+var vscode4 = __toESM(require("vscode"), 1);
+function uriArg(value) {
+  return encodeURIComponent(JSON.stringify(value)).replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+var AccountNotices = class {
+  /** tag → ends that account's notice. */
+  open = /* @__PURE__ */ new Map();
+  unknownSaid = /* @__PURE__ */ new Set();
+  /** Accounts whose notice the person dismissed (review N1): not shown again until usable/removed. */
+  dismissed = /* @__PURE__ */ new Set();
+  say(info) {
+    if (!info.email || !info.tag || !info.userId) {
+      if (this.unknownSaid.has(info.key)) return;
+      this.unknownSaid.add(info.key);
+      void vscode4.window.showWarningMessage(COPY.fsAccountUnknown);
+      return;
+    }
+    const tag = info.tag;
+    if (this.open.has(tag) || this.dismissed.has(tag)) return;
+    const text = notificationText(COPY.fsAccountGone(info.email));
+    const label = notificationText(COPY.signInAsAction(info.email));
+    const title = `${text} [${label}](command:hq.signInAs?${uriArg([tag, info.userId])})`;
+    let end = () => void 0;
+    const ended = new Promise((r) => end = r);
+    this.open.set(tag, end);
+    void Promise.resolve(
+      vscode4.window.withProgress(
+        { location: vscode4.ProgressLocation.Notification, title, cancellable: true },
+        (_progress, token) => {
+          token.onCancellationRequested(() => {
+            this.dismissed.add(tag);
+            end();
+          });
+          return ended;
+        }
+      )
+    ).then(() => {
+      if (this.open.get(tag) === end) this.open.delete(tag);
+    });
+  }
+  /** The account is usable now: its notice goes, and a dismissal of it is forgotten. */
+  closeFor(tag) {
+    this.dismissed.delete(tag);
+    this.open.get(tag)?.();
+  }
+  /** The account was removed: a later notice for it may show again. */
+  forget(tag) {
+    this.dismissed.delete(tag);
+  }
+  dispose() {
+    for (const end of this.open.values()) end();
+    this.open.clear();
+  }
+};
+
+// src/team-off-notices.ts
+var vscode5 = __toESM(require("vscode"), 1);
+function uriArg2(value) {
+  return encodeURIComponent(JSON.stringify(value)).replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+var TeamOffNotices = class {
+  /** `tag:workspaceId` → ends that team's notice. */
+  open = /* @__PURE__ */ new Map();
+  /** Teams whose notice the person dismissed: not shown again until the team runs. */
+  dismissed = /* @__PURE__ */ new Set();
+  say(tag, workspaceId, name, action) {
+    const key = `${tag}:${workspaceId}`;
+    if (this.open.has(key) || this.dismissed.has(key)) return;
+    const text = notificationText(action === "open" ? COPY.fsOffOpen(name) : COPY.fsOffSave(name));
+    const title = `${text} [${COPY.wakeTeam}](command:hq.wakeTeamOf?${uriArg2([tag, workspaceId])})`;
+    let end = () => void 0;
+    const ended = new Promise((r) => end = r);
+    this.open.set(key, end);
+    void Promise.resolve(
+      vscode5.window.withProgress(
+        { location: vscode5.ProgressLocation.Notification, title, cancellable: true },
+        (_progress, token) => {
+          token.onCancellationRequested(() => {
+            this.dismissed.add(key);
+            end();
+          });
+          return ended;
+        }
+      )
+    ).then(() => {
+      if (this.open.get(key) === end) this.open.delete(key);
+    });
+  }
+  /** The team serves files again: its notice goes, and a dismissal of it is forgotten. */
+  closeFor(tag, workspaceId) {
+    const key = `${tag}:${workspaceId}`;
+    this.dismissed.delete(key);
+    this.open.get(key)?.();
+  }
+  /** The account was removed: all of its teams' notices go. */
+  forgetAccount(tag) {
+    for (const key of [...this.dismissed])
+      if (key.startsWith(`${tag}:`)) this.dismissed.delete(key);
+    for (const [key, end] of this.open) if (key.startsWith(`${tag}:`)) end();
+  }
+  dispose() {
+    for (const end of this.open.values()) end();
+    this.open.clear();
+  }
+};
+
+// src/log.ts
+var import_node_os2 = __toESM(require("node:os"), 1);
+var silentLog = {
+  info: () => void 0,
+  warn: () => void 0,
+  error: () => void 0
+};
+var TOKEN = /\bhq[arsc]_[A-Za-z0-9_-]+/g;
+var KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+var KEY_BODY = /b3BlbnNzaC1rZXktdjE[A-Za-z0-9+/=]*/g;
+var BEARER = /\b(Bearer)\s+\S+/gi;
+var USER_CODE = /\b[A-Z]{4}-[A-Z]{4}\b/g;
+var NONCE = /\bn_[A-Za-z0-9_-]{20,}/g;
+var EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+var OPAQUE = /[A-Za-z0-9_+/=-]{32,}/g;
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function redact(line) {
+  const home = import_node_os2.default.homedir();
+  const homed = home.length > 1 ? line.replace(new RegExp(escapeRe(home), "g"), "~") : line;
+  return homed.replace(KEY_BLOCK, "[key]").replace(KEY_BODY, "[key]").replace(TOKEN, "[token]").replace(BEARER, "$1 [token]").replace(USER_CODE, "[code]").replace(NONCE, "[nonce]").replace(EMAIL, "[email]").replace(OPAQUE, "[redacted]");
+}
+function redactingLog(sink) {
+  return {
+    info: (m) => sink.info(redact(m)),
+    warn: (m) => sink.warn(redact(m)),
+    error: (m) => sink.error(redact(m))
+  };
+}
+function errText(err) {
+  if (err instanceof Error) return `${err.name}: ${err.message}`;
+  return String(err);
+}
+
+// src/fs/hq-fs-issues.ts
+var vscode6 = __toESM(require("vscode"), 1);
+
+// src/tree/labels.ts
+function teamState(ws) {
+  if (ws.state === "running") return "running";
+  if (ws.state === "starting") return "starting";
+  return "off";
+}
+function canWriteTeam(team) {
+  return team.workspace.rights.forward === true;
+}
+function needsUpdate(team) {
+  return team.workspace.supported === false || team.workspace.filesSupported === false;
+}
+function teamDescription(team) {
+  const parts = [];
+  const state = teamState(team.workspace);
+  parts.push(
+    state === "running" ? COPY.stateRunning : state === "starting" ? COPY.stateStarting : COPY.stateOff
+  );
+  if (needsUpdate(team)) parts.push(COPY.updateNeeded);
+  if (!canWriteTeam(team)) parts.push(COPY.viewOnly);
+  return parts.join(" \xB7 ");
+}
+function teamContextValue(team) {
+  return `team:${teamState(team.workspace)}:${canWriteTeam(team) ? "write" : "read"}`;
+}
+function sessionLabel(s) {
+  return cleanLabel(s.name) || s.id.slice(0, 8);
+}
+function sessionDescription(s) {
+  const parts = [s.ownerIsMe === true ? COPY.you : cleanLabel(s.ownerName)];
+  if (!s.canType) parts.push(COPY.viewOnly);
+  if (s.engine === "codex") parts.push(COPY.codex);
+  return parts.filter((p) => p.length > 0).join(" \xB7 ");
+}
+function sessionContextValue(s) {
+  return `session:${s.canType ? "type" : "view"}`;
+}
+function webUrl(host, target) {
+  return target.sessionId ? `${host}/sessions/${encodeURIComponent(target.sessionId)}` : `${host}/workspaces/${encodeURIComponent(target.workspaceId)}`;
+}
+function teamSettingsUrl(host, workspaceId) {
+  return `${host}/workspaces/${encodeURIComponent(workspaceId)}/settings`;
+}
+
+// src/fs/hq-fs-issues.ts
+var HqTeamIssues = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  deps;
+  emitter = new vscode6.EventEmitter();
+  onDidChangeFileDecorations = this.emitter.event;
+  /** `<tag>:<workspaceId>` → the issue, and the roots it was put on. */
+  byTeam = /* @__PURE__ */ new Map();
+  rootsWithIssue() {
+    const out = /* @__PURE__ */ new Map();
+    for (const v of this.byTeam.values()) {
+      for (const r of v.roots) out.set(r.toString(), { team: v.team, issue: v.issue });
+    }
+    return out;
+  }
+  /** fs-core's `teamIssue` for ONE account: the team's issue changed (null = it serves files again). */
+  onIssue(tag, rootsOf, team, issue) {
+    const key = `${tag}:${team.workspace.id}`;
+    const roots = issue ? rootsOf(team) : this.byTeam.get(key)?.roots ?? rootsOf(team);
+    if (issue) this.byTeam.set(key, { team, issue, roots });
+    else this.byTeam.delete(key);
+    this.emitter.fire(roots);
+    if (!issue) return;
+    const name = cleanLabel(team.workspace.name) || team.alias;
+    if (issue.kind === "needs-update") {
+      void Promise.resolve(
+        vscode6.window.showWarningMessage(COPY.updateNeededLong(name), COPY.openTeamSettings)
+      ).then((choice) => {
+        if (choice === COPY.openTeamSettings) this.openSettings(team);
+      });
+      return;
+    }
+    void vscode6.window.showInformationMessage(COPY.fsUpdating(name, issue.etaSeconds));
+  }
+  openSettings(team) {
+    const host = this.deps.host();
+    if (!host) return;
+    void vscode6.env.openExternal(vscode6.Uri.parse(teamSettingsUrl(host, team.workspace.id)));
+  }
+  /** Only a team ROOT carries the reason; files below it keep VS Code's own decorations. */
+  provideFileDecoration(uri) {
+    const hit = this.rootsWithIssue().get(uri.toString());
+    if (!hit) return void 0;
+    const name = cleanLabel(hit.team.workspace.name) || hit.team.alias;
+    const { issue } = hit;
+    return issue.kind === "needs-update" ? new vscode6.FileDecoration(
+      "\u2191",
+      COPY.updateNeededLong(name),
+      new vscode6.ThemeColor("list.warningForeground")
+    ) : new vscode6.FileDecoration(
+      "\u2026",
+      COPY.fsUpdating(name, issue.etaSeconds),
+      new vscode6.ThemeColor("list.warningForeground")
+    );
+  }
+  /** An account signed out or revoked (or, with no tag, every one): its folders lose their reason. */
+  clear(tag) {
+    const uris = [];
+    for (const [k, v] of [...this.byTeam]) {
+      if (tag !== void 0 && !k.startsWith(`${tag}:`)) continue;
+      uris.push(...v.roots);
+      this.byTeam.delete(k);
+    }
+    if (uris.length > 0) this.emitter.fire(uris);
+  }
+  dispose() {
+    this.byTeam.clear();
+    this.emitter.dispose();
+  }
+};
+var UnopenableNames = class {
+  constructor(resolveCore) {
+    this.resolveCore = resolveCore;
+  }
+  resolveCore;
+  provideFileDecoration(uri) {
+    if (uri.scheme !== HQ_SCHEME) return void 0;
+    const { alias, path: path5 } = relPathOf(uri);
+    if (path5 === "") return void 0;
+    const owner = this.resolveCore(uri.authority);
+    if (!owner) return void 0;
+    let team;
+    try {
+      team = owner.core.team(owner.orgSlug, alias);
+    } catch {
+      return void 0;
+    }
+    if (!owner.core.isUnopenable(team, path5)) return void 0;
+    return new vscode6.FileDecoration(
+      "\u2298",
+      COPY.fsControlName,
+      new vscode6.ThemeColor("disabledForeground")
+    );
+  }
+};
+
+// src/fs/hq-fs-revive.ts
+var vscode7 = __toESM(require("vscode"), 1);
+async function reviveAccountViews(t) {
+  const explorer = (vscode7.workspace.workspaceFolders ?? []).some((f) => t.belongs(f.uri));
+  if (explorer) {
+    await Promise.resolve(
+      vscode7.commands.executeCommand("workbench.files.action.refreshFilesExplorer")
+    ).catch(() => void 0);
+  }
+  const loaded = new Set(vscode7.workspace.textDocuments.map((d) => d.uri.toString()));
+  let reopened = 0;
+  for (const group of vscode7.window.tabGroups.all) {
+    for (const tab of [...group.tabs]) {
+      if (!(tab.input instanceof vscode7.TabInputText)) continue;
+      const uri = tab.input.uri;
+      if (tab.isDirty || loaded.has(uri.toString()) || !t.belongs(uri) || !t.refused(uri)) {
+        continue;
+      }
+      const focus = group.isActive && tab.isActive;
+      t.reopened?.(uri);
+      try {
+        await vscode7.window.tabGroups.close(tab, true);
+        await vscode7.commands.executeCommand("vscode.open", uri, {
+          viewColumn: group.viewColumn,
+          preview: tab.isPreview,
+          preserveFocus: !focus
+        });
+        if (focus && tab.isPinned) {
+          await vscode7.commands.executeCommand("workbench.action.pinEditor");
+        }
+        reopened += 1;
+      } catch {
+      }
+    }
+  }
+  return { explorer, reopened };
+}
+var ReviveGate = class {
+  constructor(windowMs = 3e4, now = Date.now) {
+    this.windowMs = windowMs;
+    this.now = now;
+  }
+  windowMs;
+  now;
+  /** When the account's last revive ran, or is planned to run. */
+  last = /* @__PURE__ */ new Map();
+  /** How long to wait before reviving `tag`; null when a revive is already planned. */
+  schedule(tag) {
+    const now = this.now();
+    const last = this.last.get(tag);
+    if (last !== void 0 && last >= now) return null;
+    const at = last === void 0 ? now : Math.max(now, last + this.windowMs);
+    this.last.set(tag, at);
+    return at - now;
+  }
+};
+
+// src/fs/events-client.ts
+var import_ws2 = __toESM(require_ws(), 1);
 
 // ../hq-client/src/tunnel-client.ts
 var import_ws = __toESM(require_ws(), 1);
 var REMOTE_TUNNEL_WS_PATH = "/ws/remote/tunnel";
 var REMOTE_TERMINAL_WS_PATH = "/ws/remote/terminal";
-function wsUrl(host, path4) {
-  return `${host.replace(/^http/, "ws")}${path4}`;
+function wsUrl(host, path5) {
+  return `${host.replace(/^http/, "ws")}${path5}`;
 }
 var TunnelRefusedError = class extends Error {
   constructor(status, message) {
@@ -10559,7 +12743,1959 @@ function pipeTunnel(ws, input, output, highWater = 1 << 20) {
   });
 }
 
+// src/fs/events-client.ts
+var LIVE_STATES = /* @__PURE__ */ new Set([
+  "running",
+  "starting",
+  "asleep",
+  "stopped"
+]);
+var CHANGE_KINDS = /* @__PURE__ */ new Set(["created", "changed", "deleted"]);
+var ERROR_CODES = /* @__PURE__ */ new Set([
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "TOO_MANY_SUBSCRIPTIONS",
+  "BAD_FRAME",
+  "THROTTLED"
+]);
+function isRecord(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function parseEventsFrame(v) {
+  if (!isRecord(v) || typeof v.type !== "string") return null;
+  const ws = v.workspaceId;
+  const hasWs = typeof ws === "string" && ws.length > 0;
+  const state = (s) => typeof s === "string" && LIVE_STATES.has(s);
+  switch (v.type) {
+    case "fs-changed":
+      if (!hasWs || typeof v.seq !== "number" || !Array.isArray(v.changes) || !v.changes.every(
+        (c) => isRecord(c) && typeof c.path === "string" && (c.kind === void 0 || typeof c.kind === "string" && CHANGE_KINDS.has(c.kind))
+      )) {
+        return null;
+      }
+      return v;
+    case "workspace-state":
+      return hasWs && state(v.state) ? v : null;
+    case "listen-ports":
+      return hasWs && Array.isArray(v.ports) && v.ports.every((p) => Number.isInteger(p)) ? v : null;
+    case "resync":
+    case "unsubscribed":
+      return hasWs ? v : null;
+    case "subscribed":
+      return hasWs && state(v.state) && typeof v.watch === "boolean" ? v : null;
+    case "error":
+      return typeof v.code === "string" && ERROR_CODES.has(v.code) && (v.workspaceId === void 0 || hasWs) ? v : null;
+    default:
+      return null;
+  }
+}
+var defaultWs2 = (url, headers) => (
+  // A handshake that never completes must not hold the org's one socket forever.
+  new import_ws2.WebSocket(url, { headers, perMessageDeflate: false, handshakeTimeout: 2e4 })
+);
+var OrgSocket = class {
+  constructor(org, deps, emit) {
+    this.org = org;
+    this.deps = deps;
+    this.emit = emit;
+    this.backoff = deps.minBackoffMs ?? 1e3;
+  }
+  org;
+  deps;
+  emit;
+  ws = null;
+  subs = /* @__PURE__ */ new Map();
+  // workspaceId → refcount
+  /** Teams whose watcher the server says runs now (`subscribed` with `watch: true`). */
+  acked = /* @__PURE__ */ new Set();
+  backoff;
+  timer = null;
+  tokenTimer = null;
+  lastToken = null;
+  everConnected = false;
+  closedForGood = false;
+  /**
+   * A dial is in flight (between the first await and the socket existing). Set SYNCHRONOUSLY, so
+   * VS Code's burst of `watch()` calls on a folder open shares ONE connect (nonprod 2026-09-30:
+   * one window opened 7 sockets in 300 ms, 3 were refused 429 and the orphans held the slots).
+   */
+  connecting = false;
+  /** The refusal was already surfaced; cleared when a socket opens. */
+  refusalSaid = false;
+  /** A 401 was already handed to the service; cleared when a socket opens. */
+  unauthorizedSaid = false;
+  /** A reconnect was asked while a dial was in flight: dial again once it finishes. */
+  redial = false;
+  /** Teams already subscribed once on this org's socket (any of its dials). */
+  announced = /* @__PURE__ */ new Set();
+  isOpen() {
+    return this.ws !== null && this.ws.readyState === import_ws2.WebSocket.OPEN;
+  }
+  /** Closed for good (a 4401, or a close): a new watch builds a new socket. */
+  get dead() {
+    return this.closedForGood;
+  }
+  ensureConnected() {
+    if (this.closedForGood || this.connecting || this.ws !== null || this.timer !== null) return;
+    void this.connect();
+  }
+  /** Dial once. Callers go through `ensureConnected` (or the reconnect timer), never in parallel. */
+  async connect() {
+    this.connecting = true;
+    let client;
+    let headers;
+    try {
+      client = await this.deps.client().catch(() => null);
+      if (!client || this.closedForGood) return this.scheduleReconnect();
+      headers = await client.upgradeHeaders(REMOTE_EVENTS_WS_PATH, this.org);
+    } catch (err) {
+      if (err instanceof HqApiError && err.status === 401) {
+        this.backoff = this.deps.maxBackoffMs ?? 3e4;
+        this.unauthorized();
+      }
+      return this.scheduleReconnect();
+    } finally {
+      this.connecting = false;
+    }
+    if (this.closedForGood) return;
+    if (this.redial) {
+      this.redial = false;
+      return this.connect();
+    }
+    this.lastToken = /^Bearer (.+)$/.exec(headers.Authorization ?? "")?.[1] ?? null;
+    const ws = (this.deps.ws ?? defaultWs2)(wsUrl(client.host, REMOTE_EVENTS_WS_PATH), headers);
+    this.adopt(ws);
+    ws.on("open", () => {
+      const gap = this.everConnected;
+      this.everConnected = true;
+      this.refusalSaid = false;
+      this.unauthorizedSaid = false;
+      this.backoff = this.deps.minBackoffMs ?? 1e3;
+      for (const id of this.subs.keys()) this.sendSubscribe(id);
+      this.startTokenRotation(client);
+      if (gap) this.gapPending = new Set(this.subs.keys());
+    });
+    ws.on("message", (data) => {
+      let raw;
+      try {
+        raw = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      const frame = parseEventsFrame(raw);
+      if (frame === null) return;
+      if (frame.type === "subscribed") {
+        if (frame.watch && frame.state === "running") this.acked.add(frame.workspaceId);
+        else this.acked.delete(frame.workspaceId);
+        if (this.gapPending?.delete(frame.workspaceId)) {
+          this.emit(frame);
+          this.emit({ type: "resync", workspaceId: frame.workspaceId });
+          return;
+        }
+      }
+      if (frame.type === "workspace-state" && frame.state !== "running") {
+        this.acked.delete(frame.workspaceId);
+      }
+      if (frame.type === "unsubscribed" || frame.type === "error" && frame.workspaceId) {
+        if (frame.workspaceId) this.acked.delete(frame.workspaceId);
+      }
+      this.emit(frame);
+    });
+    const down = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      this.acked.clear();
+      this.stopTokenRotation();
+      if (this.subs.size > 0) this.scheduleReconnect();
+    };
+    ws.on("close", (code) => {
+      if (this.ws !== ws) return;
+      if (code === 4401) {
+        const built = this.deps.grantOf?.(client);
+        const now = this.deps.currentGrant?.();
+        if (built !== void 0 && now !== void 0 && now !== null && built !== now) {
+          this.backoff = this.deps.minBackoffMs ?? 1e3;
+          down();
+          return;
+        }
+        this.closedForGood = true;
+        this.unauthorized();
+      }
+      down();
+    });
+    ws.on("error", () => void 0);
+    ws.on("unexpected-response", (_req, res) => {
+      res.resume();
+      const status = res.statusCode ?? 0;
+      if (status === 404 || status === 401 || status === 403) {
+        this.backoff = this.deps.maxBackoffMs ?? 3e4;
+      }
+      if (status === 401) this.unauthorized();
+      if (status === 429) {
+        this.backoff = Math.max(
+          this.deps.refusedBackoffMs ?? 3e5,
+          this.deps.minBackoffMs ?? 1e3
+        );
+        if (!this.refusalSaid) {
+          this.refusalSaid = true;
+          try {
+            this.deps.onRefused?.(this.org, status);
+          } catch {
+          }
+        }
+      }
+      ws.terminate();
+    });
+  }
+  /**
+   * Hand a possible revocation to the service: one check at a time. The guard re-arms when that
+   * check has finished and the quiet time has passed (L2a), or when a socket opens, so a later
+   * real revocation is still reported.
+   */
+  unauthorized() {
+    if (this.unauthorizedSaid) return;
+    this.unauthorizedSaid = true;
+    let check;
+    try {
+      check = Promise.resolve(this.deps.onUnauthorized?.());
+    } catch {
+      check = Promise.resolve();
+    }
+    const quiet = new Promise((r) => {
+      const t = setTimeout(r, this.deps.unauthorizedQuietMs ?? 3e4);
+      t.unref?.();
+    });
+    void Promise.all([check.catch(() => void 0), quiet]).then(() => {
+      this.unauthorizedSaid = false;
+    });
+  }
+  /**
+   * Make `ws` THE socket. One that was already there is closed first: a socket this client no
+   * longer tracks would keep holding one of the server's per-sign-in slots and receive frames
+   * nobody reads.
+   */
+  adopt(ws) {
+    const old = this.ws;
+    this.ws = ws;
+    if (old !== null && old !== ws) {
+      this.acked.clear();
+      this.stopTokenRotation();
+      old.terminate();
+    }
+  }
+  gapPending = null;
+  scheduleReconnect() {
+    if (this.closedForGood || this.timer !== null || this.subs.size === 0) return;
+    const wait = this.backoff;
+    this.backoff = Math.min(this.backoff * 2, this.deps.maxBackoffMs ?? 3e4);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.connect();
+    }, wait);
+    this.timer.unref?.();
+  }
+  startTokenRotation(client) {
+    this.stopTokenRotation();
+    this.tokenTimer = setInterval(() => {
+      void client.accessToken().then((token) => {
+        if (token !== this.lastToken && this.isOpen()) {
+          this.lastToken = token;
+          this.ws.send(JSON.stringify({ type: "remote-token", token }));
+        }
+      }).catch(() => void 0);
+    }, this.deps.tokenEveryMs ?? 6e4);
+    this.tokenTimer.unref?.();
+  }
+  stopTokenRotation() {
+    if (this.tokenTimer !== null) clearInterval(this.tokenTimer);
+    this.tokenTimer = null;
+  }
+  /**
+   * fix/vscode-presence: the first subscribe of a team is a person opening its folder (`open`, which
+   * HQ counts as presence on a running team); every later one, re-made after a drop, the hourly LB
+   * recycle or a renewed sign-in, is the client's own (`reconnect`, which never counts).
+   */
+  sendSubscribe(id) {
+    if (!this.isOpen()) return;
+    const intent = this.announced.has(id) ? "reconnect" : "open";
+    this.announced.add(id);
+    this.ws.send(JSON.stringify({ type: "subscribe", workspaceId: id, intent }));
+  }
+  /** The team's folder was closed: its next subscribe is a person opening it again. */
+  forget(id) {
+    this.announced.delete(id);
+  }
+  sendUnsubscribe(id) {
+    if (this.isOpen()) this.ws.send(JSON.stringify({ type: "unsubscribe", workspaceId: id }));
+  }
+  /**
+   * Drop the open socket and dial again now, through `deps.client()` (hq-vscode-multi-account
+   * decision 26: the slot was renewed in another window, and the token timer above holds the old
+   * client and swallows its errors). The re-made subscriptions carry a resync.
+   */
+  reconnectNow() {
+    if (this.closedForGood && this.subs.size === 0) return;
+    this.closedForGood = false;
+    this.unauthorizedSaid = false;
+    if (this.connecting) {
+      this.redial = true;
+      return;
+    }
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    const ws = this.ws;
+    this.ws = null;
+    this.acked.clear();
+    this.stopTokenRotation();
+    ws?.terminate();
+    this.everConnected = this.everConnected || ws !== null;
+    this.backoff = this.deps.minBackoffMs ?? 1e3;
+    if (this.subs.size > 0 && !this.connecting) void this.connect();
+  }
+  close() {
+    this.closedForGood = true;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.stopTokenRotation();
+    const ws = this.ws;
+    this.ws = null;
+    this.acked.clear();
+    ws?.close(1e3, "done");
+  }
+};
+var EventsHub = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  deps;
+  orgs = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  onFrame(listener) {
+    this.listeners.add(listener);
+    return { dispose: () => void this.listeners.delete(listener) };
+  }
+  emit(frame) {
+    for (const l of [...this.listeners]) l(frame);
+  }
+  /** Watch one team (refcounted). The first watch of an org opens its socket. */
+  subscribe(team) {
+    const slug = team.org.slug;
+    let org = this.orgs.get(slug);
+    if (!org || org.dead) {
+      org = new OrgSocket(slug, this.deps, (f) => this.emit(f));
+      this.orgs.set(slug, org);
+    }
+    const id = team.workspace.id;
+    const n = org.subs.get(id) ?? 0;
+    org.subs.set(id, n + 1);
+    if (n === 0) org.sendSubscribe(id);
+    org.ensureConnected();
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        const left = (org.subs.get(id) ?? 1) - 1;
+        if (left > 0) {
+          org.subs.set(id, left);
+          return;
+        }
+        org.subs.delete(id);
+        org.acked.delete(id);
+        org.forget(id);
+        org.sendUnsubscribe(id);
+        if (org.subs.size === 0) {
+          org.close();
+          this.orgs.delete(slug);
+        }
+      }
+    };
+  }
+  /** Is this team's change stream live right now (socket open, subscription acknowledged)? */
+  isLive(team) {
+    const org = this.orgs.get(team.org.slug);
+    return org !== void 0 && org.isOpen() && org.acked.has(team.workspace.id);
+  }
+  /** The account's slot was renewed: every open socket redials with the new grant. */
+  reconnectAll() {
+    for (const org of this.orgs.values()) org.reconnectNow();
+  }
+  /** Sign-out, revocation, host change: every socket goes. */
+  closeAll() {
+    for (const org of this.orgs.values()) org.close();
+    this.orgs.clear();
+  }
+};
+
+// src/hq/hq-service.ts
+var import_node_os3 = __toESM(require("node:os"), 1);
+var import_node_path3 = __toESM(require("node:path"), 1);
+
+// ../hq-client/src/teams.ts
+function isWellFormedTeam(t) {
+  return ORG_SLUG_RE.test(t.org.slug) && UUID_RE.test(t.workspace.id) && ALIAS_RE.test(t.alias);
+}
+function partitionTeams(orgs) {
+  const all = orgs.flatMap((raw) => {
+    const org = { ...raw, name: oneLine(String(raw.name ?? "")) };
+    return (raw.workspaces ?? []).map((w) => ({
+      org,
+      workspace: { ...w, name: oneLine(String(w.name ?? "")) }
+    }));
+  });
+  const counts = /* @__PURE__ */ new Map();
+  for (const t of all) {
+    const a = workspaceAlias(t.workspace.id);
+    counts.set(a, (counts.get(a) ?? 0) + 1);
+  }
+  const aliased = all.map((t) => {
+    const short = workspaceAlias(t.workspace.id);
+    return {
+      ...t,
+      alias: (counts.get(short) ?? 0) > 1 ? workspaceAlias(t.workspace.id, 12) : short
+    };
+  });
+  return {
+    teams: aliased.filter(isWellFormedTeam),
+    skipped: aliased.filter((t) => !isWellFormedTeam(t))
+  };
+}
+
+// src/hq/hq-service.ts
+var REFRESH_TIMEOUT_MS = 1e4;
+var RACE_REREADS = 10;
+var RACE_REREAD_MS = 500;
+var SIGNOUT_GRACE_MS = 5e3;
+var SIGNOUT_LOOK_MS = 250;
+var STAMP_REREAD_MS = 500;
+function defaultLockDir() {
+  return import_node_path3.default.join(import_node_os3.default.homedir(), ".hq", "vscode");
+}
+function clientHeaders(extensionVersion) {
+  return {
+    [HQ_HEADER_CLIENT]: `vscode/${extensionVersion}`,
+    [HQ_HEADER_WANT_NONCE]: "1"
+  };
+}
+var HqService = class {
+  constructor(deps, refValue) {
+    this.deps = deps;
+    this.refValue = refValue;
+    this.seenGrant = deps.store.accountRecord(refValue)?.grantId ?? null;
+  }
+  deps;
+  refValue;
+  built = null;
+  /** The grant each client was built for: a 401 from an old one is a renew, never a revocation. */
+  grantOf = /* @__PURE__ */ new WeakMap();
+  /** The last grant this window saw on the slot (decision 26: a change is a renew). */
+  seenGrant;
+  /** One open prompt per account (review 9): a second request while one is open is dropped. */
+  renewAsked = false;
+  revokedShown = false;
+  busySaid = false;
+  /** The registry's last health read said this account cannot be used here (decision 18). */
+  needsSignIn = false;
+  /** When this window last had a listing of this account (0: never). */
+  listedAt = 0;
+  /** A confirmed 401 being told apart from a sign-out elsewhere (one at a time). */
+  revoking = null;
+  get ref() {
+    return this.refValue;
+  }
+  get tag() {
+    return accountTag(this.refValue.host, this.refValue.userId);
+  }
+  host() {
+    return this.refValue.host;
+  }
+  /** The renewed legacy account now lives in a `user` slot (decision 3): same account, new slot. */
+  moveTo(ref, grantId) {
+    this.refValue = ref;
+    this.built = null;
+    this.seenGrant = grantId;
+  }
+  /** The same slot, a ref with fresher fields (the legacy slot's profile key). */
+  updateRef(ref) {
+    this.refValue = ref;
+  }
+  account() {
+    return this.deps.store.accountRecord(this.refValue);
+  }
+  email() {
+    return this.account()?.user.email ?? "";
+  }
+  clientHeaders() {
+    return clientHeaders(this.deps.extensionVersion);
+  }
+  lockDir() {
+    return this.deps.lockDir ?? defaultLockDir();
+  }
+  /** The grant `client` was built for (a renew makes it differ from `currentGrant()`). */
+  grantOfClient(client) {
+    return this.grantOf.get(client);
+  }
+  /** The slot's grant right now (a globalState read), or null when the account is gone. */
+  currentGrant() {
+    return this.account()?.grantId ?? null;
+  }
+  /**
+   * The registry's health read for this account. `needs-sign-in` refuses every call, even with a
+   * client already built (review C1, defence in depth: the shared legacy key may be another
+   * profile's now). Anything else lifts it.
+   */
+  setHealth(health) {
+    this.needsSignIn = health === "needs-sign-in";
+    if (this.needsSignIn) this.built = null;
+  }
+  /** Forget the built client (another window renewed the slot, or its key changed). */
+  invalidate() {
+    this.built = null;
+  }
+  /**
+   * The slot's grant as another window left it. A different one than last seen is a renew: the
+   * client is rebuilt and the owner told, so sockets, terminals and forwards reconnect (decision 26).
+   */
+  noteGrant(grantId) {
+    const before = this.seenGrant;
+    this.seenGrant = grantId;
+    if (before === null || before === grantId) return false;
+    this.built = null;
+    this.deps.owner.renewed(this.refValue);
+    return true;
+  }
+  /**
+   * This account's client. Throws `AccountGoneError` (signed out elsewhere), `NeedsSignInError`
+   * (the slot's secrets are gone or the legacy key changed hands) or `SecretsBusyError` (the
+   * keychain could not be read, or a renew is mid-write past one re-read).
+   */
+  async client() {
+    let rec = this.account();
+    if (!rec) {
+      this.deps.owner.rederive("error");
+      throw new AccountGoneError();
+    }
+    this.noteGrant(rec.grantId);
+    if (this.needsSignIn) throw new NeedsSignInError();
+    if (this.built?.grantId === rec.grantId) return this.built.client;
+    const ref = this.refValue;
+    let openssh = null;
+    for (let attempt = 0; attempt < 2 && openssh === null; attempt++) {
+      const device = await this.deps.store.loadDeviceKey(ref);
+      if (!device) throw new NeedsSignInError();
+      if (ref.slot === "legacy") {
+        if (await this.deps.store.legacyKeyVerdict(ref.host, device.openssh) === "mismatch") {
+          throw new NeedsSignInError();
+        }
+        openssh = device.openssh;
+        break;
+      }
+      const tokens = await this.deps.store.loadStamped(ref, true);
+      if (!tokens) throw new NeedsSignInError();
+      if (device.grantId === rec.grantId && tokens.grantId === rec.grantId) {
+        openssh = device.openssh;
+        break;
+      }
+      if (attempt === 1) throw new SecretsBusyError();
+      await (this.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(
+        STAMP_REREAD_MS
+      );
+      rec = this.account();
+      if (!rec) {
+        this.deps.owner.rederive("error");
+        throw new AccountGoneError();
+      }
+    }
+    const grantId = rec.grantId;
+    const client = new HqClient({
+      host: ref.host,
+      key: deviceKeyFromOpenSsh(openssh).privateKey,
+      store: this.deps.store.tokenStore(
+        ref,
+        ref.slot === "user" ? grantId : null,
+        ref.slot === "legacy" ? deviceFingerprint(openssh) : null
+      ),
+      lockDir: this.lockDir(),
+      lockName: refreshLockName(this.deps.appName, ref),
+      clientHeaders: this.clientHeaders(),
+      refreshTimeoutMs: REFRESH_TIMEOUT_MS,
+      raceRereads: RACE_REREADS,
+      raceRereadMs: RACE_REREAD_MS,
+      ...this.deps.fetch ? { fetch: this.deps.fetch } : {},
+      ...this.deps.now ? { now: this.deps.now } : {}
+    });
+    this.grantOf.set(client, grantId);
+    this.built = { grantId, client };
+    this.busySaid = false;
+    this.noteGrant(grantId);
+    return client;
+  }
+  /** The teams this account can reach, from its last listing (no request). */
+  teams() {
+    return partitionTeams(this.orgs()).teams.filter((t) => t.org.remoteAccess.allowed);
+  }
+  orgs() {
+    return this.deps.store.cachedOrgs(this.refValue);
+  }
+  /** `GET /api/remote/orgs` as this account, cached in its slot (no secret). */
+  async refreshOrgs() {
+    const orgs = await this.call(
+      async (c) => (await c.request("GET", "/api/remote/orgs")).body
+    );
+    if (this.account()) await this.deps.store.saveOrgs(this.refValue, orgs);
+    this.markListed();
+    this.deps.owner.changed();
+    return orgs;
+  }
+  /** The listing in the slot is current as of now (it came with a sign-in). */
+  markListed() {
+    this.listedAt = (this.deps.now ?? Date.now)();
+  }
+  /**
+   * Re-list when this window's listing is older than `maxAgeMs` (live test 2026-10-02: a team read
+   * "off" in the status bar and the picker while its sessions ran). One at a time; a failure waits
+   * for the next turn rather than retrying at once.
+   */
+  async refreshOrgsIfOlder(maxAgeMs) {
+    const now = (this.deps.now ?? Date.now)();
+    if (now - this.listedAt < maxAgeMs) return;
+    this.listedAt = now;
+    await this.refreshOrgs().catch(() => void 0);
+  }
+  /**
+   * Run one HQ call as this account, turning the answers that change the sign-in into what the
+   * person sees. A renew seen mid-call (`SlotRenewedError`) rebuilds and retries ONCE. The error is
+   * rethrown for the caller's own message, except where this already said everything.
+   */
+  async call(fn) {
+    for (let attempt = 0; ; attempt++) {
+      let client = null;
+      try {
+        client = await this.client();
+        return await fn(client);
+      } catch (err) {
+        if (err instanceof SlotRenewedError && attempt === 0) {
+          this.invalidate();
+          continue;
+        }
+        await this.handleError(err, client);
+        throw err;
+      }
+    }
+  }
+  /** What an error means for THIS account (see the header). */
+  async handleError(err, failing = null) {
+    if (err instanceof SlotRenewedError) {
+      this.invalidate();
+      return;
+    }
+    if (err instanceof AccountGoneError) {
+      this.deps.owner.rederive("error");
+      return;
+    }
+    if (err instanceof SecretsBusyError) {
+      this.sayBusy();
+      return;
+    }
+    if (err instanceof NeedsSignInError || err instanceof RefreshBusyError || err instanceof RefreshNeedsRenewingError) {
+      void this.askRenew();
+      return;
+    }
+    if (err instanceof HqApiError) {
+      if (err.code === "REFRESH_RACE") {
+        void this.askRenew();
+        return;
+      }
+      if (err.status === 401) {
+        if (this.revoking) return this.revoking;
+        const dead = (failing ? this.grantOf.get(failing) : void 0) ?? this.account()?.grantId;
+        this.revoking = (async () => {
+          if (await this.revocationConfirmed(failing)) {
+            await this.revokedUnlessSignedOutElsewhere(dead ?? null);
+          } else {
+            this.log.info(`account ${this.tag}: a 401 HQ did not confirm; nothing signed out`);
+          }
+        })().finally(() => {
+          this.revoking = null;
+        });
+        return this.revoking;
+      }
+      if (err.status === 426) this.deps.owner.showTooOld();
+      return;
+    }
+    if (err instanceof NotLoggedInError) {
+      const health = await this.deps.store.health(this.refValue);
+      if (!this.account()) this.deps.owner.rederive("error");
+      else if (health === "busy") this.sayBusy();
+      else if (health === "needs-sign-in") void this.askRenew();
+    }
+  }
+  /**
+   * B1 plus decision 18: is THIS account's grant really gone? Not when the slot moved on to another
+   * grant (a renew elsewhere), not when its secrets cannot be read, and only when HQ's unsigned
+   * answer with this account's token says so.
+   */
+  async revocationConfirmed(failing) {
+    const rec = this.account();
+    if (!rec) {
+      this.deps.owner.rederive("error");
+      return false;
+    }
+    const failingGrant = failing ? this.grantOf.get(failing) : this.built?.grantId;
+    if (failingGrant !== void 0 && failingGrant !== rec.grantId) {
+      this.noteGrant(rec.grantId);
+      return false;
+    }
+    const health = await this.deps.store.health(this.refValue);
+    if (health === "busy") {
+      this.sayBusy();
+      return false;
+    }
+    if (health === "needs-sign-in") {
+      void this.askRenew();
+      return false;
+    }
+    const client = await this.client().catch(() => null);
+    if (!client) return false;
+    return client.confirmRevoked();
+  }
+  /** 426: this version is below `KR_REMOTE_MIN_VSCODE_VERSION` (one modal per window). */
+  showTooOld() {
+    this.deps.owner.showTooOld();
+  }
+  get log() {
+    return this.deps.log ?? silentLog;
+  }
+  sayBusy() {
+    if (this.busySaid) return;
+    this.log.warn(`account ${this.tag}: the keychain could not be read`);
+    this.busySaid = true;
+    this.deps.ui.modal(COPY.keychainBusy(this.email()));
+  }
+  /** "Your HQ sign-in as <email> needs renewing." with Sign in → `renew(this)`. One at a time. */
+  async askRenew() {
+    if (this.renewAsked) return;
+    this.renewAsked = true;
+    this.log.info(`account ${this.tag} needs signing in again`);
+    try {
+      const again = await this.deps.ui.askToSignIn(
+        this.refValue,
+        COPY.renewSignInAccount(this.email()),
+        false
+      );
+      if (again) void this.deps.owner.signIn({ kind: "renew", ref: this.refValue });
+    } finally {
+      this.renewAsked = false;
+    }
+  }
+  /**
+   * HQ confirmed the grant is gone. A sign-out in ANOTHER window looks exactly like that here until
+   * its removal of the account record arrives (globalState lags up to ~2 s; that window revokes
+   * first and the record goes with it). So wait up to `SIGNOUT_GRACE_MS` for the record: if it goes,
+   * the account was signed out on purpose: close it locally, quietly (MA-U11), no modal, no wipe
+   * (the other window wiped). Otherwise it was revoked.
+   */
+  async revokedUnlessSignedOutElsewhere(dead) {
+    const sleep4 = this.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    for (let waited = 0; ; waited += SIGNOUT_LOOK_MS) {
+      const rec = this.account();
+      if (!rec) {
+        this.log.info(`account ${this.tag} was signed out in another window`);
+        await this.wipeIfStillDead(dead);
+        this.built = null;
+        this.deps.owner.rederive("error");
+        return;
+      }
+      if (dead !== null && rec.grantId !== dead) {
+        this.log.info(`account ${this.tag} was renewed in another window`);
+        this.noteGrant(rec.grantId);
+        this.deps.owner.rederive("error");
+        return;
+      }
+      if (waited >= SIGNOUT_GRACE_MS) break;
+      await sleep4(SIGNOUT_LOOK_MS);
+    }
+    await this.revoked(dead);
+  }
+  /**
+   * Security L2: the record is gone (signed out elsewhere) but that window may have died before its
+   * wipe: secrets still stamped with the dead grant are orphans, and go. Never a newer grant's
+   * (another sign-in may already be writing the slot); the legacy slot only while its key is ours.
+   * Idempotent.
+   */
+  async wipeIfStillDead(dead) {
+    const ref = this.refValue;
+    try {
+      if (ref.slot === "user") {
+        const device = await this.deps.store.loadDeviceKey(ref);
+        if (!device || dead === null || device.grantId !== dead) return;
+      } else if (!await this.deps.store.legacyKeyIsOurs(ref)) {
+        return;
+      }
+      await this.deps.store.wipe(ref);
+      this.log.info(`account ${this.tag}: wiped what an interrupted sign-out left behind`);
+    } catch {
+    }
+  }
+  /** This account's grant is gone: wipe its slot, close its things, say so once. */
+  async revoked(dead = null) {
+    const rec = this.account();
+    if (dead !== null && rec && rec.grantId !== dead) {
+      this.noteGrant(rec.grantId);
+      this.deps.owner.rederive("error");
+      return;
+    }
+    const email = this.email();
+    this.log.info(`account ${this.tag}: HQ confirmed its access ended; signed out here`);
+    await this.deps.store.wipe(this.refValue);
+    this.built = null;
+    this.deps.owner.removed(this.refValue);
+    if (this.revokedShown) return;
+    this.revokedShown = true;
+    try {
+      const again = await this.deps.ui.askToSignIn(this.refValue, COPY.revokedAccount(email), true);
+      if (again) {
+        void this.deps.owner.signIn({
+          kind: "as",
+          tag: this.tag,
+          expectedUserId: this.refValue.userId
+        });
+      }
+    } finally {
+      this.revokedShown = false;
+    }
+  }
+  /** Sign out of THIS account: revoke its grant in HQ, then forget it here. */
+  async signOut() {
+    const account = this.account();
+    const email = this.email();
+    let reached = true;
+    if (account && !await this.deps.store.legacyKeyIsOurs(this.refValue)) reached = false;
+    else if (account) {
+      let client = null;
+      try {
+        client = await this.client();
+        await this.deps.store.markSigningOut(this.refValue.host, this.tag, account.grantId);
+        await this.deps.store.forgetAccountRecord(this.refValue);
+        await client.request(
+          "DELETE",
+          `/api/remote/grants/${encodeURIComponent(account.grantId)}`,
+          {
+            signed: true
+          }
+        );
+      } catch (err) {
+        reached = err instanceof HqApiError && (err.status === 404 || err.status === 401 && client !== null && await client.confirmRevoked().catch(() => false));
+      }
+    }
+    await this.deps.store.wipe(this.refValue, email);
+    await this.deps.store.clearSigningOut(this.refValue.host, this.tag);
+    this.built = null;
+    this.deps.owner.removed(this.refValue);
+    this.log.info(`account ${this.tag} signed out (HQ ${reached ? "reached" : "not reached"})`);
+    const others = this.deps.owner.count() > 0;
+    this.deps.ui.info(
+      !reached ? COPY.signOutOffline : others ? COPY.signedOutAccount(email) : COPY.signedOut
+    );
+  }
+};
+
+// src/hq/sign-in.ts
+var import_node_fs5 = require("node:fs");
+var import_node_crypto8 = require("node:crypto");
+var import_node_os4 = __toESM(require("node:os"), 1);
+var import_node_path4 = __toESM(require("node:path"), 1);
+
+// src/hq/hosts.ts
+var DEFAULT_HOST = "https://hq.aiworkforceone.com";
+var BUILT_IN_HOSTS = [
+  DEFAULT_HOST,
+  "https://hq-test.aiworkforceone.com"
+];
+var LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
+var HTTPS = /^https:\/\/[a-z0-9.-]{1,253}(:\d{1,5})?$/;
+function normalizeHqHost(value) {
+  if (typeof value !== "string") return null;
+  const v = value.trim().replace(/\/+$/, "").toLowerCase();
+  if (HTTPS.test(v) || LOOPBACK.test(v)) return v;
+  return null;
+}
+function resolveHqHost(configured, allowedExtra) {
+  const raw = typeof configured === "string" && configured.trim() !== "" ? configured : DEFAULT_HOST;
+  const host = normalizeHqHost(raw);
+  if (host === null) return { ok: false, host: String(raw) };
+  const extra = Array.isArray(allowedExtra) ? allowedExtra.map(normalizeHqHost).filter((h) => h !== null) : [];
+  const allowed = /* @__PURE__ */ new Set([...BUILT_IN_HOSTS, ...extra]);
+  if (LOOPBACK.test(host) && !extra.includes(host)) return { ok: false, host };
+  return allowed.has(host) ? { ok: true, host } : { ok: false, host };
+}
+function isOnHost(url, host) {
+  let u;
+  let h;
+  try {
+    u = new URL(url);
+    h = new URL(host);
+  } catch {
+    return false;
+  }
+  return u.origin === h.origin && (u.protocol === "https:" || u.protocol === "http:");
+}
+
+// src/auth/device-flow.ts
+function deviceLabelFor(appName, hostname) {
+  const clean = (s) => (
+    // eslint-disable-next-line no-control-regex -- the label is shown to an approver
+    s.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim()
+  );
+  const label = `${clean(appName) || "VS Code"} on ${clean(hostname) || "this computer"}`;
+  return label.slice(0, 64);
+}
+var POLL_NETWORK_RETRIES = 3;
+var unreachable = COPY.unreachable;
+async function runDeviceFlow(deps, input) {
+  const start = await postJson(
+    deps.fetch,
+    `${deps.host}/api/remote/device/start`,
+    { clientName: "hq-vscode", ...input },
+    deps.clientHeaders
+  );
+  if (start.status === 404) return { kind: "unavailable" };
+  if (start.status === 426) return { kind: "too-old" };
+  if (start.status === 429) return { kind: "throttled" };
+  if (start.status !== 200) {
+    return { kind: "failed", detail: start.body?.error ?? `HTTP ${start.status}` };
+  }
+  const s = start.body;
+  const pageUrl = isOnHost(s.verificationUrl, deps.host) ? s.verificationUrl : `${deps.host}/device`;
+  await deps.onCode(s.userCode, pageUrl);
+  let interval = Math.max(5, s.interval);
+  let networkFailures = 0;
+  const deadline = deps.now() + s.expiresIn * 1e3;
+  while (deps.now() < deadline) {
+    await deps.sleep(interval * 1e3);
+    if (deps.cancelled()) return { kind: "cancelled" };
+    let poll;
+    try {
+      poll = await postJson(
+        deps.fetch,
+        `${deps.host}/api/remote/device/poll`,
+        { deviceCode: s.deviceCode },
+        deps.clientHeaders
+      );
+      if (networkFailures > 0 && poll.status === 410) return { kind: "expired-after-network" };
+      networkFailures = 0;
+    } catch {
+      networkFailures += 1;
+      if (networkFailures >= POLL_NETWORK_RETRIES) return { kind: "failed", detail: unreachable };
+      continue;
+    }
+    if (poll.status === 200 && poll.body.status === "approved") {
+      return { kind: "approved", approved: poll.body };
+    }
+    if (poll.status === 200 && (poll.body.status === "authorization_pending" || poll.body.status === "slow_down")) {
+      interval = Math.max(interval, poll.body.interval);
+      continue;
+    }
+    if (poll.status === 403) return { kind: "denied" };
+    if (poll.status === 410) return { kind: "expired" };
+    if (poll.status === 426) return { kind: "too-old" };
+    if (poll.status === 429) {
+      interval += 5;
+      continue;
+    }
+    return { kind: "failed", detail: poll.body?.error ?? `HTTP ${poll.status}` };
+  }
+  return { kind: "expired" };
+}
+
+// src/auth/signin-lock.ts
+var import_node_fs4 = require("node:fs");
+var import_node_crypto7 = require("node:crypto");
+var SIGNIN_LOCK_TTL_MS = (REMOTE_DEVICE_CODE_TTL_SEC + 60) * 1e3;
+var SIGNIN_LOCK_STALE_MS = 3e4;
+var SIGNIN_LOCK_HEARTBEAT_MS = 5e3;
+var SIGNIN_TAKEOVER_WAIT_MS = 2e4;
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+function parse(raw) {
+  try {
+    const r = JSON.parse(raw);
+    return {
+      pid: typeof r.pid === "number" && r.pid > 0 ? r.pid : null,
+      expiresAt: typeof r.expiresAt === "number" ? r.expiresAt : null
+    };
+  } catch {
+    const legacy = /^(\d+):[0-9a-f]+$/.exec(raw.trim());
+    const pid = legacy ? Number(legacy[1]) : 0;
+    return { pid: pid > 0 ? pid : null, expiresAt: null };
+  }
+}
+function inspect(file, staleMs) {
+  let raw;
+  let mtimeMs;
+  try {
+    mtimeMs = (0, import_node_fs4.statSync)(file).mtimeMs;
+    raw = (0, import_node_fs4.readFileSync)(file, "utf8");
+  } catch {
+    return null;
+  }
+  const { pid, expiresAt } = parse(raw);
+  const now = Date.now();
+  if (pid !== null && !pidAlive(pid)) return { raw, stale: "owner-gone" };
+  if (now - mtimeMs > staleMs) return { raw, stale: "no-heartbeat" };
+  if (expiresAt !== null && now > expiresAt) return { raw, stale: "expired" };
+  return { raw, stale: null };
+}
+function breakIf(file, aside, shouldBreak) {
+  try {
+    (0, import_node_fs4.renameSync)(file, aside);
+  } catch {
+    return;
+  }
+  try {
+    if (!shouldBreak(aside)) {
+      try {
+        (0, import_node_fs4.linkSync)(aside, file);
+      } catch {
+      }
+    }
+  } finally {
+    (0, import_node_fs4.rmSync)(aside, { force: true });
+  }
+}
+var cancelFileOf = (file) => `${file}.cancel`;
+function tryCreate(file, opts) {
+  const raw = JSON.stringify({
+    owner: (0, import_node_crypto7.randomBytes)(8).toString("hex"),
+    pid: process.pid,
+    expiresAt: Date.now() + (opts.ttlMs ?? SIGNIN_LOCK_TTL_MS),
+    ...opts.intent ? { intent: opts.intent } : {}
+  });
+  let fd;
+  try {
+    fd = (0, import_node_fs4.openSync)(file, "wx", 384);
+  } catch (err) {
+    if (err.code === "EEXIST") return null;
+    throw err;
+  }
+  try {
+    (0, import_node_fs4.writeSync)(fd, raw);
+  } finally {
+    (0, import_node_fs4.closeSync)(fd);
+  }
+  let cancelAsked = false;
+  const beat = setInterval(() => {
+    try {
+      if ((0, import_node_fs4.readFileSync)(file, "utf8") !== raw) return;
+      const now = /* @__PURE__ */ new Date();
+      (0, import_node_fs4.utimesSync)(file, now, now);
+    } catch {
+      return;
+    }
+    try {
+      if ((0, import_node_fs4.readFileSync)(cancelFileOf(file), "utf8") !== raw || cancelAsked) return;
+      cancelAsked = true;
+      (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
+      opts.onCancelRequested?.();
+    } catch {
+    }
+  }, opts.heartbeatMs ?? SIGNIN_LOCK_HEARTBEAT_MS);
+  beat.unref?.();
+  return {
+    release: () => {
+      clearInterval(beat);
+      try {
+        if ((0, import_node_fs4.readFileSync)(file, "utf8") === raw) (0, import_node_fs4.rmSync)(file, { force: true });
+      } catch {
+      }
+    }
+  };
+}
+function acquireSignInLock(file, opts = {}) {
+  const staleMs = opts.staleMs ?? SIGNIN_LOCK_STALE_MS;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const lock = tryCreate(file, opts);
+    if (lock) return { kind: "acquired", lock };
+    const held = inspect(file, staleMs);
+    if (!held) continue;
+    if (held.stale === null) return { kind: "busy" };
+    breakIf(file, `${file}.stale-${(0, import_node_crypto7.randomBytes)(4).toString("hex")}`, (aside) => {
+      const moved = inspect(aside, staleMs);
+      return moved !== null && moved.stale !== null;
+    });
+  }
+  return { kind: "busy" };
+}
+async function takeOverSignInLock(file, opts = {}) {
+  const staleMs = opts.staleMs ?? SIGNIN_LOCK_STALE_MS;
+  const first = acquireSignInLock(file, opts);
+  if (first.kind === "acquired") return first;
+  const target = inspect(file, staleMs);
+  if (target) {
+    (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
+    try {
+      (0, import_node_fs4.writeFileSync)(cancelFileOf(file), target.raw, { mode: 384, flag: "wx" });
+    } catch {
+    }
+    const deadline = Date.now() + (opts.takeoverWaitMs ?? SIGNIN_TAKEOVER_WAIT_MS);
+    while (Date.now() < deadline && inspect(file, staleMs)?.raw === target.raw) await sleep2(100);
+    breakIf(file, `${file}.takeover-${(0, import_node_crypto7.randomBytes)(4).toString("hex")}`, (aside) => {
+      try {
+        return (0, import_node_fs4.readFileSync)(aside, "utf8") === target.raw;
+      } catch {
+        return false;
+      }
+    });
+    (0, import_node_fs4.rmSync)(cancelFileOf(file), { force: true });
+  }
+  return acquireSignInLock(file, opts);
+}
+
+// src/hq/sign-in.ts
+function lockDirOf(h) {
+  return h.lockDir ?? defaultLockDir();
+}
+function isFresh(t, now) {
+  return !t.needsRenewing && Date.parse(t.accessExpiresAt) - now > REFRESH_MARGIN_MS;
+}
+async function revokeGrantInMemory(h, host, g) {
+  let held = g.tokens;
+  const client = new HqClient({
+    host,
+    key: deviceKeyFromOpenSsh(g.openssh).privateKey,
+    store: {
+      load: () => held,
+      save: (_h, t) => {
+        held = t;
+      }
+    },
+    lockDir: lockDirOf(h),
+    lockName: `ephemeral-${(0, import_node_crypto8.randomBytes)(6).toString("hex")}.lock`,
+    clientHeaders: clientHeaders(h.extensionVersion),
+    ...h.fetch ? { fetch: h.fetch } : {},
+    ...h.now ? { now: h.now } : {}
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await client.request("DELETE", `/api/remote/grants/${encodeURIComponent(g.grantId)}`, {
+        signed: true
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof HqApiError && err.status === 404) return true;
+    }
+  }
+  return false;
+}
+function reportFailure(h, result, tooOld) {
+  switch (result.kind) {
+    case "denied":
+      h.ui.modal(COPY.signInDenied);
+      return;
+    case "expired":
+      h.ui.modal(COPY.signInExpired);
+      return;
+    case "expired-after-network":
+      h.ui.modal(COPY.signInExpiredAfterNetwork);
+      return;
+    case "unavailable":
+      h.ui.modal(COPY.signInUnavailable);
+      return;
+    case "throttled":
+      h.ui.modal(COPY.signInThrottled);
+      return;
+    case "too-old":
+      tooOld();
+      return;
+    case "failed":
+      h.ui.modal(COPY.signInFailed(result.detail));
+      return;
+    default:
+      return;
+  }
+}
+async function runSignIn(h, state, intent, opts) {
+  const log = h.log ?? silentLog;
+  log.info(
+    `sign-in (${intent.kind}) started${opts.takeOver ? ", taking over another window" : ""}`
+  );
+  const result = await signInFlow(h, state, intent, opts);
+  const who = result.ref ? ` as account ${accountTag(result.ref.host, result.ref.userId)}` : "";
+  log.info(`sign-in (${intent.kind}): ${result.outcome}${who}`);
+  return result;
+}
+async function signInFlow(h, state, intent, opts) {
+  const verdict = h.hostVerdict();
+  if (!verdict.ok) {
+    h.ui.modal(COPY.hostNotAllowed(verdict.host));
+    return { outcome: "host-not-allowed" };
+  }
+  if (state.signingIn) {
+    const flow = state.flow;
+    if (flow?.code) flow.shown.push(h.ui.showDeviceCode(flow.code, flow.cancel));
+    else h.ui.info(COPY.signInInProgress);
+    return { outcome: "busy" };
+  }
+  state.signingIn = true;
+  const host = verdict.host;
+  let cancelled = false;
+  let wake = () => void 0;
+  const woken = new Promise((r) => wake = r);
+  const cancel = () => {
+    cancelled = true;
+    wake();
+  };
+  let movedAway = false;
+  const lockOpts = {
+    ...h.signInLock,
+    intent: intent.kind,
+    onCancelRequested: () => {
+      movedAway = true;
+      cancel();
+    }
+  };
+  let acquired;
+  try {
+    (0, import_node_fs5.mkdirSync)(lockDirOf(h), { recursive: true, mode: 448 });
+    const file = import_node_path4.default.join(lockDirOf(h), legacyLockName("signin", h.appName, host));
+    acquired = opts.takeOver ? await takeOverSignInLock(file, lockOpts) : acquireSignInLock(file, lockOpts);
+  } catch (err) {
+    state.signingIn = false;
+    (h.log ?? silentLog).error(`sign-in (${intent.kind}) failed: ${errText(err)}`);
+    h.ui.modal(COPY.signInFailed(err instanceof Error ? err.message : COPY.unreachable));
+    return { outcome: "failed" };
+  }
+  if (acquired.kind === "busy") {
+    state.signingIn = false;
+    void h.ui.offerSignInHere(COPY.signInOtherWindow).then((here) => {
+      if (here) void runSignIn(h, state, intent, { ...opts, takeOver: true });
+    });
+    return { outcome: "busy" };
+  }
+  const release = () => acquired.lock.release();
+  try {
+    const profileKey = await h.store.ensureProfileKey(newProfileKey);
+    h.rederive();
+    if (intent.kind === "first" && h.known().length > 0) {
+      const ref = h.adopt();
+      return { outcome: "approved", ...ref ? { ref } : {} };
+    }
+    state.flow = { code: null, cancel, shown: [] };
+    const sleep4 = h.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    const { seed32, pub32 } = generateDeviceKeyMaterial();
+    const hostname = (h.hostname ?? (() => import_node_os4.default.hostname().split(".")[0] ?? ""))();
+    const openssh = toOpenSshPrivateKey(seed32, pub32, `hq-vscode@${hostname || "computer"}`);
+    const result = await runDeviceFlow(
+      {
+        fetch: h.fetch ?? globalThis.fetch,
+        host,
+        clientHeaders: clientHeaders(h.extensionVersion),
+        now: h.now ?? Date.now,
+        // A cancel (this window's Cancel, or another window signing in instead) ends the wait.
+        sleep: (ms) => Promise.race([sleep4(ms), woken]),
+        cancelled: () => cancelled,
+        onCode: async (code, pageUrl) => {
+          if (state.flow) state.flow.code = code;
+          await Promise.resolve(h.ui.copyToClipboard(code)).catch(() => void 0);
+          state.flow?.shown.push(h.ui.showDeviceCode(code, cancel));
+          void h.ui.openExternal(pageUrl).then(void 0, () => void 0);
+        }
+      },
+      {
+        clientVersion: h.extensionVersion,
+        platform: `${h.platform ?? process.platform}-${process.arch}`,
+        deviceLabel: deviceLabelFor(h.appName, hostname),
+        devicePubkey: publicLineOf(pub32)
+      }
+    );
+    if (result.kind !== "approved") {
+      if (movedAway) h.ui.info(COPY.signInMovedToOtherWindow);
+      else reportFailure(h, result, opts.tooOld);
+      return { outcome: result.kind === "expired-after-network" ? "expired" : result.kind };
+    }
+    const a = result.approved;
+    const fresh = {
+      openssh,
+      grantId: a.grantId,
+      tokens: {
+        accessToken: a.accessToken,
+        accessExpiresAt: a.accessExpiresAt,
+        refreshToken: a.refreshToken
+      }
+    };
+    const revokeNew = async () => {
+      if (!await revokeGrantInMemory(h, host, fresh)) h.ui.modal(COPY.revokeNewFailed);
+    };
+    if (!USER_ID_RE.test(a.user.id)) {
+      await revokeNew();
+      h.ui.modal(COPY.signInFailed(COPY.signInUnstorableUser));
+      return { outcome: "failed" };
+    }
+    h.rederive();
+    const known = h.known();
+    const held = known.find((k) => k.ref.userId === a.user.id);
+    const userRef = { host, userId: a.user.id, slot: "user", profileKey };
+    if (intent.kind === "renew" || intent.kind === "as") {
+      const expectedId = intent.kind === "renew" ? intent.ref.userId : intent.expectedUserId;
+      if (a.user.id !== expectedId) {
+        await revokeNew();
+        const expected = known.find((k) => k.ref.userId === expectedId)?.account.user.email ?? h.store.tombstone(host, accountTag(host, expectedId))?.email;
+        h.ui.modal(
+          expected ? COPY.renewMismatch(expected, a.user.email) : COPY.renewMismatchUnknown(a.user.email)
+        );
+        return { outcome: "mismatch" };
+      }
+    }
+    if (intent.kind === "renew") {
+      const from = held?.ref ?? intent.ref;
+      const to = from.slot === "user" ? from : userRef;
+      if (from.slot === "legacy") {
+        const free2 = await slotIsFree(h, to);
+        if (free2 !== "free") {
+          await revokeNew();
+          h.ui.modal(free2 === "busy" ? COPY.keychainBusy(a.user.email) : COPY.slotInUse);
+          return { outcome: "failed" };
+        }
+      }
+      const old = await h.store.legacyKeyIsOurs(from) ? await readOldGrant(h, from) : null;
+      const unlock = await acquireFileLock(
+        import_node_path4.default.join(lockDirOf(h), refreshLockName(h.appName, from)),
+        {
+          staleMs: REFRESH_LOCK_STALE_MS,
+          waitMs: REFRESH_LOCK_WAIT_MS,
+          heartbeatMs: REFRESH_LOCK_HEARTBEAT_MS
+        }
+      );
+      try {
+        await h.store.writeUserSlot(to, { ...fresh, orgs: a.orgs, user: a.user });
+        if (from.slot === "legacy") {
+          await h.store.carryPortLists(from, to);
+          await h.store.wipe(from);
+        }
+      } finally {
+        unlock();
+      }
+      if (old && isFresh(old.tokens, (h.now ?? Date.now)())) {
+        void revokeGrantInMemory(h, host, old).catch(() => false);
+      }
+      h.renewedHere(to);
+      h.ui.info(COPY.signedIn(a.user.email));
+      return { outcome: "approved", ref: to };
+    }
+    if (held) {
+      await revokeNew();
+      h.ui.modal(COPY.accountAlreadySignedIn(a.user.email));
+      return { outcome: "duplicate" };
+    }
+    const free = await slotIsFree(h, userRef);
+    if (free !== "free") {
+      await revokeNew();
+      h.ui.modal(free === "busy" ? COPY.keychainBusy(a.user.email) : COPY.slotInUse);
+      return { outcome: "failed" };
+    }
+    await h.store.writeUserSlot(userRef, { ...fresh, orgs: a.orgs, user: a.user });
+    h.rederive();
+    await h.added(userRef);
+    h.ui.info(
+      intent.kind === "first" && known.length === 0 ? COPY.signedIn(a.user.email) : COPY.addedAccount(a.user.email)
+    );
+    return { outcome: "approved", ref: userRef };
+  } catch (err) {
+    (h.log ?? silentLog).error(`sign-in (${intent.kind}) failed: ${errText(err)}`);
+    h.ui.modal(COPY.signInFailed(err instanceof Error ? err.message : COPY.unreachable));
+    return { outcome: "failed" };
+  } finally {
+    for (const notice of state.flow?.shown ?? []) notice.close();
+    release();
+    state.flow = null;
+    state.signingIn = false;
+  }
+}
+async function slotIsFree(h, ref) {
+  if (h.store.accountRecord(ref)) return "free";
+  try {
+    return await h.store.loadDeviceKey(ref) === null ? "free" : "taken";
+  } catch {
+    return "busy";
+  }
+}
+async function readOldGrant(h, ref) {
+  try {
+    const record = h.store.accountRecord(ref);
+    const device = await h.store.loadDeviceKey(ref);
+    const tokens = await h.store.loadStamped(ref, true);
+    if (!record || !device || !tokens) return null;
+    return { openssh: device.openssh, tokens, grantId: record.grantId };
+  } catch {
+    return null;
+  }
+}
+
+// src/hq/accounts.ts
+var ACTIVE_ACCOUNT_KEY = "hq.activeAccount";
+var REDERIVE_POLL_MS = 5e3;
+var LISTING_STALE_MS = 6e4;
+var SIGNOUT_MARKER_STALE_MS = 6e4;
+var noFsUi = { teamOff: () => void 0, masked: () => void 0 };
+var AccountBundle = class {
+  constructor(tag, service, account, hooks) {
+    this.tag = tag;
+    this.service = service;
+    this.hooks = hooks;
+    this.lastAccount = account;
+  }
+  tag;
+  service;
+  hooks;
+  /** Decision 18, from the last health read ('unknown' until one ran). */
+  health = "unknown";
+  fs = null;
+  lastAccount;
+  disposed = false;
+  get ref() {
+    return this.service.ref;
+  }
+  /** The account record (the last one seen, kept for a closing notice after a wipe). */
+  get account() {
+    const now = this.service.account();
+    if (now) this.lastAccount = now;
+    return this.lastAccount;
+  }
+  get email() {
+    return this.account.user.email;
+  }
+  runtime() {
+    if (this.fs) return this.fs;
+    const hooks = this.hooks();
+    const fsApi = new HqFsApi(() => this.service.client());
+    const events = new EventsHub({
+      client: () => this.service.client(),
+      // A 4401 on THIS account's socket asks HQ as THIS account (MA-S3).
+      onUnauthorized: () => this.service.refreshOrgs().catch(() => void 0),
+      // A 4401 on a socket of the OLD grant after a renew elsewhere is a redial (review W3).
+      grantOf: (c) => this.service.grantOfClient(c),
+      currentGrant: () => this.service.currentGrant(),
+      ...hooks.onRefused ? { onRefused: (org) => hooks.onRefused(org) } : {}
+    });
+    const core = new HqFsCore({
+      teams: () => this.service.teams(),
+      api: fsApi,
+      events,
+      onApiError: (err) => void this.service.handleError(err),
+      ui: hooks.ui
+    });
+    this.fs = { fsApi, events, core };
+    return this.fs;
+  }
+  get fsApi() {
+    return this.runtime().fsApi;
+  }
+  get events() {
+    return this.runtime().events;
+  }
+  get core() {
+    return this.runtime().core;
+  }
+  /** The runtime exists (something used this account's files). */
+  get hasRuntime() {
+    return this.fs !== null;
+  }
+  get isDisposed() {
+    return this.disposed;
+  }
+  dispose() {
+    this.disposed = true;
+    if (!this.fs) return;
+    this.fs.events.closeAll();
+    this.fs.core.clear();
+    this.fs.core.dispose();
+  }
+};
+var HqAccounts = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.rederive("init");
+    this.activeTag = this.resolveActive();
+    this.everActive = this.activeTag !== null;
+    this.settled = this.finishInterruptedSignOuts().catch(() => void 0);
+    this.subscriptions.push(
+      deps.store.onSecretChanged((key) => {
+        for (const b of this.bundles.values()) {
+          if (key.startsWith(`hq:${b.ref.host}:`) && key.endsWith(":device"))
+            b.service.invalidate();
+        }
+        this.rederive("secrets");
+      })
+    );
+    const pollMs = deps.pollMs ?? REDERIVE_POLL_MS;
+    if (pollMs > 0) {
+      this.poll = setInterval(() => this.rederive("poll"), pollMs);
+      this.poll.unref?.();
+    }
+  }
+  deps;
+  bundles = /* @__PURE__ */ new Map();
+  /** Tags two present accounts share (about 2^-48): neither resolves (MA-S12). */
+  collided = /* @__PURE__ */ new Set();
+  hostNow = null;
+  activeTag = null;
+  /**
+   * This window has had an active account. Until then, the first accounts that appear (signed in
+   * from another window) are picked up by decision 7; after it, a removed active account leaves
+   * the window with none until the person picks one (never a silent switch).
+   */
+  everActive = false;
+  flowState = { signingIn: false, flow: null };
+  /** The activation's own work (the interrupted sign-out sweep) has finished. */
+  settled;
+  tooOldShown = false;
+  poll = null;
+  subscriptions = [];
+  changedEmitter = new Emitter();
+  removedEmitter = new Emitter();
+  renewedEmitter = new Emitter();
+  addedEmitter = new Emitter();
+  usableEmitter = new Emitter();
+  /** The list, an account's health or listing, or this window's active account changed. */
+  onDidChange = this.changedEmitter.event;
+  /** Signed out or revoked (in any window), or the host changed: close its things. */
+  onAccountRemoved = this.removedEmitter.event;
+  /** Decision 26: the slot holds a new grant; reconnect what captured the old client. */
+  onAccountRenewed = this.renewedEmitter.event;
+  /** An account appeared (signed in here or in another window). */
+  onAccountAdded = this.addedEmitter.event;
+  /**
+   * An account became usable after the window started: it appeared, or came back from "needs sign
+   * in". What VS Code gave up on for it (a "!" root, a failed editor) needs re-opening (U23).
+   */
+  onAccountUsable = this.usableEmitter.event;
+  get log() {
+    return this.deps.log ?? silentLog;
+  }
+  tagOf(host, userId) {
+    return (this.deps.tagOf ?? accountTag)(host, userId);
+  }
+  /** The allowed host, or null (a host outside the allow-list is never contacted). */
+  host() {
+    const v = this.deps.host();
+    return v.ok ? v.host : null;
+  }
+  // ── reading ────────────────────────────────────────────────────────────────────────────────────
+  /** Every account on the current host, by email. */
+  list() {
+    return [...this.bundles.values()].filter((b) => !this.collided.has(b.tag)).sort((a, b) => a.email < b.email ? -1 : a.email > b.email ? 1 : 0);
+  }
+  count() {
+    return this.list().length;
+  }
+  byTag(tag) {
+    if (this.collided.has(tag)) return null;
+    return this.bundles.get(tag) ?? null;
+  }
+  /** The account a ref names (by host and user: the slot may have moved, decision 3). */
+  get(ref) {
+    if (ref.host !== this.hostNow) return null;
+    return this.byTag(this.tagOf(ref.host, ref.userId));
+  }
+  /**
+   * Untagged `hq://` URIs: the 0.1.x USER (`legacyUser`, or the legacy record before it was
+   * recorded), in whichever slot holds it now. Never the active account, never "the only one".
+   */
+  legacy() {
+    const host = this.hostNow;
+    if (!host) return null;
+    const userId = this.deps.store.legacyUser(host)?.userId ?? this.deps.store.accounts(host, null).find((e) => e.ref.slot === "legacy")?.ref.userId;
+    return userId ? this.byTag(this.tagOf(host, userId)) : null;
+  }
+  /** Is this the 0.1.x user's account (its bundle also serves untagged URIs, decision 24)? */
+  isLegacyUser(b) {
+    return this.legacy()?.tag === b.tag;
+  }
+  /** The account a `hq://` authority names, or why not. */
+  resolveAuthority(authority) {
+    const parsed = parseHqAuthority(authority);
+    const host = this.hostNow;
+    if (parsed.kind === "invalid" || !host) {
+      return { kind: "gone", key: `invalid:${authority}`, email: null, tag: null, userId: null };
+    }
+    if (parsed.kind === "tagged") {
+      const b2 = this.byTag(parsed.tag);
+      if (b2 && b2.health !== "needs-sign-in") {
+        return { kind: "ok", bundle: b2, orgSlug: parsed.orgSlug, key: parsed.tag };
+      }
+      const t = this.deps.store.tombstone(host, parsed.tag);
+      return {
+        kind: "gone",
+        key: parsed.tag,
+        email: b2?.email ?? t?.email ?? null,
+        tag: parsed.tag,
+        userId: b2?.ref.userId ?? t?.userId ?? null
+      };
+    }
+    const b = this.legacy();
+    if (b && b.health !== "needs-sign-in") {
+      return { kind: "ok", bundle: b, orgSlug: parsed.orgSlug, key: "legacy" };
+    }
+    const lu = this.deps.store.legacyUser(host);
+    return {
+      kind: "gone",
+      key: "legacy",
+      email: lu?.email ?? null,
+      tag: lu ? this.tagOf(host, lu.userId) : null,
+      userId: lu?.userId ?? null
+    };
+  }
+  active() {
+    return this.activeTag ? this.byTag(this.activeTag) : null;
+  }
+  /** Decision 21: the short label, only while 2 or more accounts are signed in. */
+  shortLabel(ref) {
+    const all = this.list();
+    if (all.length < 2) return void 0;
+    const b = this.get(ref);
+    if (!b) return void 0;
+    return shortAccountLabel(
+      b.email,
+      all.map((x) => x.email)
+    );
+  }
+  // ── the active account ─────────────────────────────────────────────────────────────────────────
+  /** Decision 7, at activation: saved tag, first hq:// folder, lastActive, first by email. */
+  resolveActive() {
+    const saved = this.deps.windowState.get(ACTIVE_ACCOUNT_KEY);
+    if (saved && this.byTag(saved)) return saved;
+    const authority = this.deps.firstFolderAuthority?.();
+    if (authority) {
+      const r = this.resolveAuthority(authority);
+      if (r.kind === "ok") return r.bundle.tag;
+    }
+    const host = this.hostNow;
+    const last = host ? this.deps.store.lastActive(host) : null;
+    if (last && this.byTag(last)) return last;
+    return this.list()[0]?.tag ?? null;
+  }
+  async setActive(ref) {
+    const b = this.get(ref);
+    if (!b) return;
+    if (this.activeTag !== b.tag) this.log.info(`this window now uses account ${b.tag}`);
+    this.activeTag = b.tag;
+    this.everActive = true;
+    await this.deps.windowState.update(ACTIVE_ACCOUNT_KEY, b.tag);
+    await this.deps.store.setLastActive(b.ref.host, b.tag);
+    this.changedEmitter.fire();
+    if (b.health !== "needs-sign-in") void b.service.refreshOrgsIfOlder(LISTING_STALE_MS);
+  }
+  // ── decision 23 ────────────────────────────────────────────────────────────────────────────────
+  /** Re-read the account list from globalState; fire added / removed / renewed. Cheap; called often. */
+  rederive(reason) {
+    const host = this.host();
+    let changed = false;
+    if (host !== this.hostNow) {
+      if (this.hostNow !== null)
+        this.log.info("the HQ address changed: its accounts here are closed");
+      for (const tag of [...this.bundles.keys()]) this.drop(tag);
+      changed = this.hostNow !== null || host !== null;
+      this.hostNow = host;
+      if (reason !== "init") this.activeTag = null;
+    }
+    if (!host) {
+      if (changed) this.changedEmitter.fire();
+      return;
+    }
+    const entries = this.deps.store.accounts(host, this.deps.store.profileKey());
+    const byTag = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      const tag = this.tagOf(host, e.ref.userId);
+      byTag.set(tag, [...byTag.get(tag) ?? [], e]);
+    }
+    const collided = new Set([...byTag].filter(([, v]) => v.length > 1).map(([t]) => t));
+    if (collided.size !== this.collided.size || [...collided].some((t) => !this.collided.has(t))) {
+      this.collided.clear();
+      for (const t of collided) this.collided.add(t);
+      changed = true;
+    }
+    for (const tag of [...this.bundles.keys()]) {
+      if (!byTag.has(tag)) {
+        this.drop(tag);
+        changed = true;
+      }
+    }
+    const added = [];
+    for (const [tag, list] of byTag) {
+      const e = list[0];
+      const b = this.bundles.get(tag);
+      if (!b) {
+        const bundle = this.build(tag, e.ref, e.account);
+        this.bundles.set(tag, bundle);
+        if (reason !== "init") {
+          this.log.info(`account ${tag} appeared (${e.ref.slot} slot, ${reason})`);
+        } else this.log.info(`account ${tag} found (${e.ref.slot} slot)`);
+        added.push(bundle);
+        changed = true;
+        continue;
+      }
+      if (b.ref.slot === "legacy" && e.ref.slot === "legacy") {
+        if (b.ref.profileKey !== e.ref.profileKey) b.service.updateRef(e.ref);
+      } else if (b.ref.slot !== e.ref.slot || b.ref.profileKey !== e.ref.profileKey) {
+        b.service.moveTo(e.ref, e.account.grantId);
+        this.log.info(`account ${tag} moved to its user slot`);
+        this.fireRenewed(e.ref);
+        changed = true;
+      }
+      if (b.service.noteGrant(e.account.grantId)) changed = true;
+    }
+    if (this.activeTag && !this.bundles.has(this.activeTag)) {
+      this.log.info("this window has no active account now (its account was signed out)");
+      this.activeTag = null;
+      changed = true;
+    }
+    if (!this.activeTag && !this.everActive && reason !== "init" && this.bundles.size > 0) {
+      this.activeTag = this.resolveActive();
+      this.everActive = this.activeTag !== null;
+      if (this.everActive) changed = true;
+    }
+    if (reason !== "poll") {
+      void this.deps.store.recordLegacyUser(host).catch(() => null);
+      void this.refreshHealth();
+    } else {
+      void this.refreshHealth((b) => b.ref.slot === "legacy" || b.health === "needs-sign-in");
+      const a = this.active();
+      if (a && a.health === "ok" && (this.deps.windowFocused?.() ?? true)) {
+        void a.service.refreshOrgsIfOlder(LISTING_STALE_MS);
+      }
+    }
+    for (const b of added) this.addedEmitter.fire(b);
+    if (reason !== "init") for (const b of added) this.usableEmitter.fire(b);
+    if (changed) this.changedEmitter.fire();
+  }
+  /** Decision 18's state of every account, for the Account view and URI resolution. */
+  async refreshHealth(which = () => true) {
+    let changed = false;
+    for (const b of [...this.bundles.values()].filter(which)) {
+      const h = await this.deps.store.health(b.ref).catch(() => "busy");
+      if (b.isDisposed) continue;
+      b.service.setHealth(h);
+      if (h !== b.health) {
+        if (b.health !== "unknown" || h !== "ok") this.log.info(`account ${b.tag}: ${h}`);
+        const back = b.health !== "ok" && b.health !== "unknown" && h === "ok";
+        b.health = h;
+        if (back) this.usableEmitter.fire(b);
+        changed = true;
+      }
+    }
+    if (changed) this.changedEmitter.fire();
+  }
+  build(tag, ref, account) {
+    const owner = {
+      rederive: () => this.rederive("error"),
+      removed: (r) => this.removedHere(r),
+      renewed: (r) => this.fireRenewed(r),
+      changed: () => this.changedEmitter.fire(),
+      signIn: (intent) => this.signIn(intent),
+      showTooOld: () => this.showTooOld(),
+      count: () => this.count()
+    };
+    const service = new HqService(
+      {
+        store: this.deps.store,
+        ui: this.deps.ui,
+        owner,
+        extensionVersion: this.deps.extensionVersion,
+        appName: this.deps.appName,
+        ...this.deps.fetch ? { fetch: this.deps.fetch } : {},
+        ...this.deps.now ? { now: this.deps.now } : {},
+        ...this.deps.sleep ? { sleep: this.deps.sleep } : {},
+        ...this.deps.lockDir ? { lockDir: this.deps.lockDir } : {},
+        log: this.log
+      },
+      ref
+    );
+    const bundle = new AccountBundle(
+      tag,
+      service,
+      account,
+      () => this.deps.fsHooks ? this.deps.fsHooks(bundle) : { ui: noFsUi }
+    );
+    return bundle;
+  }
+  /** Forget an account here (no request: the slot is already wiped, or another window did it). */
+  drop(tag) {
+    const b = this.bundles.get(tag);
+    if (!b) return;
+    this.bundles.delete(tag);
+    this.log.info(`account ${tag} closed here (signed out, revoked, or another HQ address)`);
+    b.dispose();
+    if (this.activeTag === tag) this.activeTag = null;
+    this.removedEmitter.fire(b.ref);
+  }
+  removedHere(ref) {
+    const tag = this.tagOf(ref.host, ref.userId);
+    if (!this.bundles.has(tag)) return;
+    this.drop(tag);
+    this.changedEmitter.fire();
+  }
+  /** Async, so a listener that reconnects never re-enters the client build that noticed it. */
+  fireRenewed(ref) {
+    this.log.info(
+      `account ${this.tagOf(ref.host, ref.userId)} renewed: reconnecting what it had open`
+    );
+    setTimeout(() => this.renewedEmitter.fire(ref), 0);
+  }
+  showTooOld() {
+    if (this.tooOldShown) return;
+    this.tooOldShown = true;
+    this.deps.ui.modal(COPY.tooOld);
+  }
+  // ── sign-in and sign-out ───────────────────────────────────────────────────────────────────────
+  /** Is a sign-in running in this window? */
+  get signingIn() {
+    return this.flowState.signingIn;
+  }
+  signIn(intent) {
+    const h = {
+      store: this.deps.store,
+      ui: this.deps.ui,
+      hostVerdict: this.deps.host,
+      extensionVersion: this.deps.extensionVersion,
+      appName: this.deps.appName,
+      ...this.deps.fetch ? { fetch: this.deps.fetch } : {},
+      ...this.deps.now ? { now: this.deps.now } : {},
+      ...this.deps.sleep ? { sleep: this.deps.sleep } : {},
+      ...this.deps.lockDir ? { lockDir: this.deps.lockDir } : {},
+      ...this.deps.signInLock ? { signInLock: this.deps.signInLock } : {},
+      ...this.deps.hostname ? { hostname: this.deps.hostname } : {},
+      ...this.deps.platform ? { platform: this.deps.platform } : {},
+      log: this.log,
+      rederive: () => this.rederive("error"),
+      known: () => this.list().map((b) => ({ ref: b.ref, account: b.account })),
+      adopt: () => {
+        const host = this.hostNow;
+        const last = host ? this.deps.store.lastActive(host) : null;
+        const pick = (last ? this.byTag(last) : null) ?? this.list()[0] ?? null;
+        if (!pick) return null;
+        void this.setActive(pick.ref);
+        return pick.ref;
+      },
+      added: (ref) => {
+        this.get(ref)?.service.markListed();
+        return this.setActive(ref);
+      },
+      renewedHere: (ref) => {
+        this.rederive("error");
+        const b = this.get(ref);
+        if (b) {
+          const back = b.health !== "ok" && b.health !== "unknown";
+          b.service.invalidate();
+          b.service.setHealth("ok");
+          b.service.markListed();
+          b.health = "ok";
+          if (back) this.usableEmitter.fire(b);
+        }
+        this.changedEmitter.fire();
+      }
+    };
+    return runSignIn(h, this.flowState, intent, { tooOld: () => this.showTooOld() });
+  }
+  /**
+   * Security L2: a sign-out that died between dropping the record and wiping (its marker is still
+   * there) is finished: a marked slot with no record is wiped (the legacy one only when its key is
+   * this profile's); a marked slot whose record is back is left alone. Markers are cleared.
+   */
+  async finishInterruptedSignOuts() {
+    const host = this.hostNow;
+    if (!host) return;
+    const store = this.deps.store;
+    const profileKey = store.profileKey();
+    for (const { tag, grantId } of store.staleSigningOutMarkers(host, SIGNOUT_MARKER_STALE_MS)) {
+      const userId = store.tombstone(host, tag)?.userId;
+      if (grantId && userId && USER_ID_RE.test(userId) && this.tagOf(host, userId) === tag) {
+        const refs = [{ host, userId, slot: "legacy", profileKey: profileKey ?? "" }];
+        if (profileKey) refs.push({ host, userId, slot: "user", profileKey });
+        for (const ref of refs) {
+          if (store.accountRecord(ref)) continue;
+          if (!await this.slotHoldsGrant(ref, grantId)) continue;
+          await store.wipe(ref).catch(() => void 0);
+          this.log.info(`account ${tag}: finished a sign-out that was interrupted`);
+        }
+      }
+      await store.clearSigningOut(host, tag);
+    }
+  }
+  /**
+   * Are this slot's secrets the ones of `grantId` (the wipeIfStillDead rule)? A user slot by its
+   * device stamp; the legacy slot only while its key is this profile's AND it was that grant's.
+   */
+  async slotHoldsGrant(ref, grantId) {
+    const store = this.deps.store;
+    try {
+      if (ref.slot === "user") return (await store.loadDeviceKey(ref))?.grantId === grantId;
+      const legacy = store.legacyUser(ref.host);
+      return legacy?.userId === ref.userId && legacy.grantId === grantId && await store.legacyKeyIsOurs(ref);
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * "Sign in as <email>" from a folder whose account cannot be used here (review W1, security L3):
+   * an account still listed (its sign-in needs renewing, or its legacy key changed hands) is
+   * RENEWED; one that is gone is signed in `as` that user. Anything but a real tag of a valid user
+   * id on this host is ignored (the command can be reached from a notification link).
+   */
+  async signInAs(tag, userId) {
+    const host = this.hostNow;
+    if (!host || !isTag(tag) || !USER_ID_RE.test(userId) || this.tagOf(host, userId) !== tag) {
+      this.log.warn('a "Sign in as" for something that is not an account here was ignored');
+      return { outcome: "ignored" };
+    }
+    const held = this.byTag(tag);
+    return held && held.ref.userId === userId ? this.signIn({ kind: "renew", ref: held.ref }) : this.signIn({ kind: "as", tag, expectedUserId: userId });
+  }
+  /**
+   * Sign out of ONE account: its grant revoked in HQ, its slot wiped, its terminals, forwards and
+   * sockets closed in every window. With 2 or more accounts signed in, ask once, naming the email
+   * (decision 16), unless VS Code already asked (the Accounts menu).
+   */
+  async signOut(ref, opts) {
+    const b = this.get(ref);
+    if (!b) return false;
+    this.log.info(`signing out of account ${b.tag}`);
+    if (opts.confirm && this.count() >= 2) {
+      const ok = await this.deps.ui.confirm(COPY.confirmSignOut(b.email), COPY.signOut);
+      if (!ok) return false;
+    }
+    await b.service.signOut();
+    return true;
+  }
+  /** Is `ref` this window's active account? */
+  isActive(ref) {
+    const a = this.active();
+    return a !== null && sameAccount(a.ref, ref);
+  }
+  dispose() {
+    if (this.poll) clearInterval(this.poll);
+    for (const s of this.subscriptions) s.dispose();
+    for (const b of this.bundles.values()) b.dispose();
+    this.bundles.clear();
+    this.changedEmitter.dispose();
+    this.removedEmitter.dispose();
+    this.renewedEmitter.dispose();
+    this.addedEmitter.dispose();
+    this.usableEmitter.dispose();
+  }
+};
+
+// src/ports/ports.ts
+var vscode8 = __toESM(require("vscode"), 1);
+
 // ../hq-client/src/forward.ts
+var import_node_net = __toESM(require("node:net"), 1);
 var HEARTBEAT_MS = 3e4;
 function parsePort(v, min) {
   if (!v || !/^\d+$/.test(v)) return null;
@@ -10650,34 +14786,10 @@ async function startForward(deps, client, team, remotePort, localPort, opts = {}
   return { port: bound, close: () => close(0), done };
 }
 
-// src/util/text.ts
-var CONTROL_RANGES = [
-  [0, 31],
-  [127, 159]
-];
-var UNSAFE_RANGES = [
-  [173, 173],
-  [847, 847],
-  [1564, 1564],
-  [6158, 6158],
-  [8203, 8207],
-  [8232, 8238],
-  [8288, 8297],
-  [65279, 65279]
-];
-var esc = (n) => `\\u${n.toString(16).padStart(4, "0")}`;
-var rangesSource = (ranges) => ranges.map(([a, b]) => a === b ? esc(a) : `${esc(a)}-${esc(b)}`).join("");
-var charClass = (ranges) => new RegExp(`[${rangesSource(ranges)}]`, "g");
-var CONTROL_TEXT = charClass(CONTROL_RANGES);
-var UNSAFE_TEXT = charClass(UNSAFE_RANGES);
-function cleanLabel(value, max = 200) {
-  if (typeof value !== "string") return "";
-  return value.replace(CONTROL_TEXT, " ").replace(UNSAFE_TEXT, "").replace(/\s+/g, " ").trim().slice(0, max);
-}
-
 // src/ports/ports.ts
 var DENIED_FORWARD_PORTS = [2375, 2376, 9229, 9230];
-var specKey = (s) => `${s.workspaceId}:${s.remotePort}`;
+var tagOf = (a) => accountTag(a.host, a.userId);
+var specKey = (s) => `${tagOf(s.account)}:${s.workspaceId}:${s.remotePort}`;
 function forwardError(team, err) {
   if (err instanceof ConnectRefusedError) {
     const e = err.apiError;
@@ -10688,8 +14800,7 @@ function forwardError(team, err) {
     if (e.code === "REMOTE_UNSUPPORTED_RUNNER") return COPY.updateNeededLong(team);
     if (e.code === "RUNNER_UNAVAILABLE") {
       if (e.details?.hint === "reconnect") return COPY.forwardTeamOff(team);
-      if (e.details?.hint === "stopped") return COPY.forwardTeamStopped(team);
-      return COPY.wakeNoMachine(team);
+      return COPY.forwardTeamStopped(team);
     }
     if (e.code === "UPGRADE_REQUIRED" || e.status === 426) return COPY.tooOld;
     if (e.code === "REMOTE_TOKEN_INVALID" || e.status === 401) return COPY.renewSignIn;
@@ -10703,46 +14814,47 @@ function forwardError(team, err) {
   return COPY.forwardFailed(err instanceof Error ? cleanLabel(err.message) : COPY.unreachable);
 }
 var Ports = class {
-  constructor(service, memento) {
-    this.service = service;
-    this.memento = memento;
-    service.onRevoked(() => void this.closeAll(false));
-    service.onDidChange(() => this.restorePaused());
+  constructor(deps) {
+    this.deps = deps;
+    this.subscriptions.push(
+      deps.accounts.onAccountRemoved((ref) => void this.closeAccount(ref)),
+      deps.accounts.onAccountRenewed((ref) => void this.restartAccount(ref)),
+      deps.accounts.onDidChange(() => this.restorePaused())
+    );
     this.restorePaused();
   }
-  service;
-  memento;
+  deps;
   forwards = /* @__PURE__ */ new Map();
-  /** Offers per team: listening ports not forwarded and not dismissed. */
+  /** Offers per account + team: listening ports not forwarded and not dismissed. */
   detected = /* @__PURE__ */ new Map();
-  treeChanged = new vscode2.EventEmitter();
+  treeChanged = new vscode8.EventEmitter();
   onDidChangeTreeData = this.treeChanged.event;
   countChanged = new Emitter();
   onDidChangeCount = this.countChanged.event;
-  pausedKey() {
-    const host = this.service.host();
-    return host ? `hq:${host}:ports:forwards` : null;
-  }
-  dismissedKey() {
-    const host = this.service.host();
-    return host ? `hq:${host}:ports:dismissed` : null;
+  subscriptions = [];
+  get memento() {
+    return this.deps.memento;
   }
   /** Forwards that were on when the window closed come back paused (never started on their own). */
   restorePaused() {
-    const key = this.pausedKey();
-    if (!key || !this.service.signedIn()) return;
-    const specs = this.memento.get(key) ?? [];
-    for (const spec of specs) {
-      if (!this.forwards.has(specKey(spec)))
-        this.forwards.set(specKey(spec), { kind: "paused", spec });
+    const active = this.deps.accounts.active();
+    if (active) {
+      const specs = this.memento.get(portsKey(active.ref, "forwards"));
+      for (const raw of specs ?? []) {
+        const spec = { ...raw, account: raw.account ?? active.ref };
+        if (!sameAccount(spec.account, active.ref)) continue;
+        if (!this.forwards.has(specKey(spec)))
+          this.forwards.set(specKey(spec), { kind: "paused", spec });
+      }
     }
     this.fire();
   }
-  async persist() {
-    const key = this.pausedKey();
-    if (!key) return;
-    const specs = [...this.forwards.values()].filter((e) => e.kind !== "detected").map((e) => e.spec);
-    await this.memento.update(key, specs);
+  /** This account's forwards, as its paused list (only its own key is written). */
+  async persist(account) {
+    const b = this.deps.accounts.get(account);
+    if (!b) return;
+    const specs = [...this.forwards.values()].filter((e) => e.kind !== "detected").map((e) => e.spec).filter((spec) => sameAccount(spec.account, account));
+    await this.memento.update(portsKey(b.ref, "forwards"), specs);
   }
   fire() {
     this.treeChanged.fire(void 0);
@@ -10751,41 +14863,53 @@ var Ports = class {
   activeCount() {
     return [...this.forwards.values()].filter((e) => e.kind === "active").length;
   }
-  /** The machine said these ports are listening: offer the new ones, once. */
-  offer(team, ports) {
+  dismissedOf(account) {
+    const b = this.deps.accounts.get(account);
+    return b ? this.memento.get(portsKey(b.ref, "dismissed")) ?? [] : [];
+  }
+  /** The machine said these ports are listening (a terminal of `account`): offer the new ones, once. */
+  offer(account, team, ports) {
     const dismissed = new Set(
-      (this.memento.get(this.dismissedKey() ?? "") ?? []).filter(
-        (k) => k.startsWith(`${team.workspace.id}:`)
-      )
+      this.dismissedOf(account).filter((k) => k.startsWith(`${team.workspace.id}:`))
     );
     const next = new Set(
       ports.filter(
-        (p) => p >= 1024 && !DENIED_FORWARD_PORTS.includes(p) && !dismissed.has(`${team.workspace.id}:${p}`) && !this.forwards.has(specKey({ workspaceId: team.workspace.id, remotePort: p }))
+        (p) => p >= 1024 && !DENIED_FORWARD_PORTS.includes(p) && !dismissed.has(`${team.workspace.id}:${p}`) && !this.forwards.has(specKey({ account, workspaceId: team.workspace.id, remotePort: p }))
       )
     );
-    const before = this.detected.get(team.workspace.id)?.ports;
+    const key = `${tagOf(account)}:${team.workspace.id}`;
+    const before = this.detected.get(key)?.ports;
     if (before && before.size === next.size && [...next].every((p) => before.has(p))) return;
-    this.detected.set(team.workspace.id, { team, ports: next });
+    this.detected.set(key, { account, team, ports: next });
     this.fire();
   }
   async dismiss(entry) {
     if (entry.kind !== "detected") return;
-    const key = this.dismissedKey();
-    if (key) {
-      const list = new Set(this.memento.get(key) ?? []);
+    const b = this.deps.accounts.get(entry.account);
+    if (b) {
+      const list = new Set(this.dismissedOf(entry.account));
       list.add(`${entry.team.workspace.id}:${entry.port}`);
-      await this.memento.update(key, [...list]);
+      await this.memento.update(portsKey(b.ref, "dismissed"), [...list]);
     }
-    this.detected.get(entry.team.workspace.id)?.ports.delete(entry.port);
+    this.detected.get(`${tagOf(entry.account)}:${entry.team.workspace.id}`)?.ports.delete(entry.port);
     this.fire();
   }
-  /** Start a forward the person asked for (a click is the one thing allowed to wake the team). */
-  async start(team, remotePort, localPort) {
+  /**
+   * Start a forward the person asked for, AS `account` (a click is the one thing allowed to wake
+   * the team). `restart` replaces a running one (the account was renewed).
+   */
+  async start(account, team, remotePort, localPort, opts = {}) {
     if (DENIED_FORWARD_PORTS.includes(remotePort)) {
-      void vscode2.window.showErrorMessage(COPY.forwardRefusedPort(remotePort));
+      void vscode8.window.showErrorMessage(COPY.forwardRefusedPort(remotePort));
+      return;
+    }
+    const service = this.deps.accounts.get(account)?.service;
+    if (!service) {
+      this.deps.onAccountMissing?.(account);
       return;
     }
     const spec = {
+      account,
       orgSlug: team.org.slug,
       workspaceId: team.workspace.id,
       teamName: cleanLabel(team.workspace.name) || team.alias,
@@ -10794,13 +14918,13 @@ var Ports = class {
     };
     const key = specKey(spec);
     const current = this.forwards.get(key);
-    if (current?.kind === "active" || current?.kind === "starting") return;
+    if (!opts.restart && (current?.kind === "active" || current?.kind === "starting")) return;
     this.forwards.set(key, { kind: "starting", spec });
-    this.detected.get(team.workspace.id)?.ports.delete(remotePort);
+    this.detected.get(`${tagOf(account)}:${team.workspace.id}`)?.ports.delete(remotePort);
     this.fire();
     let handle;
     try {
-      handle = await this.service.call(
+      handle = await service.call(
         (client) => startForward(
           {
             now: Date.now,
@@ -10815,38 +14939,56 @@ var Ports = class {
         )
       );
     } catch (err) {
-      this.forwards.set(key, { kind: "paused", spec });
-      this.fire();
-      void vscode2.window.showErrorMessage(forwardError(spec.teamName, err));
+      if (this.forwards.get(key)?.kind === "starting") {
+        this.forwards.set(key, { kind: "paused", spec });
+        this.fire();
+        void vscode8.window.showErrorMessage(forwardError(spec.teamName, err));
+      }
       return;
     }
+    if (this.forwards.get(key)?.kind !== "starting") {
+      await handle.close().catch(() => void 0);
+      return;
+    }
+    const grantAtStart = service.currentGrant();
     const bound = { ...spec, localPort: handle.port };
     this.forwards.set(key, { kind: "active", spec: bound, handle });
-    await this.persist();
+    await this.persist(account);
     this.fire();
-    void vscode2.window.setStatusBarMessage(
+    void vscode8.window.setStatusBarMessage(
       COPY.forwarding(handle.port, spec.teamName, remotePort),
       5e3
     );
     void handle.done.then((code) => {
       const now = this.forwards.get(key);
       if (now?.kind !== "active" || now.handle !== handle) return;
+      const grantNow = service.currentGrant();
+      if (code !== 0 && grantNow !== null && grantNow !== grantAtStart) {
+        void this.start(account, team, remotePort, bound.localPort, { restart: true });
+        return;
+      }
       this.forwards.set(key, { kind: "paused", spec: bound });
       this.fire();
       if (code !== 0) {
-        void vscode2.window.showWarningMessage(COPY.forwardEnded(remotePort));
-        void this.service.refreshOrgs().catch(() => void 0);
+        void vscode8.window.showWarningMessage(COPY.forwardEnded(remotePort));
+        void service.refreshOrgs().catch(() => void 0);
       }
     });
   }
+  /** Resume a paused forward AS ITS ACCOUNT; a missing account says "Sign in as" and sends nothing. */
   async resume(entry) {
     if (entry.kind !== "paused") return;
-    const team = this.service.teams().find((t) => t.workspace.id === entry.spec.workspaceId && t.org.slug === entry.spec.orgSlug);
-    if (!team) {
-      void vscode2.window.showErrorMessage(COPY.forwardNotAllowed(entry.spec.teamName));
+    const b = this.deps.accounts.get(entry.spec.account);
+    if (!b) {
+      this.deps.onAccountMissing?.(entry.spec.account);
       return;
     }
-    await this.start(team, entry.spec.remotePort, entry.spec.localPort);
+    const team = b.service.teams().find((t) => t.workspace.id === entry.spec.workspaceId && t.org.slug === entry.spec.orgSlug);
+    if (!team) {
+      void vscode8.window.showErrorMessage(COPY.forwardNotAllowed(entry.spec.teamName));
+      return;
+    }
+    await this.start(entry.spec.account, team, entry.spec.remotePort, entry.spec.localPort);
   }
   async stop(entry) {
     if (entry.kind === "detected") return;
@@ -10854,23 +14996,51 @@ var Ports = class {
     const current = this.forwards.get(key);
     this.forwards.delete(key);
     if (current?.kind === "active") await current.handle.close();
-    await this.persist();
+    await this.persist(entry.spec.account);
     this.fire();
   }
   localUrl(entry) {
     return entry.kind === "active" ? `http://localhost:${entry.handle.port}` : null;
   }
-  /** Close every forward. `keep` leaves them listed as paused for the next window. */
+  /** One account signed out or revoked (any window): its forwards and offers go; others stay. */
+  async closeAccount(ref) {
+    for (const [k, e] of [...this.forwards]) {
+      if (e.kind === "detected" || !sameAccount(e.spec.account, ref)) continue;
+      this.forwards.delete(k);
+      if (e.kind === "active") await e.handle.close().catch(() => void 0);
+    }
+    for (const [k, d] of [...this.detected])
+      if (sameAccount(d.account, ref)) this.detected.delete(k);
+    this.fire();
+  }
+  /** Decision 26: the account was renewed elsewhere: each live forward restarts on its local port. */
+  async restartAccount(ref) {
+    const b = this.deps.accounts.get(ref);
+    for (const e of [...this.forwards.values()]) {
+      if (e.kind !== "active" || !sameAccount(e.spec.account, ref)) continue;
+      const team = b?.service.teams().find((t) => t.workspace.id === e.spec.workspaceId);
+      this.forwards.set(specKey(e.spec), { kind: "starting", spec: e.spec });
+      await e.handle.close().catch(() => void 0);
+      if (!team) {
+        this.forwards.set(specKey(e.spec), { kind: "paused", spec: e.spec });
+        continue;
+      }
+      await this.start(ref, team, e.spec.remotePort, e.spec.localPort, { restart: true });
+    }
+    this.fire();
+  }
+  /** Close every forward, keeping each account's list as paused for the next window. */
   async closeAll(keep) {
     const entries = [...this.forwards.values()];
     for (const e of entries) if (e.kind === "active") await e.handle.close().catch(() => void 0);
     if (keep) {
-      await this.persist();
+      const accounts = /* @__PURE__ */ new Map();
+      for (const e of entries)
+        if (e.kind !== "detected") accounts.set(tagOf(e.spec.account), e.spec.account);
+      for (const a of accounts.values()) await this.persist(a);
     } else {
       this.forwards.clear();
       this.detected.clear();
-      const key = this.pausedKey();
-      if (key) await this.memento.update(key, []);
     }
     this.fire();
   }
@@ -10879,24 +15049,30 @@ var Ports = class {
     const offers = [];
     for (const d of this.detected.values()) {
       for (const port of [...d.ports].sort((a, b) => a - b)) {
-        offers.push({ kind: "detected", team: d.team, port });
+        offers.push({ kind: "detected", account: d.account, team: d.team, port });
       }
     }
     return [...this.forwards.values(), ...offers];
   }
+  /** `team · <short label>` while 2 or more accounts are signed in (decision 21). */
+  withLabel(text, account) {
+    const label = this.deps.accounts.shortLabel(account);
+    return label ? `${text} \xB7 ${label}` : text;
+  }
   getTreeItem(entry) {
     if (entry.kind === "detected") {
-      const item2 = new vscode2.TreeItem(COPY.forwardDetected(entry.port));
-      item2.description = cleanLabel(entry.team.workspace.name);
+      const item2 = new vscode8.TreeItem(COPY.forwardDetected(entry.port));
+      item2.description = this.withLabel(cleanLabel(entry.team.workspace.name), entry.account);
       item2.contextValue = "port:detected";
-      item2.iconPath = new vscode2.ThemeIcon("radio-tower");
+      item2.iconPath = new vscode8.ThemeIcon("radio-tower");
       return item2;
     }
     const s = entry.spec;
-    const item = new vscode2.TreeItem(`${s.remotePort} \u2192 localhost:${s.localPort}`);
-    item.description = entry.kind === "paused" ? `${s.teamName} \xB7 ${COPY.forwardPaused}` : s.teamName;
+    const item = new vscode8.TreeItem(`${s.remotePort} \u2192 localhost:${s.localPort}`);
+    const team = this.withLabel(s.teamName, s.account);
+    item.description = entry.kind === "paused" ? `${team} \xB7 ${COPY.forwardPaused}` : team;
     item.contextValue = entry.kind === "active" ? "port:active" : entry.kind === "paused" ? "port:paused" : "port:starting";
-    item.iconPath = new vscode2.ThemeIcon(
+    item.iconPath = new vscode8.ThemeIcon(
       entry.kind === "active" ? "plug" : entry.kind === "starting" ? "sync~spin" : "debug-pause"
     );
     if (entry.kind === "paused") {
@@ -10906,18 +15082,19 @@ var Ports = class {
   }
   dispose() {
     void this.closeAll(true);
+    for (const s of this.subscriptions) s.dispose();
     this.treeChanged.dispose();
     this.countChanged.dispose();
   }
 };
 async function askForPorts() {
-  const remoteRaw = await vscode2.window.showInputBox({
+  const remoteRaw = await vscode8.window.showInputBox({
     prompt: COPY.forwardPrompt,
     validateInput: (v) => parsePort(v.trim(), 1024) === null ? COPY.forwardBadPort : null
   });
   if (remoteRaw === void 0) return null;
   const remote = parsePort(remoteRaw.trim(), 1024);
-  const localRaw = await vscode2.window.showInputBox({
+  const localRaw = await vscode8.window.showInputBox({
     prompt: COPY.forwardLocalPrompt,
     value: String(remote),
     validateInput: (v) => v.trim() === "" || parsePort(v.trim(), 1) !== null ? null : COPY.forwardBadLocal
@@ -10927,104 +15104,165 @@ async function askForPorts() {
   return { remote, local };
 }
 
-// src/status-bar.ts
-var vscode3 = __toESM(require("vscode"), 1);
-
-// src/tree/labels.ts
-function teamState(ws) {
-  if (ws.state === "running") return "running";
-  if (ws.state === "starting") return "starting";
-  return "off";
+// src/search/search-view.ts
+var vscode9 = __toESM(require("vscode"), 1);
+function groupByFile(account, team, res) {
+  const byPath = /* @__PURE__ */ new Map();
+  for (const m of res.matches) {
+    const list = byPath.get(m.path) ?? [];
+    list.push(m);
+    byPath.set(m.path, list);
+  }
+  const summary = {
+    kind: "summary",
+    text: res.matches.length === 0 ? COPY.searchNone : COPY.searchResults(res.matches.length, res.truncated)
+  };
+  return [
+    summary,
+    ...[...byPath.entries()].map(([path5, matches]) => ({
+      kind: "file",
+      account,
+      team,
+      path: path5,
+      matches
+    }))
+  ];
 }
-function canWriteTeam(team) {
-  return team.workspace.rights.forward === true;
-}
-function needsUpdate(team) {
-  return team.workspace.supported === false || team.workspace.filesSupported === false;
-}
-function teamDescription(team) {
-  const parts = [];
-  const state = teamState(team.workspace);
-  parts.push(
-    state === "running" ? COPY.stateRunning : state === "starting" ? COPY.stateStarting : COPY.stateOff
+async function withShownPaths(nodes, shownPath) {
+  return Promise.all(
+    nodes.map(
+      async (n) => n.kind === "file" ? { ...n, shown: await shownPath(n.team, n.path).catch(() => n.path) } : n
+    )
   );
-  if (needsUpdate(team)) parts.push(COPY.updateNeeded);
-  if (!canWriteTeam(team)) parts.push(COPY.viewOnly);
-  return parts.join(" \xB7 ");
 }
-function teamContextValue(team) {
-  return `team:${teamState(team.workspace)}:${canWriteTeam(team) ? "write" : "read"}`;
+function parseGlobs(text) {
+  return (text ?? "").split(",").map((g) => g.trim()).filter((g) => g.length > 0);
 }
-function sessionLabel(s) {
-  return cleanLabel(s.name) || s.id.slice(0, 8);
-}
-function sessionDescription(s) {
-  const parts = [s.ownerIsMe === true ? COPY.you : cleanLabel(s.ownerName)];
-  if (!s.canType) parts.push(COPY.viewOnly);
-  if (s.engine === "codex") parts.push(COPY.codex);
-  return parts.filter((p) => p.length > 0).join(" \xB7 ");
-}
-function sessionContextValue(s) {
-  return `session:${s.canType ? "type" : "view"}`;
-}
-function webUrl(host, target) {
-  return target.sessionId ? `${host}/sessions/${encodeURIComponent(target.sessionId)}` : `${host}/workspaces/${encodeURIComponent(target.workspaceId)}`;
-}
-function teamSettingsUrl(host, workspaceId) {
-  return `${host}/workspaces/${encodeURIComponent(workspaceId)}/settings`;
+var SearchView = class {
+  changed = new vscode9.EventEmitter();
+  onDidChangeTreeData = this.changed.event;
+  roots = [];
+  show(nodes) {
+    this.roots = nodes;
+    this.changed.fire(void 0);
+  }
+  clear() {
+    this.show([]);
+  }
+  /** An account signed out: its results go (another account's stay). */
+  clearAccount(isIt) {
+    if (this.roots.some((n) => n.kind === "file" && isIt(n.account))) this.clear();
+  }
+  getChildren(node) {
+    if (!node) return this.roots;
+    if (node.kind === "file") {
+      return node.matches.map((match) => ({
+        kind: "match",
+        account: node.account,
+        team: node.team,
+        match
+      }));
+    }
+    return [];
+  }
+  getTreeItem(node) {
+    if (node.kind === "summary") {
+      const item2 = new vscode9.TreeItem(node.text);
+      item2.contextValue = "search:summary";
+      return item2;
+    }
+    if (node.kind === "file") {
+      const item2 = new vscode9.TreeItem(
+        cleanLabel(node.shown ?? node.path),
+        vscode9.TreeItemCollapsibleState.Expanded
+      );
+      item2.description = String(node.matches.length);
+      item2.iconPath = new vscode9.ThemeIcon("file");
+      item2.contextValue = "search:file";
+      return item2;
+    }
+    const m = node.match;
+    const item = new vscode9.TreeItem(cleanLabel(m.preview).trim() || `${m.line}`);
+    item.description = `${m.line}`;
+    item.contextValue = "search:match";
+    item.command = {
+      command: "hq.search.open",
+      title: COPY.searchTitle,
+      arguments: [node]
+    };
+    return item;
+  }
+};
+async function openMatch(node, opener) {
+  if (node.kind !== "match") return;
+  if (hasControlChars(node.match.path)) {
+    void vscode9.window.showWarningMessage(COPY.fsControlName);
+    return;
+  }
+  if (!opener) return;
+  const uri = opener.uriOf(node.team, await opener.shownPath(node.team, node.match.path));
+  const line = Math.max(0, node.match.line - 1);
+  await vscode9.window.showTextDocument(uri, {
+    selection: new vscode9.Range(line, 0, line, 0),
+    preview: true
+  });
 }
 
 // src/status-bar.ts
+var vscode10 = __toESM(require("vscode"), 1);
 var StatusBar = class {
-  constructor(service, terminals, portsView) {
-    this.service = service;
+  constructor(accounts, terminals, portsView) {
+    this.accounts = accounts;
     this.terminals = terminals;
     this.main.name = COPY.statusTooltip;
     this.main.tooltip = COPY.statusTooltip;
-    this.main.command = "workbench.view.extension.hq";
+    this.main.command = "hq.accounts.primaryAction";
     this.ports.name = "AI Workforce One HQ ports";
     this.ports.command = "hq.ports.focus";
     this.subscriptions.push(
-      service.onDidChange(() => this.render()),
+      accounts.onDidChange(() => this.render()),
       terminals.onDidChange(() => this.render()),
       portsView.onDidChangeCount((n) => this.renderPorts(n))
     );
     this.render();
     this.renderPorts(portsView.activeCount());
   }
-  service;
+  accounts;
   terminals;
-  main = vscode3.window.createStatusBarItem(
+  main = vscode10.window.createStatusBarItem(
     "aiworkforceone.hq.status",
-    vscode3.StatusBarAlignment.Left,
+    vscode10.StatusBarAlignment.Left,
     10
   );
-  ports = vscode3.window.createStatusBarItem(
+  ports = vscode10.window.createStatusBarItem(
     "aiworkforceone.hq.ports",
-    vscode3.StatusBarAlignment.Left,
+    vscode10.StatusBarAlignment.Left,
     9
   );
   subscriptions = [];
+  /** The item's text now (also what the unit tier reads). */
+  text() {
+    return this.main.text;
+  }
   render() {
-    const account = this.service.account();
-    if (!account) {
-      this.main.text = `$(account) ${COPY.statusSignedOut}`;
+    const mine = this.accounts.active();
+    const active = this.terminals.active();
+    if (active) {
+      const owner = this.accounts.get(active.account);
+      const other = !mine || !sameAccount(mine.ref, active.account);
+      const email = cleanLabel(owner?.email ?? mine?.email ?? "");
+      const state = active.state === "waking" ? COPY.stateStarting : this.stateOf(owner?.service.teams() ?? [], active.team.workspace.id);
+      const team = COPY.statusTeam(email, cleanLabel(active.team.workspace.name), state);
+      this.main.text = `$(terminal) ${team}${other ? ` \xB7 ${COPY.statusOtherAccount}` : ""}`;
       this.main.show();
       return;
     }
-    const email = cleanLabel(account.user.email);
-    const active = this.terminals.active();
-    if (active) {
-      const state = active.state === "waking" ? COPY.stateStarting : this.stateOf(active.team.workspace.id);
-      this.main.text = `$(terminal) ${COPY.statusTeam(email, cleanLabel(active.team.workspace.name), state)}`;
-    } else {
-      this.main.text = `$(account) ${COPY.statusSignedIn(email)}`;
-    }
+    this.main.text = mine ? `$(account) ${COPY.statusSignedIn(cleanLabel(mine.email))}` : `$(account) ${COPY.statusSignedOut}`;
     this.main.show();
   }
-  /** The team's state from the last listing ("off", never "asleep"). */
-  stateOf(workspaceId) {
-    const team = this.service.teams().find((t) => t.workspace.id === workspaceId);
+  /** The team's state from that account's last listing ("off", never "asleep"). */
+  stateOf(teams, workspaceId) {
+    const team = teams.find((t) => t.workspace.id === workspaceId);
     if (!team) return COPY.stateRunning;
     const s = teamState(team.workspace);
     return s === "running" ? COPY.stateRunning : s === "starting" ? COPY.stateStarting : COPY.stateOff;
@@ -11045,10 +15283,10 @@ var StatusBar = class {
 };
 
 // src/terminal/terminals.ts
-var vscode5 = __toESM(require("vscode"), 1);
+var vscode12 = __toESM(require("vscode"), 1);
 
 // src/terminal/hq-pty.ts
-var vscode4 = __toESM(require("vscode"), 1);
+var vscode11 = __toESM(require("vscode"), 1);
 
 // ../shared/src/terminal-queries.ts
 var QUERY_RE = /\x1b\[[>=]?[0-9;]*c|\x1b\](?:10|11);\?(?:\x07|\x1b\\)/g;
@@ -11078,7 +15316,7 @@ function createTerminalQueryFilter() {
 }
 
 // ../hq-client/src/attach-session.ts
-var import_ws2 = __toESM(require_ws(), 1);
+var import_ws3 = __toESM(require_ws(), 1);
 var TOKEN_CHECK_MS = 6e4;
 var PRESENCE_MS = 6e4;
 var WAKE_RETRY_MS = 2e3;
@@ -11121,7 +15359,7 @@ function cleanPorts(value) {
 function createAttachSession(client, target, sink, opts = {}) {
   const { team, session } = target;
   const copy = { ...CLI_ATTACH_COPY, ...opts.copy ?? {} };
-  const make = opts.wsFactory ?? ((url, h) => new import_ws2.default(url, { headers: h }));
+  const make = opts.wsFactory ?? ((url, h) => new import_ws3.default(url, { headers: h }));
   const reconnectBase = opts.reconnectBaseMs ?? RECONNECT_BASE_MS;
   const echo = opts.echo ?? null;
   const wake = { since: null, said: null, cold: false, stillSaid: false, asleep: false };
@@ -11194,7 +15432,7 @@ ${copy.reconnecting}`);
     };
     let lastToken = (headers.Authorization ?? "").slice("Bearer ".length);
     const send = (frame) => {
-      if (ws.readyState === import_ws2.default.OPEN) ws.send(JSON.stringify(frame));
+      if (ws.readyState === import_ws3.default.OPEN) ws.send(JSON.stringify(frame));
     };
     const size = () => sink.size();
     let answerWaking = false;
@@ -11305,7 +15543,7 @@ ${copy.wakeTimeout(team)}`);
       const rttTimers = [];
       if (echo) {
         const ping = () => {
-          if (ws.readyState !== import_ws2.default.OPEN) return;
+          if (ws.readyState !== import_ws3.default.OPEN) return;
           try {
             ws.ping(String(Date.now()));
           } catch {
@@ -11330,7 +15568,7 @@ ${copy.wakeTimeout(team)}`);
         let pingSentAt = 0;
         livenessTimer = setInterval(
           () => {
-            if (ws.readyState !== import_ws2.default.OPEN) return;
+            if (ws.readyState !== import_ws3.default.OPEN) return;
             if (pingSentAt > lastPongAt && Date.now() - pingSentAt > timeout) {
               ws.terminate();
               return;
@@ -11519,7 +15757,7 @@ ${copy.detached}` });
     detach: () => {
       detachRequested = true;
       for (const hook of [...detachHooks]) hook();
-      if (detachHooks.size === 0 && current && current.readyState === import_ws2.default.CONNECTING) {
+      if (detachHooks.size === 0 && current && current.readyState === import_ws3.default.CONNECTING) {
         current.terminate();
       }
     },
@@ -12464,10 +16702,11 @@ function createTerminalFilter() {
 }
 
 // src/terminal/hq-pty.ts
-function terminalName(target, state) {
+function terminalName(target, state, label) {
   const base = COPY.terminalName(
     cleanLabel(target.team.workspace.name) || target.team.alias,
-    cleanLabel(target.session.name) || target.session.id.slice(0, 8)
+    cleanLabel(target.session.name) || target.session.id.slice(0, 8),
+    label
   );
   if (state.stopped) return `${base}${COPY.terminalSuffixStopped}`;
   if (state.waking) return `${base}${COPY.terminalSuffixWaking}`;
@@ -12484,12 +16723,13 @@ var HqPty = class {
     this.deps = deps;
     this.target = target;
     this.canType = target.session.canType;
+    this.lastName = terminalName(target, { canType: this.canType }, deps.accountLabel?.());
   }
   deps;
   target;
-  out = new vscode4.EventEmitter();
-  closed = new vscode4.EventEmitter();
-  name = new vscode4.EventEmitter();
+  out = new vscode11.EventEmitter();
+  closed = new vscode11.EventEmitter();
+  name = new vscode11.EventEmitter();
   onDidWrite = this.out.event;
   onDidClose = this.closed.event;
   onDidChangeName = this.name.event;
@@ -12501,6 +16741,13 @@ var HqPty = class {
   closedByUser = false;
   canType;
   waking = false;
+  stopped = false;
+  /** A re-attach was asked for (the account was renewed): the current attach ends quietly. */
+  reattaching = false;
+  /** The grant the current attach was made with. */
+  attachedGrant;
+  /** The name the tab was given last (relabels that change nothing are not sent). */
+  lastName;
   open(initial) {
     if (initial) this.dims = { cols: initial.columns, rows: initial.rows };
     setTimeout(() => void this.run(), initial ? 0 : 250);
@@ -12524,7 +16771,32 @@ var HqPty = class {
     this.out.fire(s);
   }
   rename() {
-    this.name.fire(terminalName(this.target, { canType: this.canType, waking: this.waking }));
+    const next = terminalName(
+      this.target,
+      { canType: this.canType, waking: this.waking, stopped: this.stopped },
+      this.deps.accountLabel?.()
+    );
+    if (next === this.lastName) return;
+    this.lastName = next;
+    this.name.fire(next);
+  }
+  /** The account count crossed 1 ↔ 2: the tab gains or loses the account label (decision 28). */
+  relabel() {
+    this.rename();
+  }
+  end() {
+    this.stopped = true;
+    this.rename();
+  }
+  /**
+   * Decision 26: the account's slot holds a new grant. Detach the session attached with the old
+   * client and attach again with the new one, in this tab (it says "reconnecting").
+   */
+  reattach() {
+    if (this.closedByUser || this.stopped || !this.session) return;
+    if (this.attachedGrant === this.deps.service.currentGrant()) return;
+    this.reattaching = true;
+    this.session.detach();
   }
   async createEcho() {
     const mode = this.deps.localEchoMode();
@@ -12548,12 +16820,18 @@ var HqPty = class {
     });
   }
   async run() {
-    const client = await this.deps.service.client();
-    if (!client) {
-      this.say(COPY.signedOutWelcome);
+    this.reattaching = false;
+    let client;
+    try {
+      client = await this.deps.service.client();
+    } catch (err) {
+      await this.deps.service.handleError(err);
+      const ours = err instanceof AccountGoneError || err instanceof NeedsSignInError || err instanceof SecretsBusyError;
+      this.say(ours ? err.message : COPY.signedOutWelcome);
       this.closed.fire(1);
       return;
     }
+    this.attachedGrant = this.deps.service.grantOfClient(client);
     const { team, session } = this.target;
     const teamName = cleanLabel(team.workspace.name) || team.alias;
     this.echo = await this.createEcho();
@@ -12621,6 +16899,7 @@ ${COPY.pressKeyToWake}` : text,
     try {
       end = await attach.run();
     } catch (err) {
+      if (this.again()) return;
       await this.deps.service.handleError(err);
       this.say(err instanceof Error ? err.message : COPY.unreachable);
       this.deps.onState?.("ended");
@@ -12628,25 +16907,52 @@ ${COPY.pressKeyToWake}` : text,
     } finally {
       this.echo?.close();
     }
+    if (this.again()) return;
     this.deps.onState?.("ended");
     if (this.closedByUser) return;
     if (end.kind === "refused") {
       if (end.status === 426) this.deps.service.showTooOld();
       if (end.status === 401) {
         await this.deps.service.refreshOrgs().catch(() => void 0);
+        if (this.renewedUnder()) return;
       }
       this.say(COPY.terminalRefused(end.status));
-      this.name.fire(terminalName(this.target, { canType: this.canType, stopped: true }));
+      this.end();
       return;
     }
     if (end.kind === "lost") {
       this.say(COPY.connectionLost);
-      this.name.fire(terminalName(this.target, { canType: this.canType, stopped: true }));
+      this.end();
       return;
     }
     if (end.message) this.say(end.message);
-    this.name.fire(terminalName(this.target, { canType: this.canType, stopped: true }));
-    if (end.unauthorized) await this.deps.service.refreshOrgs().catch(() => void 0);
+    this.end();
+    if (end.unauthorized) {
+      await this.deps.service.refreshOrgs().catch(() => void 0);
+      this.renewedUnder();
+    }
+  }
+  /**
+   * The account's slot holds another grant than the one this attach used (renewed elsewhere, and
+   * its 4401/401 arrived before the renew was noticed): attach again in this tab. True if so.
+   */
+  renewedUnder() {
+    const now = this.deps.service.currentGrant();
+    if (this.closedByUser || now === null || now === this.attachedGrant) return false;
+    this.stopped = false;
+    this.rename();
+    this.say(COPY.reconnecting);
+    void this.run();
+    return true;
+  }
+  /** The attach ended because `reattach` asked: say so and attach again with the new grant. */
+  again() {
+    if (!this.reattaching || this.closedByUser) return false;
+    this.reattaching = false;
+    this.session = null;
+    this.say(COPY.reconnecting);
+    void this.run();
+    return true;
   }
   dispose() {
     this.out.dispose();
@@ -12656,6 +16962,7 @@ ${COPY.pressKeyToWake}` : text,
 };
 
 // src/terminal/terminals.ts
+var LISTING_FRESH_MS = 1e4;
 function teamIsRunning(ws) {
   return teamState(ws) === "running";
 }
@@ -12668,16 +16975,16 @@ var EchoOrgOffNotice = class {
   show(team) {
     if (this.said.has(team.org.id)) return;
     this.said.add(team.org.id);
-    void vscode5.window.showInformationMessage(
+    void vscode12.window.showInformationMessage(
       COPY.localEchoOrgOff(cleanLabel(team.org.name) || team.org.slug)
     );
   }
 };
-var Terminals = class {
+var Terminals = class _Terminals {
   constructor(deps) {
     this.deps = deps;
     this.subscriptions.push(
-      vscode5.window.onDidCloseTerminal((t) => {
+      vscode12.window.onDidCloseTerminal((t) => {
         for (const [id, o] of this.open) {
           if (o.terminal === t) {
             this.open.delete(id);
@@ -12686,9 +16993,18 @@ var Terminals = class {
           }
         }
       }),
-      vscode5.window.onDidChangeActiveTerminal(() => this.changed.fire())
+      vscode12.window.onDidChangeActiveTerminal(() => this.changed.fire()),
+      deps.accounts.onAccountRemoved((ref) => this.closeAccount(ref)),
+      deps.accounts.onAccountRenewed((ref) => {
+        for (const o of this.open.values()) {
+          if (sameAccount(o.pty.target.account, ref)) o.pty.reattach();
+        }
+      }),
+      // Decision 28: the label appears or goes when the account count crosses 1 ↔ 2.
+      deps.accounts.onDidChange(() => {
+        for (const o of this.open.values()) o.pty.relabel();
+      })
     );
-    deps.service.onRevoked(() => this.closeAll());
   }
   deps;
   echoOrgOff = new EchoOrgOffNotice();
@@ -12697,9 +17013,12 @@ var Terminals = class {
   /** A terminal opened, closed, or changed state (the status bar listens). */
   onDidChange = this.changed.event;
   subscriptions = [];
+  static key(target) {
+    return `${accountTag(target.account.host, target.account.userId)}:${target.session.id}`;
+  }
   /** The HQ session behind the active terminal, if it is one of ours. */
   active() {
-    const t = vscode5.window.activeTerminal;
+    const t = vscode12.window.activeTerminal;
     if (!t) return null;
     for (const o of this.open.values()) {
       if (o.terminal === t) return { ...o.pty.target, state: o.state };
@@ -12707,30 +17026,38 @@ var Terminals = class {
     return null;
   }
   attach(target) {
-    const existing = this.open.get(target.session.id);
+    const key = _Terminals.key(target);
+    const existing = this.open.get(key);
     if (existing) {
       existing.terminal.show();
       return;
     }
+    const service = this.deps.accounts.get(target.account)?.service;
+    if (!service) {
+      this.deps.onAccountMissing?.(target.account);
+      return;
+    }
     const entry = { state: "attached" };
+    const label = () => this.deps.accounts.shortLabel(target.account);
     const pty = new HqPty(
       {
-        service: this.deps.service,
-        localEchoMode: () => vscode5.workspace.getConfiguration("hq").get("localEcho", "auto"),
+        service,
+        accountLabel: label,
+        localEchoMode: () => vscode12.workspace.getConfiguration("hq").get("localEcho", "auto"),
         vsCodeTypeaheadOn: () => {
-          const c = vscode5.workspace.getConfiguration("terminal.integrated");
+          const c = vscode12.workspace.getConfiguration("terminal.integrated");
           return vsCodeTypeaheadActive(
             { enabled: c.get("localEchoEnabled"), threshold: c.get("localEchoLatencyThreshold") },
-            vscode5.env.remoteName !== void 0
+            vscode12.env.remoteName !== void 0
           );
         },
         onEchoOrgOff: (team) => this.echoOrgOff.show(team),
-        windowActive: () => vscode5.window.state.focused || vscode5.window.state.active === true,
-        offerPorts: this.deps.offerPorts,
+        windowActive: () => vscode12.window.state.focused || vscode12.window.state.active === true,
+        offerPorts: (team, ports) => this.deps.offerPorts(target.account, team, ports),
         // The team's live state (F11), else the last listing: an off team attaches passively.
         teamRunning: async (team) => {
           try {
-            const ws = await this.deps.service.call(
+            const ws = await service.call(
               async (c) => (await c.request("GET", teamPath(team), { org: team.org.slug })).body
             );
             return teamIsRunning(ws);
@@ -12741,28 +17068,37 @@ var Terminals = class {
         onState: (state) => {
           entry.state = state;
           this.changed.fire();
+          if (state === "attached") {
+            void service.refreshOrgsIfOlder(LISTING_FRESH_MS);
+            this.deps.onAttached?.(target.account, target.team);
+          }
         }
       },
       target
     );
-    const terminal = vscode5.window.createTerminal({
-      name: terminalName(target, { canType: target.session.canType }),
+    const terminal = vscode12.window.createTerminal({
+      name: terminalName(target, { canType: target.session.canType }, label()),
       pty,
-      iconPath: new vscode5.ThemeIcon(target.session.canType ? "terminal" : "eye"),
+      iconPath: new vscode12.ThemeIcon(target.session.canType ? "terminal" : "eye"),
       isTransient: true
     });
     entry.terminal = terminal;
     entry.pty = pty;
-    this.open.set(target.session.id, entry);
+    this.open.set(key, entry);
     terminal.show();
     this.changed.fire();
   }
-  /** F12: start an HQ session on this team from this computer, then attach it. */
-  async newSession(team) {
+  /** F12: start an HQ session on this team, as `account`, from this computer, then attach it. */
+  async newSession(account, team) {
+    const service = this.deps.accounts.get(account)?.service;
+    if (!service) {
+      this.deps.onAccountMissing?.(account);
+      return;
+    }
     const body = { cols: 120, rows: 32 };
     let created;
     try {
-      created = await this.deps.service.call(
+      created = await service.call(
         async (c) => (await c.request("POST", `${teamPath(team)}/sessions`, {
           body,
           org: team.org.slug,
@@ -12770,10 +17106,21 @@ var Terminals = class {
         })).body
       );
     } catch (err) {
-      void vscode5.window.showErrorMessage(newSessionError(err));
+      void vscode12.window.showErrorMessage(newSessionError(err));
       return;
     }
-    this.attach({ team, session: created });
+    this.attach({ account, team, session: created });
+  }
+  /** One account signed out or revoked (any window): only its terminals close. */
+  closeAccount(ref) {
+    let closed = false;
+    for (const [k, o] of [...this.open]) {
+      if (!sameAccount(o.pty.target.account, ref)) continue;
+      this.open.delete(k);
+      o.terminal.dispose();
+      closed = true;
+    }
+    if (closed) this.changed.fire();
   }
   closeAll() {
     for (const o of this.open.values()) o.terminal.dispose();
@@ -12798,43 +17145,77 @@ function newSessionError(err) {
 }
 
 // src/tree/account-tree.ts
-var vscode6 = __toESM(require("vscode"), 1);
+var vscode13 = __toESM(require("vscode"), 1);
 var AccountTree = class {
-  constructor(service) {
-    this.service = service;
-    service.onDidChange(() => this.changed.fire(void 0));
+  constructor(accounts) {
+    this.accounts = accounts;
+    accounts.onDidChange(() => this.changed.fire(void 0));
   }
-  service;
-  changed = new vscode6.EventEmitter();
+  accounts;
+  changed = new vscode13.EventEmitter();
   onDidChangeTreeData = this.changed.event;
+  /** Active first, then by email (never by recency). */
+  ordered() {
+    const active = this.accounts.active();
+    const rest = this.accounts.list().filter((b) => b !== active);
+    return active ? [active, ...rest] : rest;
+  }
   getChildren(node) {
-    if (node || !this.service.signedIn()) return [];
-    return [{ kind: "user" }, { kind: "host" }, { kind: "devices" }, { kind: "signOut" }];
+    if (node?.kind === "account") return [{ kind: "devices", ref: node.ref, email: node.email }];
+    if (node) return [];
+    const all = this.ordered();
+    if (all.length === 0) return [];
+    return [
+      ...all.map((b) => ({ kind: "account", ref: b.ref, email: b.email })),
+      { kind: "addAccount" },
+      { kind: "host" }
+    ];
   }
   getTreeItem(node) {
-    const account = this.service.account();
     switch (node.kind) {
-      case "user": {
-        const item = new vscode6.TreeItem(cleanLabel(account?.user.email ?? ""));
-        item.description = cleanLabel(account?.user.name ?? "");
-        item.iconPath = new vscode6.ThemeIcon("account");
-        return item;
-      }
-      case "host": {
-        const item = new vscode6.TreeItem(COPY.accountHost(this.service.host() ?? ""));
-        item.iconPath = new vscode6.ThemeIcon("globe");
+      case "account": {
+        const b = this.accounts.get(node.ref);
+        const active = b !== null && this.accounts.active() === b;
+        const item = new vscode13.TreeItem(
+          cleanLabel(node.email),
+          vscode13.TreeItemCollapsibleState.Expanded
+        );
+        item.iconPath = new vscode13.ThemeIcon("account");
+        item.contextValue = active ? "account:active" : "account:other";
+        if (b?.health === "needs-sign-in") {
+          item.description = COPY.needsSignInDescription;
+          item.command = {
+            command: "hq.renewAccount",
+            title: COPY.needsSignInDescription,
+            arguments: [node.ref]
+          };
+        } else if (active) {
+          item.description = COPY.accountActiveNote;
+        } else {
+          item.command = {
+            command: "hq.switchAccount",
+            title: COPY.pickAccount,
+            arguments: [node.ref]
+          };
+        }
         return item;
       }
       case "devices": {
-        const item = new vscode6.TreeItem(COPY.manageDevices);
-        item.iconPath = new vscode6.ThemeIcon("link-external");
+        const item = new vscode13.TreeItem(COPY.manageDevices);
+        item.iconPath = new vscode13.ThemeIcon("link-external");
+        item.tooltip = COPY.manageDevicesBrowserNote(cleanLabel(node.email));
         item.command = { command: "hq.manageDevices", title: COPY.manageDevices };
         return item;
       }
-      case "signOut": {
-        const item = new vscode6.TreeItem(COPY.signOut);
-        item.iconPath = new vscode6.ThemeIcon("sign-out");
-        item.command = { command: "hq.signOut", title: COPY.signOut };
+      case "addAccount": {
+        const item = new vscode13.TreeItem(COPY.addAnotherAccount);
+        item.iconPath = new vscode13.ThemeIcon("add");
+        item.command = { command: "hq.addAccount", title: COPY.addAnotherAccount };
+        return item;
+      }
+      case "host": {
+        const item = new vscode13.TreeItem(COPY.accountHost(this.accounts.host() ?? ""));
+        item.iconPath = new vscode13.ThemeIcon("globe");
         return item;
       }
     }
@@ -12845,16 +17226,19 @@ var AccountTree = class {
 };
 
 // src/tree/teams-tree.ts
-var vscode7 = __toESM(require("vscode"), 1);
+var vscode14 = __toESM(require("vscode"), 1);
+function tagOfNode(node) {
+  return accountTag(node.account.host, node.account.userId);
+}
 var SESSIONS_TTL_MS = 3e4;
 var TeamsTree = class {
-  constructor(service) {
-    this.service = service;
-    service.onDidChange(() => this.refresh(false));
-    service.onRevoked(() => this.sessions.clear());
+  constructor(accounts) {
+    this.accounts = accounts;
+    accounts.onDidChange(() => this.refresh(false));
+    accounts.onAccountRemoved(() => this.sessions.clear());
   }
-  service;
-  changed = new vscode7.EventEmitter();
+  accounts;
+  changed = new vscode14.EventEmitter();
   onDidChangeTreeData = this.changed.event;
   sessions = /* @__PURE__ */ new Map();
   /** Teams a wake is in flight for (the row shows a spinner). */
@@ -12863,32 +17247,45 @@ var TeamsTree = class {
     if (clearSessions) this.sessions.clear();
     this.changed.fire(void 0);
   }
+  /** Keyed by the team ALONE: a wake is about the machine, whichever account asked. */
   setWaking(teamId, on) {
     if (on) this.waking.add(teamId);
     else this.waking.delete(teamId);
     this.changed.fire(void 0);
   }
   getChildren(node) {
-    if (!this.service.signedIn()) return [];
     if (!node) {
+      const active = this.accounts.active();
+      if (!active) return [];
+      const account = active.ref;
       const byOrg = /* @__PURE__ */ new Map();
-      for (const team of this.service.teams()) {
+      for (const team of active.service.teams()) {
         const entry = byOrg.get(team.org.id) ?? { org: team.org, teams: [] };
         entry.teams.push(team);
         byOrg.set(team.org.id, entry);
       }
-      return [...byOrg.values()].map((e) => ({ kind: "org", org: e.org, teams: e.teams }));
+      return [...byOrg.values()].map((e) => ({
+        kind: "org",
+        account,
+        org: e.org,
+        teams: e.teams
+      }));
     }
-    if (node.kind === "org") return node.teams.map((team) => ({ kind: "team", team }));
-    if (node.kind === "team") return this.sessionNodes(node.team);
+    if (node.kind === "org") {
+      return node.teams.map((team) => ({ kind: "team", account: node.account, team }));
+    }
+    if (node.kind === "team") return this.sessionNodes(node.account, node.team);
     return [];
   }
-  async sessionNodes(team) {
-    const cached = this.sessions.get(team.workspace.id);
+  async sessionNodes(account, team) {
+    const service = this.accounts.get(account)?.service;
+    if (!service) return [];
+    const key = `${service.tag}:${team.workspace.id}`;
+    const cached = this.sessions.get(key);
     let list = cached && Date.now() - cached.at < SESSIONS_TTL_MS ? cached.list : void 0;
     if (list === void 0) {
       try {
-        list = await this.service.call(
+        list = await service.call(
           async (c) => (await c.request("GET", `${teamPath(team)}/sessions`, {
             org: team.org.slug
           })).body
@@ -12896,43 +17293,43 @@ var TeamsTree = class {
       } catch {
         list = null;
       }
-      this.sessions.set(team.workspace.id, { at: Date.now(), list });
+      this.sessions.set(key, { at: Date.now(), list });
     }
-    if (list === null) return [{ kind: "message", team, text: COPY.sessionsFailed }];
-    if (list.length === 0) return [{ kind: "message", team, text: COPY.noSessions }];
-    return list.map((session) => ({ kind: "session", team, session }));
+    if (list === null) return [{ kind: "message", account, team, text: COPY.sessionsFailed }];
+    if (list.length === 0) return [{ kind: "message", account, team, text: COPY.noSessions }];
+    return list.map((session) => ({ kind: "session", account, team, session }));
   }
   getTreeItem(node) {
     switch (node.kind) {
       case "org": {
-        const item = new vscode7.TreeItem(
+        const item = new vscode14.TreeItem(
           cleanLabel(node.org.name) || node.org.slug,
-          vscode7.TreeItemCollapsibleState.Expanded
+          vscode14.TreeItemCollapsibleState.Expanded
         );
         item.contextValue = "org";
-        item.iconPath = new vscode7.ThemeIcon("organization");
+        item.iconPath = new vscode14.ThemeIcon("organization");
         return item;
       }
       case "team": {
         const t = node.team;
-        const item = new vscode7.TreeItem(
+        const item = new vscode14.TreeItem(
           cleanLabel(t.workspace.name) || t.alias,
-          vscode7.TreeItemCollapsibleState.Collapsed
+          vscode14.TreeItemCollapsibleState.Collapsed
         );
-        item.id = `team:${t.workspace.id}`;
+        item.id = `${tagOfNode(node)}:team:${t.workspace.id}`;
         item.description = teamDescription(t);
         item.contextValue = teamContextValue(t);
         const state = this.waking.has(t.workspace.id) ? "starting" : teamState(t.workspace);
-        item.iconPath = state === "running" ? new vscode7.ThemeIcon("circle-filled", new vscode7.ThemeColor("testing.iconPassed")) : state === "starting" ? new vscode7.ThemeIcon("sync~spin") : new vscode7.ThemeIcon("circle-outline");
+        item.iconPath = state === "running" ? new vscode14.ThemeIcon("circle-filled", new vscode14.ThemeColor("testing.iconPassed")) : state === "starting" ? new vscode14.ThemeIcon("sync~spin") : new vscode14.ThemeIcon("circle-outline");
         item.tooltip = needsUpdate(t) ? COPY.updateNeededLong(cleanLabel(t.workspace.name)) : state === "off" ? COPY.teamOffTooltip(cleanLabel(t.workspace.name)) : cleanLabel(t.workspace.name);
         return item;
       }
       case "session": {
-        const item = new vscode7.TreeItem(sessionLabel(node.session));
-        item.id = `session:${node.session.id}`;
+        const item = new vscode14.TreeItem(sessionLabel(node.session));
+        item.id = `${tagOfNode(node)}:session:${node.session.id}`;
         item.description = sessionDescription(node.session);
         item.contextValue = sessionContextValue(node.session);
-        item.iconPath = new vscode7.ThemeIcon(node.session.canType ? "terminal" : "eye");
+        item.iconPath = new vscode14.ThemeIcon(node.session.canType ? "terminal" : "eye");
         item.command = {
           command: "hq.attachSession",
           title: "Attach",
@@ -12941,7 +17338,7 @@ var TeamsTree = class {
         return item;
       }
       case "message": {
-        const item = new vscode7.TreeItem(node.text);
+        const item = new vscode14.TreeItem(node.text);
         item.contextValue = "message";
         return item;
       }
@@ -12953,2005 +17350,59 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.1.1".length > 0 ? "0.1.1" : "0.0.0-dev";
-
-// src/fs/events-client.ts
-var import_ws3 = __toESM(require_ws(), 1);
-
-// ../shared/src/remote-fs.types.ts
-var FS_MAX_TEXT_BYTES = 8 * 1024 * 1024;
-var FS_READ_CHUNK_BYTES = 4 * 1024 * 1024;
-var FS_MAX_BINARY_BYTES = 64 * 1024 * 1024;
-var FS_MAX_WRITE_BYTES = 16 * 1024 * 1024;
-var HQ_HEADER_MASKED = "x-hq-masked";
-var HQ_HEADER_ACTIVITY = "x-hq-activity";
-var HQ_ACTIVITY_BACKGROUND = "background";
-var REMOTE_EVENTS_WS_PATH = "/ws/remote/events";
-
-// src/fs/events-client.ts
-var LIVE_STATES = /* @__PURE__ */ new Set([
-  "running",
-  "starting",
-  "asleep",
-  "stopped"
-]);
-var CHANGE_KINDS = /* @__PURE__ */ new Set(["created", "changed", "deleted"]);
-var ERROR_CODES = /* @__PURE__ */ new Set([
-  "FORBIDDEN",
-  "NOT_FOUND",
-  "TOO_MANY_SUBSCRIPTIONS",
-  "BAD_FRAME",
-  "THROTTLED"
-]);
-function isRecord(v) {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-function parseEventsFrame(v) {
-  if (!isRecord(v) || typeof v.type !== "string") return null;
-  const ws = v.workspaceId;
-  const hasWs = typeof ws === "string" && ws.length > 0;
-  const state = (s) => typeof s === "string" && LIVE_STATES.has(s);
-  switch (v.type) {
-    case "fs-changed":
-      if (!hasWs || typeof v.seq !== "number" || !Array.isArray(v.changes) || !v.changes.every(
-        (c) => isRecord(c) && typeof c.path === "string" && (c.kind === void 0 || typeof c.kind === "string" && CHANGE_KINDS.has(c.kind))
-      )) {
-        return null;
-      }
-      return v;
-    case "workspace-state":
-      return hasWs && state(v.state) ? v : null;
-    case "listen-ports":
-      return hasWs && Array.isArray(v.ports) && v.ports.every((p) => Number.isInteger(p)) ? v : null;
-    case "resync":
-    case "unsubscribed":
-      return hasWs ? v : null;
-    case "subscribed":
-      return hasWs && state(v.state) && typeof v.watch === "boolean" ? v : null;
-    case "error":
-      return typeof v.code === "string" && ERROR_CODES.has(v.code) && (v.workspaceId === void 0 || hasWs) ? v : null;
-    default:
-      return null;
-  }
-}
-var defaultWs2 = (url, headers) => (
-  // A handshake that never completes must not hold the org's one socket forever.
-  new import_ws3.WebSocket(url, { headers, perMessageDeflate: false, handshakeTimeout: 2e4 })
-);
-var OrgSocket = class {
-  constructor(org, deps, emit) {
-    this.org = org;
-    this.deps = deps;
-    this.emit = emit;
-    this.backoff = deps.minBackoffMs ?? 1e3;
-  }
-  org;
-  deps;
-  emit;
-  ws = null;
-  subs = /* @__PURE__ */ new Map();
-  // workspaceId → refcount
-  /** Teams whose watcher the server says runs now (`subscribed` with `watch: true`). */
-  acked = /* @__PURE__ */ new Set();
-  backoff;
-  timer = null;
-  tokenTimer = null;
-  lastToken = null;
-  everConnected = false;
-  closedForGood = false;
-  /**
-   * A dial is in flight (between the first await and the socket existing). Set SYNCHRONOUSLY, so
-   * VS Code's burst of `watch()` calls on a folder open shares ONE connect (nonprod 2026-09-30:
-   * one window opened 7 sockets in 300 ms, 3 were refused 429 and the orphans held the slots).
-   */
-  connecting = false;
-  /** The refusal was already surfaced; cleared when a socket opens. */
-  refusalSaid = false;
-  /** A 401 was already handed to the service; cleared when a socket opens. */
-  unauthorizedSaid = false;
-  isOpen() {
-    return this.ws !== null && this.ws.readyState === import_ws3.WebSocket.OPEN;
-  }
-  /** Closed for good (a 4401, or a close): a new watch builds a new socket. */
-  get dead() {
-    return this.closedForGood;
-  }
-  ensureConnected() {
-    if (this.closedForGood || this.connecting || this.ws !== null || this.timer !== null) return;
-    void this.connect();
-  }
-  /** Dial once. Callers go through `ensureConnected` (or the reconnect timer), never in parallel. */
-  async connect() {
-    this.connecting = true;
-    let client;
-    let headers;
-    try {
-      client = await this.deps.client().catch(() => null);
-      if (!client || this.closedForGood) return this.scheduleReconnect();
-      headers = await client.upgradeHeaders(REMOTE_EVENTS_WS_PATH, this.org);
-    } catch (err) {
-      if (err instanceof HqApiError && err.status === 401) {
-        this.backoff = this.deps.maxBackoffMs ?? 3e4;
-        this.unauthorized();
-      }
-      return this.scheduleReconnect();
-    } finally {
-      this.connecting = false;
-    }
-    if (this.closedForGood) return;
-    this.lastToken = /^Bearer (.+)$/.exec(headers.Authorization ?? "")?.[1] ?? null;
-    const ws = (this.deps.ws ?? defaultWs2)(wsUrl(client.host, REMOTE_EVENTS_WS_PATH), headers);
-    this.adopt(ws);
-    ws.on("open", () => {
-      const gap = this.everConnected;
-      this.everConnected = true;
-      this.refusalSaid = false;
-      this.unauthorizedSaid = false;
-      this.backoff = this.deps.minBackoffMs ?? 1e3;
-      for (const id of this.subs.keys()) this.sendSubscribe(id);
-      this.startTokenRotation(client);
-      if (gap) this.gapPending = new Set(this.subs.keys());
-    });
-    ws.on("message", (data) => {
-      let raw;
-      try {
-        raw = JSON.parse(data.toString());
-      } catch {
-        return;
-      }
-      const frame = parseEventsFrame(raw);
-      if (frame === null) return;
-      if (frame.type === "subscribed") {
-        if (frame.watch && frame.state === "running") this.acked.add(frame.workspaceId);
-        else this.acked.delete(frame.workspaceId);
-        if (this.gapPending?.delete(frame.workspaceId)) {
-          this.emit(frame);
-          this.emit({ type: "resync", workspaceId: frame.workspaceId });
-          return;
-        }
-      }
-      if (frame.type === "workspace-state" && frame.state !== "running") {
-        this.acked.delete(frame.workspaceId);
-      }
-      if (frame.type === "unsubscribed" || frame.type === "error" && frame.workspaceId) {
-        if (frame.workspaceId) this.acked.delete(frame.workspaceId);
-      }
-      this.emit(frame);
-    });
-    const down = () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      this.acked.clear();
-      this.stopTokenRotation();
-      if (this.subs.size > 0) this.scheduleReconnect();
-    };
-    ws.on("close", (code) => {
-      if (code === 4401) {
-        this.closedForGood = true;
-        this.unauthorized();
-      }
-      down();
-    });
-    ws.on("error", () => void 0);
-    ws.on("unexpected-response", (_req, res) => {
-      res.resume();
-      const status = res.statusCode ?? 0;
-      if (status === 404 || status === 401 || status === 403) {
-        this.backoff = this.deps.maxBackoffMs ?? 3e4;
-      }
-      if (status === 401) this.unauthorized();
-      if (status === 429) {
-        this.backoff = Math.max(
-          this.deps.refusedBackoffMs ?? 3e5,
-          this.deps.minBackoffMs ?? 1e3
-        );
-        if (!this.refusalSaid) {
-          this.refusalSaid = true;
-          try {
-            this.deps.onRefused?.(this.org, status);
-          } catch {
-          }
-        }
-      }
-      ws.terminate();
-    });
-  }
-  /**
-   * Hand a possible revocation to the service: one check at a time. The guard re-arms when that
-   * check has finished and the quiet time has passed (L2a), or when a socket opens, so a later
-   * real revocation is still reported.
-   */
-  unauthorized() {
-    if (this.unauthorizedSaid) return;
-    this.unauthorizedSaid = true;
-    let check;
-    try {
-      check = Promise.resolve(this.deps.onUnauthorized?.());
-    } catch {
-      check = Promise.resolve();
-    }
-    const quiet = new Promise((r) => {
-      const t = setTimeout(r, this.deps.unauthorizedQuietMs ?? 3e4);
-      t.unref?.();
-    });
-    void Promise.all([check.catch(() => void 0), quiet]).then(() => {
-      this.unauthorizedSaid = false;
-    });
-  }
-  /**
-   * Make `ws` THE socket. One that was already there is closed first: a socket this client no
-   * longer tracks would keep holding one of the server's per-sign-in slots and receive frames
-   * nobody reads.
-   */
-  adopt(ws) {
-    const old = this.ws;
-    this.ws = ws;
-    if (old !== null && old !== ws) {
-      this.acked.clear();
-      this.stopTokenRotation();
-      old.terminate();
-    }
-  }
-  gapPending = null;
-  scheduleReconnect() {
-    if (this.closedForGood || this.timer !== null || this.subs.size === 0) return;
-    const wait = this.backoff;
-    this.backoff = Math.min(this.backoff * 2, this.deps.maxBackoffMs ?? 3e4);
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.connect();
-    }, wait);
-    this.timer.unref?.();
-  }
-  startTokenRotation(client) {
-    this.stopTokenRotation();
-    this.tokenTimer = setInterval(() => {
-      void client.accessToken().then((token) => {
-        if (token !== this.lastToken && this.isOpen()) {
-          this.lastToken = token;
-          this.ws.send(JSON.stringify({ type: "remote-token", token }));
-        }
-      }).catch(() => void 0);
-    }, this.deps.tokenEveryMs ?? 6e4);
-    this.tokenTimer.unref?.();
-  }
-  stopTokenRotation() {
-    if (this.tokenTimer !== null) clearInterval(this.tokenTimer);
-    this.tokenTimer = null;
-  }
-  sendSubscribe(id) {
-    if (this.isOpen()) this.ws.send(JSON.stringify({ type: "subscribe", workspaceId: id }));
-  }
-  sendUnsubscribe(id) {
-    if (this.isOpen()) this.ws.send(JSON.stringify({ type: "unsubscribe", workspaceId: id }));
-  }
-  close() {
-    this.closedForGood = true;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
-    this.stopTokenRotation();
-    const ws = this.ws;
-    this.ws = null;
-    this.acked.clear();
-    ws?.close(1e3, "done");
-  }
-};
-var EventsHub = class {
-  constructor(deps) {
-    this.deps = deps;
-  }
-  deps;
-  orgs = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Set();
-  onFrame(listener) {
-    this.listeners.add(listener);
-    return { dispose: () => void this.listeners.delete(listener) };
-  }
-  emit(frame) {
-    for (const l of [...this.listeners]) l(frame);
-  }
-  /** Watch one team (refcounted). The first watch of an org opens its socket. */
-  subscribe(team) {
-    const slug = team.org.slug;
-    let org = this.orgs.get(slug);
-    if (!org || org.dead) {
-      org = new OrgSocket(slug, this.deps, (f) => this.emit(f));
-      this.orgs.set(slug, org);
-    }
-    const id = team.workspace.id;
-    const n = org.subs.get(id) ?? 0;
-    org.subs.set(id, n + 1);
-    if (n === 0) org.sendSubscribe(id);
-    org.ensureConnected();
-    let disposed = false;
-    return {
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        const left = (org.subs.get(id) ?? 1) - 1;
-        if (left > 0) {
-          org.subs.set(id, left);
-          return;
-        }
-        org.subs.delete(id);
-        org.acked.delete(id);
-        org.sendUnsubscribe(id);
-        if (org.subs.size === 0) {
-          org.close();
-          this.orgs.delete(slug);
-        }
-      }
-    };
-  }
-  /** Is this team's change stream live right now (socket open, subscription acknowledged)? */
-  isLive(team) {
-    const org = this.orgs.get(team.org.slug);
-    return org !== void 0 && org.isOpen() && org.acked.has(team.workspace.id);
-  }
-  /** Sign-out, revocation, host change: every socket goes. */
-  closeAll() {
-    for (const org of this.orgs.values()) org.close();
-    this.orgs.clear();
-  }
-};
-
-// src/fs/fs-api.ts
-var FsApiError = class extends Error {
-  constructor(status, code, message, details) {
-    super(message);
-    this.status = status;
-    this.code = code;
-    this.details = details;
-    this.name = "FsApiError";
-  }
-  status;
-  code;
-  details;
-};
-function activityHeaders(opts) {
-  return opts?.background === true ? { [HQ_HEADER_ACTIVITY]: HQ_ACTIVITY_BACKGROUND } : void 0;
-}
-async function toError(res) {
-  let body = {};
-  try {
-    body = await res.json();
-  } catch {
-  }
-  const message = typeof body.error === "string" ? body.error : typeof body.message === "string" ? body.message : `HQ answered ${res.status}`;
-  return new FsApiError(
-    res.status,
-    typeof body.code === "string" ? body.code : void 0,
-    message,
-    typeof body.details === "object" && body.details !== null ? body.details : void 0
-  );
-}
-var HqFsApi = class {
-  constructor(client) {
-    this.client = client;
-  }
-  client;
-  base(team) {
-    return `${teamPath(team)}/fs`;
-  }
-  q(path4) {
-    return encodeURIComponent(path4);
-  }
-  async json(res) {
-    if (!res.ok) throw await toError(res);
-    return await res.json();
-  }
-  async tree(team, path4, cursor, opts) {
-    const c = await this.client();
-    const headers = activityHeaders(opts);
-    const res = await c.send(
-      "GET",
-      `${this.base(team)}/tree?path=${this.q(path4)}${cursor ? `&cursor=${this.q(cursor)}` : ""}`,
-      { org: team.org.slug, ...headers ? { headers } : {} }
-    );
-    return this.json(res);
-  }
-  /** Every page of one folder (one request per 1,000 entries). */
-  async listAll(team, path4, opts) {
-    const out = [];
-    let cursor;
-    for (let pages = 0; pages < 1e3; pages++) {
-      const page = await this.tree(team, path4, cursor, opts);
-      out.push(...page.entries);
-      if (!page.nextCursor) break;
-      cursor = page.nextCursor;
-    }
-    return out;
-  }
-  async stat(team, path4, opts) {
-    const c = await this.client();
-    const headers = activityHeaders(opts);
-    return this.json(
-      await c.send("GET", `${this.base(team)}/stat?path=${this.q(path4)}`, {
-        org: team.org.slug,
-        ...headers ? { headers } : {}
-      })
-    );
-  }
-  async read(team, path4, ifNoneMatch) {
-    const c = await this.client();
-    const res = await c.send("GET", `${this.base(team)}/file?path=${this.q(path4)}`, {
-      org: team.org.slug,
-      ...ifNoneMatch ? { headers: { "if-none-match": ifNoneMatch } } : {}
-    });
-    if (res.status === 304) return { kind: "not-modified", etag: res.headers.get("etag") ?? "" };
-    if (!res.ok) throw await toError(res);
-    return {
-      kind: "bytes",
-      bytes: new Uint8Array(await res.arrayBuffer()),
-      etag: res.headers.get("etag") ?? "",
-      masked: res.headers.get(HQ_HEADER_MASKED) === "1"
-    };
-  }
-  async write(team, path4, bytes, pre) {
-    const c = await this.client();
-    const res = await c.send("PUT", `${this.base(team)}/file?path=${this.q(path4)}`, {
-      org: team.org.slug,
-      raw: bytes,
-      signed: true,
-      headers: "ifMatch" in pre ? { "if-match": pre.ifMatch } : { "if-none-match": "*" }
-    });
-    return this.json(res);
-  }
-  async mkdir(team, path4) {
-    const c = await this.client();
-    return this.json(
-      await c.send("POST", `${this.base(team)}/dir`, {
-        org: team.org.slug,
-        json: { path: path4 },
-        signed: true
-      })
-    );
-  }
-  async remove(team, path4, recursive) {
-    const c = await this.client();
-    const res = await c.send(
-      "DELETE",
-      `${this.base(team)}/entry?path=${this.q(path4)}${recursive ? "&recursive=1" : ""}`,
-      { org: team.org.slug, signed: true }
-    );
-    if (!res.ok) throw await toError(res);
-  }
-  async rename(team, from, to, overwrite) {
-    const c = await this.client();
-    return this.json(
-      await c.send("POST", `${this.base(team)}/rename`, {
-        org: team.org.slug,
-        json: { from, to, overwrite },
-        signed: true
-      })
-    );
-  }
-  async search(team, req) {
-    const c = await this.client();
-    return this.json(
-      await c.send("POST", `${this.base(team)}/search/text`, {
-        org: team.org.slug,
-        json: req,
-        signed: true
-      })
-    );
-  }
-};
-
-// src/fs/fs-core.ts
-var import_node_crypto6 = require("node:crypto");
-
-// src/fs/caches.ts
-var LISTING_TTL_MS = 3e4;
-var CONTENT_MAX_BYTES = 20 * 1024 * 1024;
-var CONTENT_MAX_ENTRIES = 200;
-var ListingCache = class {
-  constructor(now = Date.now) {
-    this.now = now;
-  }
-  now;
-  folders = /* @__PURE__ */ new Map();
-  stats = /* @__PURE__ */ new Map();
-  team(teamId) {
-    let folders = this.folders.get(teamId);
-    if (!folders) {
-      folders = /* @__PURE__ */ new Map();
-      this.folders.set(teamId, folders);
-    }
-    let stats = this.stats.get(teamId);
-    if (!stats) {
-      stats = /* @__PURE__ */ new Map();
-      this.stats.set(teamId, stats);
-    }
-    return { folders, stats };
-  }
-  /** A folder's entries, or undefined when not cached (or older than the TTL while `fresh` is false). */
-  folder(teamId, dir, fresh) {
-    const f = this.folders.get(teamId)?.get(dir);
-    if (!f) return void 0;
-    if (!fresh && this.now() - f.at > LISTING_TTL_MS) return void 0;
-    return f.entries;
-  }
-  /** The last folder listing whatever its age (a machine that is off still shows what it had). */
-  staleFolder(teamId, dir) {
-    return this.folders.get(teamId)?.get(dir)?.entries;
-  }
-  putFolder(teamId, dir, entries) {
-    const t = this.team(teamId);
-    const merged = entries.map((e) => this.keepMasked(t.stats.get(e.path), e));
-    t.folders.set(dir, { entries: merged, at: this.now() });
-    for (const e of merged) t.stats.set(e.path, e);
-    return merged;
-  }
-  stat(teamId, path4) {
-    return this.stats.get(teamId)?.get(path4);
-  }
-  /** Record one stat (a save, a stat call); the masked flag survives while the etag is the same. */
-  putStat(teamId, stat) {
-    const t = this.team(teamId);
-    const merged = this.keepMasked(t.stats.get(stat.path), stat);
-    t.stats.set(stat.path, merged);
-    const dir = parentOf(stat.path);
-    const f = t.folders.get(dir);
-    if (f) {
-      const i = f.entries.findIndex((e) => e.path === stat.path);
-      if (i === -1) f.entries = [...f.entries, merged];
-      else f.entries[i] = merged;
-    }
-    return merged;
-  }
-  markMasked(teamId, path4, etag) {
-    const s = this.stats.get(teamId)?.get(path4);
-    if (s && s.etag === etag) s.masked = true;
-  }
-  /** A path changed on the machine: forget it, its folder's listing, and (for a folder) below it. */
-  invalidate(teamId, path4) {
-    const t = this.team(teamId);
-    t.stats.delete(path4);
-    t.folders.delete(parentOf(path4));
-    const prefix = path4 === "" ? "" : `${path4}/`;
-    for (const key of [...t.folders.keys()]) {
-      if (key === path4 || prefix !== "" && key.startsWith(prefix)) t.folders.delete(key);
-    }
-    for (const key of [...t.stats.keys()]) {
-      if (prefix !== "" && key.startsWith(prefix)) t.stats.delete(key);
-    }
-  }
-  /** Forget one path's stat only (its folder's listing stays). */
-  dropStat(teamId, path4) {
-    this.stats.get(teamId)?.delete(path4);
-  }
-  /** The `n` most recently listed folders other than the root (the refresh re-reads these). */
-  recentFolders(teamId, n) {
-    return [...this.folders.get(teamId)?.entries() ?? []].filter(([dir]) => dir !== "").sort((a, b) => b[1].at - a[1].at).slice(0, n).map(([dir]) => dir);
-  }
-  /** The folders this team has listed (the resync re-reads exactly these). */
-  cachedFolders(teamId) {
-    return [...this.folders.get(teamId)?.keys() ?? []];
-  }
-  clearTeam(teamId) {
-    this.folders.delete(teamId);
-    this.stats.delete(teamId);
-  }
-  clear() {
-    this.folders.clear();
-    this.stats.clear();
-  }
-  keepMasked(prior, next) {
-    return prior?.masked === true && prior.etag === next.etag ? { ...next, masked: true } : { ...next };
-  }
-};
-function parentOf(path4) {
-  const i = path4.lastIndexOf("/");
-  return i === -1 ? "" : path4.slice(0, i);
-}
-var ContentCache = class {
-  constructor(maxBytes = CONTENT_MAX_BYTES, maxEntries = CONTENT_MAX_ENTRIES) {
-    this.maxBytes = maxBytes;
-    this.maxEntries = maxEntries;
-  }
-  maxBytes;
-  maxEntries;
-  entries = /* @__PURE__ */ new Map();
-  bytes = 0;
-  /** The bytes for exactly this etag (a different etag is a miss). */
-  get(key, etag) {
-    const e = this.entries.get(key);
-    if (!e || etag === void 0 || e.etag !== etag) return void 0;
-    this.entries.delete(key);
-    this.entries.set(key, e);
-    return e.bytes;
-  }
-  /** Whatever was last read for this key, whatever its etag (served only while the machine is off). */
-  last(key) {
-    return this.entries.get(key)?.bytes;
-  }
-  put(key, etag, bytes) {
-    this.drop(key);
-    if (bytes.byteLength > this.maxBytes) return;
-    this.entries.set(key, { etag, bytes });
-    this.bytes += bytes.byteLength;
-    while (this.bytes > this.maxBytes || this.entries.size > this.maxEntries) {
-      const oldest = this.entries.keys().next().value;
-      if (oldest === void 0) break;
-      this.drop(oldest);
-    }
-  }
-  drop(key) {
-    const e = this.entries.get(key);
-    if (!e) return;
-    this.entries.delete(key);
-    this.bytes -= e.bytes.byteLength;
-  }
-  /** Every cached key under a prefix (a team, or a folder that went away). */
-  dropPrefix(prefix) {
-    for (const key of [...this.entries.keys()]) if (key.startsWith(prefix)) this.drop(key);
-  }
-  keys() {
-    return [...this.entries.keys()];
-  }
-  clear() {
-    this.entries.clear();
-    this.bytes = 0;
-  }
-  get size() {
-    return this.bytes;
-  }
-};
-
-// src/fs/fs-core.ts
-var FsCoreError = class extends Error {
-  constructor(kind, message) {
-    super(message);
-    this.kind = kind;
-    this.name = "FsCoreError";
-  }
-  kind;
-};
-var SignedOutError = class extends FsCoreError {
-  constructor() {
-    super("unavailable", COPY.signedOutWelcome);
-  }
-};
-var MAX_EDIT_BYTES = FS_MAX_WRITE_BYTES;
-var OWN_WRITE_MS = 5e3;
-var ABSENT_TTL_MS = 3e4;
-var ABSENT_MAX = 2e3;
-var THROTTLE_RETRIES = 3;
-var THROTTLE_WAIT_MAX_MS = 1e4;
-var REFRESH_FOLDERS_MAX = 20;
-var TeamGate = class {
-  constructor(max) {
-    this.max = max;
-  }
-  max;
-  active = 0;
-  queue = [];
-  async run(priority, fn) {
-    if (this.active >= this.max) {
-      await new Promise((go) => {
-        const item = { priority, go };
-        if (priority === "listing") {
-          const i = this.queue.findIndex((q) => q.priority !== "listing");
-          if (i === -1) this.queue.push(item);
-          else this.queue.splice(i, 0, item);
-        } else this.queue.push(item);
-      });
-    }
-    this.active += 1;
-    try {
-      return await fn();
-    } finally {
-      this.active -= 1;
-      this.queue.shift()?.go();
-    }
-  }
-};
-var UNSAFE_NAME = new RegExp(
-  `[${rangesSource(CONTROL_RANGES)}${rangesSource(UNSAFE_RANGES)}/\\\\]`
-);
-function isSafeName(name) {
-  return name !== "" && name !== "." && name !== ".." && !UNSAFE_NAME.test(name);
-}
-var UNSAFE_CHARS = new RegExp(UNSAFE_NAME.source, "g");
-var REPLACEMENT = String.fromCharCode(65533);
-function shownName(name) {
-  return isSafeName(name) ? name : name.replace(UNSAFE_CHARS, REPLACEMENT);
-}
-function suffixedName(cleaned, real, hexLength = 6) {
-  const h = (0, import_node_crypto6.createHash)("sha256").update(real).digest("hex").slice(0, hexLength);
-  const dot = cleaned.lastIndexOf(".");
-  return dot > 0 ? `${cleaned.slice(0, dot)} ~${h}${cleaned.slice(dot)}` : `${cleaned} ~${h}`;
-}
-var CONTROL_IN_PATH = new RegExp(`[${rangesSource(CONTROL_RANGES)}]`);
-function hasControlChars(realPath) {
-  return CONTROL_IN_PATH.test(realPath);
-}
-function controlNameError() {
-  return new FsCoreError("no-permissions", COPY.fsControlName);
-}
-function isDotSegment(seg) {
-  return seg === "" || seg === "." || seg === "..";
-}
-function baseName(path4) {
-  const i = path4.lastIndexOf("/");
-  return i === -1 ? path4 : path4.slice(i + 1);
-}
-var HqFsCore = class {
-  constructor(deps) {
-    this.deps = deps;
-    this.now = deps.now ?? Date.now;
-    this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    this.listings = new ListingCache(this.now);
-    deps.events.onFrame((f) => void this.onEvent(f));
-  }
-  deps;
-  listings;
-  contents = new ContentCache();
-  ownWrites = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Set();
-  now;
-  /** Watched teams (refcounted), for the root refresh while their stream is down. */
-  watched = /* @__PURE__ */ new Map();
-  refreshTimer = null;
-  /** The last issue per team (absent = none), so the UI hears a change once. */
-  issues = /* @__PURE__ */ new Map();
-  gates = /* @__PURE__ */ new Map();
-  /** `team:path` → until when a 404 is believed (the negative cache). */
-  absent = /* @__PURE__ */ new Map();
-  /** Listings being fetched now: a probe below one waits for it instead of asking. */
-  listing = /* @__PURE__ */ new Map();
-  /** Stats being fetched now: the same path asked twice at once is asked once. */
-  stating = /* @__PURE__ */ new Map();
-  sleep;
-  /** VS-18: `team:realDir\0shown` → the real name behind a cleaned one. */
-  realNames = /* @__PURE__ */ new Map();
-  /** The reverse: `team:realDir\0real` → the name it is shown under. */
-  shownOf = /* @__PURE__ */ new Map();
-  /** Hostile names given a suffix, kept while the real name exists (W2: stable names). */
-  suffixed = /* @__PURE__ */ new Set();
-  /**
-   * LOW 1c: `team:shownPath` → the REAL path whose bytes were served under it. A shown name can move
-   * to another file between listings (a plain file later takes the cleaned name); a save of the old
-   * tab must never land on the new file.
-   */
-  servedFrom = /* @__PURE__ */ new Map();
-  /**
-   * Bumped by `clear()` (sign-out, revocation). An answer to a request that started before it is
-   * dropped, never written into the caches it just emptied (security review L3).
-   */
-  generation = 0;
-  onDidChange(listener) {
-    this.listeners.add(listener);
-    return { dispose: () => void this.listeners.delete(listener) };
-  }
-  fire(changes) {
-    if (changes.length === 0) return;
-    const shown = changes.map((c) => ({ ...c, path: this.toShown(c.team, c.path) }));
-    for (const l of [...this.listeners]) l(shown);
-  }
-  nameKey(team, dir, name) {
-    return `${team.workspace.id}:${dir}\0${name}`;
-  }
-  /** Drop every shown-name record of `path` itself and of everything below it (M1). */
-  forgetShownNames(team, path4) {
-    const id = team.workspace.id;
-    if (path4 !== "") {
-      const own = this.nameKey(team, parentOf(path4), baseName(path4));
-      const shown = this.shownOf.get(own);
-      if (shown !== void 0) this.realNames.delete(this.nameKey(team, parentOf(path4), shown));
-      this.shownOf.delete(own);
-      this.suffixed.delete(own);
-    }
-    const inside = `${id}:${path4}\0`;
-    const below = path4 === "" ? `${id}:` : `${id}:${path4}/`;
-    for (const map of [this.realNames, this.shownOf, this.suffixed]) {
-      for (const k of [...map.keys()]) {
-        if (k.startsWith(inside) || k.startsWith(below)) map.delete(k);
-      }
-    }
-  }
-  /**
-   * The path VS Code shows for a real one (W4: search results use it too, one URI per file). A
-   * hostile segment in a folder we hold no listing of lists that folder ONCE first (LOW 3), so a
-   * search hit never opens under its plain twin's name.
-   */
-  async shownPath(team, realPath) {
-    const generation = this.generation;
-    const budget = { listed: false };
-    let dir = "";
-    for (const seg of realPath === "" ? [] : realPath.split("/")) {
-      if (!isSafeName(seg)) await this.listOnce(team, dir, generation, budget);
-      dir = dir === "" ? seg : `${dir}/${seg}`;
-    }
-    return this.toShown(team, realPath);
-  }
-  /**
-   * List `dir` if we hold no listing of it, at most ONCE per resolution (LOW 2): after one lazy
-   * listing, or a failed one, the rest of the path is passed through unchanged. True when a
-   * listing of `dir` is now held.
-   */
-  async listOnce(team, dir, generation, budget) {
-    if (this.listings.staleFolder(team.workspace.id, dir) !== void 0) return true;
-    if (budget.listed) return false;
-    const parts = dir === "" ? [] : dir.split("/");
-    for (let i = 1; i <= parts.length; i++) {
-      const until = this.absent.get(this.key(team, parts.slice(0, i).join("/")));
-      if (until !== void 0 && until > this.now()) return false;
-    }
-    budget.listed = true;
-    await this.fetchListing(team, dir, generation).catch(() => void 0);
-    return this.listings.staleFolder(team.workspace.id, dir) !== void 0;
-  }
-  /** Each real segment as the Explorer shows it: plain as is, hostile cleaned (and suffixed). */
-  toShown(team, realPath) {
-    if (realPath === "") return "";
-    let dir = "";
-    const out = [];
-    for (const seg of realPath.split("/")) {
-      out.push(this.shownSegment(team, dir, seg));
-      dir = dir === "" ? seg : `${dir}/${seg}`;
-    }
-    return out.join("/");
-  }
-  shownSegment(team, dir, real) {
-    if (isSafeName(real)) return real;
-    const known = this.shownOf.get(this.nameKey(team, dir, real));
-    if (known !== void 0) return known;
-    const cleaned = shownName(real);
-    const owner = this.realNames.get(this.nameKey(team, dir, cleaned));
-    const plainTaken = (this.listings.staleFolder(team.workspace.id, dir) ?? []).some(
-      (e) => baseName(e.path) === cleaned
-    );
-    return owner !== void 0 && owner !== real || plainTaken ? suffixedName(cleaned, real) : cleaned;
-  }
-  /** `toReal` from what is mapped already, never a request (the Explorer decoration asks it). */
-  toRealKnown(team, shown) {
-    let real = "";
-    for (const seg of shown === "" ? [] : shown.split("/")) {
-      const next = this.realNames.get(this.nameKey(team, real, seg)) ?? seg;
-      real = real === "" ? next : `${real}/${next}`;
-    }
-    return real;
-  }
-  /**
-   * Is this shown path a file HQ can list but never open (a control character in its real name)?
-   * The Explorer marks it; every open, save, rename and delete refuses it without a request.
-   */
-  isUnopenable(team, shown) {
-    return hasControlChars(this.toRealKnown(team, shown));
-  }
-  /**
-   * The real path behind a path VS Code gave us (the reverse of `toShown`, via the listings). A
-   * cleaned segment whose folder was not listed this session (a restored editor tab, after a
-   * sign-out) lists that folder once and looks again (W3).
-   */
-  async toReal(team, shown, generation = this.generation) {
-    if (shown === "") return "";
-    let real = "";
-    const budget = { listed: false };
-    for (const seg of shown.split("/")) {
-      let name = this.realNames.get(this.nameKey(team, real, seg));
-      if (name === void 0 && seg.includes(REPLACEMENT)) {
-        const held = this.listings.staleFolder(team.workspace.id, real) !== void 0;
-        const listedNow = !held && await this.listOnce(team, real, generation, budget);
-        if (listedNow) {
-          name = this.realNames.get(this.nameKey(team, real, seg));
-          const listing = this.listings.staleFolder(team.workspace.id, real) ?? [];
-          const child = real === "" ? seg : `${real}/${seg}`;
-          if (name === void 0 && !listing.some((e) => e.path === child)) {
-            this.noteAbsent(team, child);
-          }
-        }
-      }
-      const next = name ?? seg;
-      real = real === "" ? next : `${real}/${next}`;
-    }
-    return real;
-  }
-  /**
-   * The entries of one folder as VS Code sees them: `.`/`..` dropped, hostile names cleaned and
-   * remembered, so operations reach the real file. Rebuilt from THIS listing only (security review
-   * M1). A hostile name whose cleaned text collides (with a plain name or with another hostile one)
-   * gets a stable, unique suffix from its REAL name, whatever the listing order (W2), and keeps it
-   * for as long as that real name exists.
-   */
-  shownEntries(team, dir, entries) {
-    const prefix = `${team.workspace.id}:${dir}\0`;
-    for (const k of [...this.realNames.keys()]) if (k.startsWith(prefix)) this.realNames.delete(k);
-    for (const k of [...this.shownOf.keys()]) if (k.startsWith(prefix)) this.shownOf.delete(k);
-    const present = new Set(entries.map((e) => this.nameKey(team, dir, baseName(e.path))));
-    for (const k of [...this.suffixed]) {
-      if (k.startsWith(prefix) && !present.has(k)) this.suffixed.delete(k);
-    }
-    const out = [];
-    const taken = /* @__PURE__ */ new Set();
-    const hostile = [];
-    for (const e of entries) {
-      const name = baseName(e.path);
-      if (isSafeName(name)) {
-        taken.add(name);
-        out.push([name, e.type]);
-      } else if (!isDotSegment(name)) hostile.push(e);
-    }
-    hostile.sort((x, y) => baseName(x.path) < baseName(y.path) ? -1 : 1);
-    const cleanedCount = /* @__PURE__ */ new Map();
-    for (const e of hostile) {
-      const c = shownName(baseName(e.path));
-      cleanedCount.set(c, (cleanedCount.get(c) ?? 0) + 1);
-    }
-    for (const e of hostile) {
-      const real = baseName(e.path);
-      const key = this.nameKey(team, dir, real);
-      const cleaned = shownName(real);
-      const suffix = this.suffixed.has(key) || taken.has(cleaned) || (cleanedCount.get(cleaned) ?? 0) > 1;
-      let shown = suffix ? suffixedName(cleaned, real) : cleaned;
-      for (const len of [12, 24, 64]) {
-        if (!taken.has(shown)) break;
-        shown = suffixedName(cleaned, real, len);
-      }
-      if (taken.has(shown)) continue;
-      taken.add(shown);
-      if (suffix) this.suffixed.add(key);
-      this.realNames.set(this.nameKey(team, dir, shown), real);
-      this.shownOf.set(key, shown);
-      out.push([shown, e.type]);
-    }
-    return out;
-  }
-  key(team, path4) {
-    return `${team.workspace.id}:${path4}`;
-  }
-  /** The team an `hq://<org>/<alias>` names, among this sign-in's teams. */
-  team(orgSlug, alias) {
-    const t = this.deps.teams().find((x) => x.org.slug === orgSlug && x.alias === alias);
-    if (!t) throw new FsCoreError("unavailable", COPY.fsTeamGone);
-    return t;
-  }
-  rootReadOnly(team) {
-    return team.workspace.rights.files?.write !== true;
-  }
-  view(team, s) {
-    return {
-      type: s.type,
-      size: s.size,
-      mtimeMs: s.mtimeMs,
-      readonly: this.rootReadOnly(team) || s.readonly !== void 0 || s.masked === true || s.type === "file" && s.size > MAX_EDIT_BYTES
-    };
-  }
-  /**
-   * Every server call. It waits its turn at the team's gate (nonprod 2026-09-30: opening a window
-   * sent 100+ requests at once and HQ throttled them all), a throttled READ waits what HQ asked and
-   * tries again (a write is never replayed), a success clears the team's issue and a typed 409
-   * records one.
-   */
-  async call(team, run, opts = {}) {
-    const gate = this.gateFor(team);
-    const generation = this.generation;
-    let out;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        out = await gate.run(opts.priority ?? "normal", run);
-        break;
-      } catch (err) {
-        if (opts.read && attempt < THROTTLE_RETRIES && isThrottled(err)) {
-          await this.sleep(retryAfterMs(err));
-          continue;
-        }
-        if (generation !== this.generation) throw new SignedOutError();
-        const issue = this.issueOf(err);
-        if (issue) this.setIssue(team, issue);
-        throw err;
-      }
-    }
-    if (generation !== this.generation) throw new SignedOutError();
-    this.setIssue(team, null);
-    return out;
-  }
-  gateFor(team) {
-    let g = this.gates.get(team.workspace.id);
-    if (!g) {
-      g = new TeamGate(this.deps.maxInFlight ?? 6);
-      this.gates.set(team.workspace.id, g);
-    }
-    return g;
-  }
-  // ── known absent (VS Code's own probes: .vscode/*, .github/*, .claude/*, ...) ─────────────────
-  noteAbsent(team, path4) {
-    if (this.absent.size >= ABSENT_MAX) this.absent.clear();
-    this.absent.set(this.key(team, path4), this.now() + ABSENT_TTL_MS);
-  }
-  /** Forget what we believed absent at `path` and below it (it may exist now). */
-  forgetAbsent(team, path4) {
-    const key = this.key(team, path4);
-    this.absent.delete(key);
-    const below = `${key}/`;
-    for (const k of [...this.absent.keys()]) if (k.startsWith(below)) this.absent.delete(k);
-  }
-  /** A listing we may answer from now: live or fresh in the cache, or one being fetched. */
-  async knownListing(team, dir) {
-    const cached = this.listings.folder(team.workspace.id, dir, this.deps.events.isLive(team));
-    if (cached) return cached;
-    const pending = this.listing.get(this.key(team, dir));
-    return pending ? pending.catch(() => void 0) : void 0;
-  }
-  /**
-   * Is `path` certainly not there? Yes when a recent 404 said so, or when the nearest listed
-   * ancestor has no such child (or has a FILE where the path needs a folder). Never a request.
-   */
-  async knownAbsent(team, path4) {
-    if (path4 === "") return false;
-    const until = this.absent.get(this.key(team, path4));
-    if (until !== void 0) {
-      if (until > this.now()) return true;
-      this.absent.delete(this.key(team, path4));
-    }
-    const parts = path4.split("/");
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const listing = await this.knownListing(team, parts.slice(0, i).join("/"));
-      if (!listing) continue;
-      const child = parts.slice(0, i + 1).join("/");
-      const entry = listing.find((e) => e.path === child);
-      if (!entry) return true;
-      return child !== path4 && entry.type !== "dir";
-    }
-    return false;
-  }
-  issueOf(err) {
-    if (!(err instanceof FsApiError) || err.status !== 409) return null;
-    if (err.code === "REMOTE_UNSUPPORTED_RUNNER") return { kind: "needs-update" };
-    if (err.code === "WORKSPACE_UPDATING") {
-      const eta = err.details?.etaSeconds;
-      return {
-        kind: "updating",
-        etaSeconds: typeof eta === "number" && Number.isFinite(eta) && eta > 0 ? eta : null
-      };
-    }
-    return null;
-  }
-  /** Tell the UI only when the KIND changes (a new ETA while updating is not news). */
-  setIssue(team, issue) {
-    const id = team.workspace.id;
-    const prior = this.issues.get(id);
-    if ((prior?.kind ?? null) === (issue?.kind ?? null)) return;
-    if (issue) this.issues.set(id, issue);
-    else this.issues.delete(id);
-    this.deps.ui.teamIssue?.(team, issue);
-  }
-  /** The team's current issue, if any (the folder decoration reads it). */
-  issueFor(team) {
-    return this.issues.get(team.workspace.id);
-  }
-  /**
-   * A 401 or 426 (or any HqApiError) goes to the sign-in service, which decides (revocation,
-   * update prompt). Background paths call this too: a refused re-list is never swallowed (L2c).
-   */
-  reportAuth(err) {
-    if (err instanceof HqApiError) {
-      this.deps.onApiError?.(err);
-      return;
-    }
-    if (err instanceof FsApiError && (err.status === 401 || err.status === 426)) {
-      this.deps.onApiError?.(new HqApiError(err.status, err.code, err.message, err.details));
-    }
-  }
-  /** Map an API failure to the error VS Code shows, telling the sign-in service first. */
-  fail(team, err, action) {
-    if (err instanceof FsCoreError) return err;
-    if (err instanceof NotLoggedInError)
-      return new FsCoreError("unavailable", COPY.signedOutWelcome);
-    this.reportAuth(err);
-    if (err instanceof HqApiError) return new FsCoreError("unavailable", err.message);
-    if (!(err instanceof FsApiError)) {
-      return new FsCoreError("unavailable", COPY.unreachable);
-    }
-    const name = cleanLabel(team.workspace.name) || team.alias;
-    switch (err.status) {
-      case 404:
-        return new FsCoreError("not-found", err.message);
-      case 402:
-        return new FsCoreError("no-permissions", COPY.fsPlanReadOnly);
-      case 403:
-        return new FsCoreError("no-permissions", err.message);
-      case 413:
-        return new FsCoreError("too-large", COPY.fsTooLarge);
-      case 422:
-        return new FsCoreError("no-permissions", err.message);
-      case 409:
-        if (err.code === "RUNNER_UNAVAILABLE") {
-          this.deps.ui.teamOff(team, action);
-          return new FsCoreError(
-            "unavailable",
-            action === "open" ? COPY.fsOffOpen(name) : COPY.fsOffSave(name)
-          );
-        }
-        if (err.code === "REMOTE_UNSUPPORTED_RUNNER") {
-          return new FsCoreError("unavailable", COPY.updateNeededLong(name));
-        }
-        if (err.code === "WORKSPACE_UPDATING") {
-          const issue = this.issueOf(err);
-          return new FsCoreError(
-            "unavailable",
-            COPY.fsUpdating(name, issue?.kind === "updating" ? issue.etaSeconds : null)
-          );
-        }
-        if (err.code === "CONFLICT") return new FsCoreError("exists", err.message);
-        if (err.code === "NOT_A_DIRECTORY") return new FsCoreError("not-a-dir", err.message);
-        if (err.code === "IS_A_DIRECTORY") return new FsCoreError("is-a-dir", err.message);
-        return new FsCoreError("unavailable", err.message);
-      default:
-        return new FsCoreError("unavailable", err.message);
-    }
-  }
-  isOff(err) {
-    return err instanceof FsApiError && err.status === 409 && err.code === "RUNNER_UNAVAILABLE";
-  }
-  /**
-   * A machine that needs an update or is being updated: the ROOT still mounts (a dir with no
-   * entries) so the Explorer shows the folder with its reason (decoration, notice) instead of a
-   * bare error badge. Anything below the root says the sentence.
-   */
-  isIssue(err) {
-    return this.issueOf(err) !== null;
-  }
-  // ── reads ─────────────────────────────────────────────────────────────────────────────────────
-  async stat(team, shown) {
-    const generation = this.generation;
-    const path4 = await this.toReal(team, shown, generation);
-    const live = this.deps.events.isLive(team);
-    const cached = this.listings.stat(team.workspace.id, path4);
-    if (hasControlChars(path4)) {
-      if (cached) return { ...this.view(team, cached), readonly: true };
-      throw controlNameError();
-    }
-    if (live && cached) return this.view(team, cached);
-    if (path4 === "" && live)
-      return { type: "dir", size: 0, mtimeMs: 0, readonly: this.rootReadOnly(team) };
-    if (await this.knownAbsent(team, path4)) throw new FsCoreError("not-found", path4);
-    try {
-      const s = await this.statOnce(team, path4);
-      if (generation !== this.generation) throw new SignedOutError();
-      return this.view(team, this.listings.putStat(team.workspace.id, s));
-    } catch (err) {
-      if (err instanceof FsApiError && err.status === 404) this.noteAbsent(team, path4);
-      if (this.isOff(err)) {
-        if (cached) return { ...this.view(team, cached), readonly: true };
-        const bytes = this.contents.last(this.key(team, path4));
-        if (bytes) return { type: "file", size: bytes.byteLength, mtimeMs: 0, readonly: true };
-      }
-      if ((this.isOff(err) || this.isIssue(err)) && path4 === "") {
-        return { type: "dir", size: 0, mtimeMs: 0, readonly: this.rootReadOnly(team) };
-      }
-      throw this.fail(team, err, "open");
-    }
-  }
-  /** One stat per path at a time: VS Code asks the same path several times while a folder opens. */
-  statOnce(team, path4) {
-    const key = this.key(team, path4);
-    const pending = this.stating.get(key);
-    if (pending) return pending;
-    const p = this.call(team, () => this.deps.api.stat(team, path4), { read: true }).finally(
-      () => this.stating.delete(key)
-    );
-    this.stating.set(key, p);
-    return p;
-  }
-  async readDirectory(team, shown) {
-    const generation = this.generation;
-    const path4 = await this.toReal(team, shown, generation);
-    if (hasControlChars(path4)) throw controlNameError();
-    const live = this.deps.events.isLive(team);
-    let entries = this.listings.folder(team.workspace.id, path4, live);
-    if (!entries) {
-      if (path4 !== "" && await this.knownAbsent(team, path4)) {
-        throw new FsCoreError("not-found", path4);
-      }
-      try {
-        entries = await this.fetchListing(team, path4, generation);
-        if (generation !== this.generation) throw new SignedOutError();
-      } catch (err) {
-        const stale = this.isOff(err) || isThrottled(err) ? this.listings.staleFolder(team.workspace.id, path4) : void 0;
-        if (!stale && path4 === "" && this.isIssue(err)) {
-          this.fail(team, err, "open");
-          return [];
-        }
-        if (!stale) throw this.fail(team, err, "open");
-        entries = stale;
-      }
-    }
-    return this.shownEntries(team, path4, entries);
-  }
-  /** Fetch one folder's listing (ahead of other requests), cache it, and let probes wait on it. */
-  /** `generation`: the caller's, when the listing answers a request that began before a clear (L3). */
-  /** `background`: the extension's own re-list, not a person's (sent as `X-HQ-Activity`). */
-  fetchListing(team, dir, generation = this.generation, background = false) {
-    const key = this.key(team, dir);
-    const pending = this.listing.get(key);
-    if (pending) {
-      return pending.then((v) => {
-        if (v) return v;
-        return this.fetchListing(team, dir, generation, background);
-      });
-    }
-    let fail;
-    const p = this.call(team, () => this.deps.api.listAll(team, dir, { background }), {
-      read: true,
-      priority: "listing"
-    }).then((list) => {
-      if (generation !== this.generation) throw new SignedOutError();
-      for (const e of list) this.forgetAbsent(team, e.path);
-      const stored = this.listings.putFolder(team.workspace.id, dir, list);
-      this.shownEntries(team, dir, stored);
-      return stored;
-    }).catch((err) => {
-      fail = err;
-      return void 0;
-    }).finally(() => this.listing.delete(key));
-    this.listing.set(key, p);
-    return p.then((v) => {
-      if (v) return v;
-      throw fail;
-    });
-  }
-  async readFile(team, shown) {
-    const generation = this.generation;
-    const path4 = await this.toReal(team, shown, generation);
-    if (hasControlChars(path4)) throw controlNameError();
-    const key = this.key(team, path4);
-    const cached = this.listings.stat(team.workspace.id, path4);
-    if (this.deps.events.isLive(team)) {
-      const hit = this.contents.get(key, cached?.etag);
-      if (hit) {
-        this.servedFrom.set(this.key(team, shown), path4);
-        return hit;
-      }
-    }
-    const last = this.contents.last(key);
-    if (!last && await this.knownAbsent(team, path4)) throw new FsCoreError("not-found", path4);
-    const lastEtag = last ? this.contentEtag(key) : void 0;
-    let r;
-    try {
-      r = await this.call(team, () => this.deps.api.read(team, path4, lastEtag), { read: true });
-    } catch (err) {
-      if (err instanceof FsApiError && err.status === 404) this.noteAbsent(team, path4);
-      if (this.isOff(err) && last) {
-        return last;
-      }
-      throw this.fail(team, err, "open");
-    }
-    if (generation !== this.generation) throw new SignedOutError();
-    if (this.servedFrom.size >= 5e3) this.servedFrom.clear();
-    this.servedFrom.set(this.key(team, shown), path4);
-    if (r.kind === "not-modified") return last ?? new Uint8Array();
-    this.contents.put(key, r.etag, r.bytes);
-    this.etags.set(key, r.etag);
-    if (r.masked) await this.markMasked(team, path4, r.etag);
-    return r.bytes;
-  }
-  /** The etag of what the content cache holds for `key` (kept beside it). */
-  etags = /* @__PURE__ */ new Map();
-  contentEtag(key) {
-    return this.etags.get(key);
-  }
-  async markMasked(team, path4, etag) {
-    let s = this.listings.stat(team.workspace.id, path4);
-    if (!s || s.etag !== etag) {
-      try {
-        s = this.listings.putStat(team.workspace.id, await this.statOnce(team, path4));
-      } catch {
-        return;
-      }
-    }
-    this.listings.markMasked(team.workspace.id, path4, etag);
-    this.deps.ui.masked(team, path4);
-    this.fire([{ team, path: path4, type: "changed" }]);
-  }
-  // ── writes ────────────────────────────────────────────────────────────────────────────────────
-  assertWritable(team) {
-    if (this.rootReadOnly(team)) throw new FsCoreError("no-permissions", COPY.fsViewOnly);
-  }
-  async writeFile(team, shown, bytes, opts) {
-    const generation = this.generation;
-    const path4 = await this.toReal(team, shown, generation);
-    if (hasControlChars(path4)) throw controlNameError();
-    this.assertWritable(team);
-    const served = this.servedFrom.get(this.key(team, shown));
-    if (served !== void 0 && served !== path4) {
-      throw new FsCoreError("unavailable", COPY.fsChangedOnMachine);
-    }
-    if (bytes.byteLength > MAX_EDIT_BYTES) throw new FsCoreError("too-large", COPY.fsTooLarge);
-    let known = this.listings.stat(team.workspace.id, path4);
-    const loaded = this.etags.get(this.key(team, path4));
-    if (!known && loaded !== void 0) {
-      known = { path: path4, type: "file", size: 0, mtimeMs: 0, etag: loaded };
-    }
-    if (!known) {
-      try {
-        known = this.listings.putStat(
-          team.workspace.id,
-          await this.call(team, () => this.deps.api.stat(team, path4))
-        );
-      } catch (err) {
-        if (!(err instanceof FsApiError && err.status === 404)) throw this.fail(team, err, "save");
-      }
-    }
-    if (!known && !opts.create) throw new FsCoreError("not-found", path4);
-    if (known && !opts.overwrite) throw new FsCoreError("exists", path4);
-    if (known?.masked) throw new FsCoreError("no-permissions", COPY.fsMasked);
-    if (known?.readonly) throw new FsCoreError("no-permissions", COPY.fsProtected);
-    let s;
-    try {
-      s = await this.call(
-        team,
-        () => this.deps.api.write(
-          team,
-          path4,
-          bytes,
-          known ? { ifMatch: known.etag } : { createOnly: true }
-        )
-      );
-    } catch (err) {
-      if (err instanceof FsApiError && err.status === 412) {
-        const current = err.details?.current;
-        if (current) this.listings.putStat(team.workspace.id, current);
-        else this.listings.invalidate(team.workspace.id, path4);
-        this.fire([{ team, path: path4, type: "changed" }]);
-        throw new FsCoreError("unavailable", COPY.fsChangedOnMachine);
-      }
-      throw this.fail(team, err, "save");
-    }
-    const key = this.key(team, path4);
-    this.servedFrom.set(this.key(team, shown), path4);
-    this.forgetAbsent(team, path4);
-    this.ownWrites.set(key, { etag: s.etag, at: this.now() });
-    this.listings.putStat(team.workspace.id, s);
-    this.contents.put(key, s.etag, bytes);
-    this.etags.set(key, s.etag);
-  }
-  async createDirectory(team, shown) {
-    const generation = this.generation;
-    const path4 = await this.toReal(team, shown, generation);
-    if (hasControlChars(path4)) throw controlNameError();
-    this.assertWritable(team);
-    this.forgetAbsent(team, path4);
-    try {
-      this.listings.putStat(
-        team.workspace.id,
-        await this.call(team, () => this.deps.api.mkdir(team, path4))
-      );
-    } catch (err) {
-      throw this.fail(team, err, "save");
-    }
-  }
-  async delete(team, shown, recursive) {
-    const generation = this.generation;
-    const path4 = await this.toReal(team, shown, generation);
-    if (hasControlChars(path4)) throw controlNameError();
-    this.assertWritable(team);
-    try {
-      await this.call(team, () => this.deps.api.remove(team, path4, recursive));
-    } catch (err) {
-      throw this.fail(team, err, "save");
-    }
-    this.forget(team, path4);
-    this.fire([{ team, path: path4, type: "deleted" }]);
-  }
-  async rename(team, shownFrom, shownTo, overwrite) {
-    const from = await this.toReal(team, shownFrom);
-    const to = await this.toReal(team, shownTo);
-    if (hasControlChars(from) || hasControlChars(to)) throw controlNameError();
-    this.assertWritable(team);
-    let s;
-    try {
-      s = await this.call(team, () => this.deps.api.rename(team, from, to, overwrite));
-    } catch (err) {
-      throw this.fail(team, err, "save");
-    }
-    this.forget(team, from);
-    this.forgetAbsent(team, to);
-    this.listings.invalidate(team.workspace.id, to);
-    this.listings.putStat(team.workspace.id, s);
-    this.fire([
-      { team, path: from, type: "deleted" },
-      { team, path: to, type: "created" }
-    ]);
-  }
-  /**
-   * Forget what we knew about `path` (and below it). `keepBytes`: a change on the stream keeps the
-   * last bytes, which are only ever served while the team is off (U23, read-only, with the off
-   * notice); while it is up, the next read is a conditional request that brings the new version.
-   */
-  forget(team, path4, opts = {}) {
-    this.listings.invalidate(team.workspace.id, path4);
-    this.forgetShownNames(team, path4);
-    if (opts.keepBytes) return;
-    const key = this.key(team, path4);
-    this.contents.drop(key);
-    this.contents.dropPrefix(`${key}/`);
-    this.etags.delete(key);
-    for (const k of [...this.etags.keys()]) if (k.startsWith(`${key}/`)) this.etags.delete(k);
-  }
-  // ── events ────────────────────────────────────────────────────────────────────────────────────
-  /**
-   * Watch one team's folder (refcounted): its events stream is live while any watch is. While the
-   * stream is NOT live (down, refused, or the server has no watcher running), the root is refreshed
-   * every 60 s instead, so the Explorer never sits on a stale listing.
-   */
-  watch(team) {
-    const sub = this.deps.events.subscribe(team);
-    const id = team.workspace.id;
-    const w = this.watched.get(id);
-    if (w) {
-      w.n += 1;
-      w.team = team;
-    } else this.watched.set(id, { team, n: 1 });
-    this.startRootRefresh();
-    let disposed = false;
-    return {
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        sub.dispose();
-        const cur = this.watched.get(id);
-        if (cur && --cur.n <= 0) this.watched.delete(id);
-        if (this.watched.size === 0) this.stopRootRefresh();
-      }
-    };
-  }
-  startRootRefresh() {
-    if (this.refreshTimer !== null) return;
-    this.refreshTimer = setInterval(() => this.refreshRoots(), this.deps.rootRefreshMs ?? 6e4);
-    this.refreshTimer.unref?.();
-  }
-  stopRootRefresh() {
-    if (this.refreshTimer !== null) clearInterval(this.refreshTimer);
-    this.refreshTimer = null;
-  }
-  /**
-   * Every watched team whose stream is not live (down, refused by the socket cap, no watcher):
-   * re-list its root and its most recently listed folders OURSELVES and fire per child. A
-   * `Changed` on a folder is not enough: VS Code's Explorer does not re-read a folder for it.
-   */
-  refreshRoots() {
-    for (const { team } of this.watched.values()) {
-      if (this.deps.events.isLive(team)) continue;
-      const folders = ["", ...this.listings.recentFolders(team.workspace.id, REFRESH_FOLDERS_MAX)];
-      void this.relistAndFire(team, [...new Set(folders)]);
-    }
-  }
-  /** Re-list each folder we had listed, and fire what differs (plus `changed` for `alsoChanged`). */
-  async relistAndFire(team, dirs, alsoChanged = [], before) {
-    const out = alsoChanged.map((path4) => ({ team, path: path4, type: "changed" }));
-    const diffs = await Promise.all(
-      dirs.map(
-        (dir) => this.relist(
-          team,
-          dir,
-          before ? before.get(dir) : this.listings.staleFolder(team.workspace.id, dir)
-        )
-      )
-    );
-    for (const d of diffs) out.push(...d);
-    this.fire(dedupe(out));
-  }
-  /**
-   * Re-list `dir` and diff it against what VS Code was shown (`prior`): new children `created`,
-   * gone ones `deleted` (and forgotten), a new etag `changed`. A folder never listed is skipped (the
-   * Explorer is not showing it); a machine that cannot answer keeps the old listing.
-   */
-  async relist(team, dir, prior) {
-    if (!prior) return [];
-    let next;
-    try {
-      next = await this.fetchListing(team, dir, this.generation, true);
-    } catch (err) {
-      if (err instanceof SignedOutError) return [];
-      this.reportAuth(err);
-      this.listings.putFolder(team.workspace.id, dir, prior);
-      return [];
-    }
-    const was = new Map(prior.map((e) => [e.path, e]));
-    const out = [];
-    for (const e of next) {
-      if (!isSafePath(e.path)) continue;
-      const old = was.get(e.path);
-      if (!old) out.push({ team, path: e.path, type: "created" });
-      else if (old.etag !== e.etag || old.type !== e.type)
-        out.push({ team, path: e.path, type: "changed" });
-      was.delete(e.path);
-    }
-    for (const gone of was.keys()) {
-      if (!isSafePath(gone)) continue;
-      this.forget(team, gone);
-      out.push({ team, path: gone, type: "deleted" });
-    }
-    return out;
-  }
-  /** Extension deactivation: no timer outlives the window. */
-  dispose() {
-    this.stopRootRefresh();
-    this.watched.clear();
-  }
-  teamById(workspaceId) {
-    return this.deps.teams().find((t) => t.workspace.id === workspaceId);
-  }
-  async onEvent(frame) {
-    if (frame.type === "fs-changed") {
-      const team = this.teamById(frame.workspaceId);
-      if (!team) return;
-      const before = /* @__PURE__ */ new Map();
-      const direct = [];
-      for (const change of frame.changes) {
-        if (!isSafePath(change.path)) continue;
-        if (await this.isOwnEcho(team, change.path)) continue;
-        const parent = parentOf(change.path);
-        if (!before.has(parent)) {
-          before.set(parent, this.listings.staleFolder(team.workspace.id, parent));
-        }
-        const hadListing = before.get(parent) !== void 0;
-        this.forgetAbsent(team, change.path);
-        this.forget(team, change.path, { keepBytes: change.kind !== "deleted" });
-        if (change.kind) direct.push({ team, path: change.path, type: change.kind });
-        else if (!hadListing) direct.push({ team, path: change.path, type: "changed" });
-      }
-      const listed = [...before.entries()].filter(([, v]) => v !== void 0).map(([k]) => k);
-      if (listed.length === 0) {
-        this.fire(dedupe(direct));
-        return;
-      }
-      const diffs = await Promise.all(listed.map((dir) => this.relist(team, dir, before.get(dir))));
-      this.fire(dedupe([...direct, ...diffs.flat()]));
-      return;
-    }
-    if (frame.type === "resync") {
-      const team = this.teamById(frame.workspaceId);
-      if (team) await this.resync(team);
-    }
-  }
-  /** Our own save coming back on the stream: dropped when the file still has our etag. */
-  async isOwnEcho(team, path4) {
-    const key = this.key(team, path4);
-    const own = this.ownWrites.get(key);
-    if (!own) return false;
-    if (this.now() - own.at > OWN_WRITE_MS) {
-      this.ownWrites.delete(key);
-      return false;
-    }
-    try {
-      const s = await this.call(team, () => this.deps.api.stat(team, path4, { background: true }));
-      return s.etag === own.etag;
-    } catch (err) {
-      this.reportAuth(err);
-      return false;
-    }
-  }
-  /**
-   * After any gap (changes were not seen): re-list every folder VS Code was shown and fire per
-   * child, and `changed` for every file whose bytes we hold (an open editor re-reads it). The cache
-   * is kept, not cleared: a team that is off right now still shows what it had (U23).
-   */
-  async resync(team) {
-    const id = team.workspace.id;
-    const prefix = `${id}:`;
-    for (const k of [...this.absent.keys()]) if (k.startsWith(prefix)) this.absent.delete(k);
-    const files = this.contents.keys().filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length));
-    const folders = this.listings.cachedFolders(id);
-    const before = new Map(folders.map((d) => [d, this.listings.staleFolder(id, d)]));
-    for (const f of files) this.listings.dropStat(id, f);
-    await this.relistAndFire(team, folders, files, before);
-  }
-  /** Sign-out or revocation: nothing cached survives. */
-  clear() {
-    this.generation += 1;
-    this.issues.clear();
-    this.absent.clear();
-    this.realNames.clear();
-    this.shownOf.clear();
-    this.suffixed.clear();
-    this.servedFrom.clear();
-    this.listings.clear();
-    this.contents.clear();
-    this.ownWrites.clear();
-    this.etags.clear();
-  }
-};
-function isThrottled(err) {
-  return err instanceof FsApiError && err.status === 429;
-}
-function retryAfterMs(err) {
-  const s = err instanceof FsApiError ? err.details?.retryAfterSeconds : void 0;
-  const sec = typeof s === "number" && Number.isFinite(s) && s > 0 ? s : 1;
-  return Math.min(THROTTLE_WAIT_MAX_MS, Math.round(sec * 1e3));
-}
-function isSafePath(path4) {
-  return path4 === "" || !path4.split("/").some(isDotSegment);
-}
-function dedupe(changes) {
-  const seen = /* @__PURE__ */ new Set();
-  return changes.filter((c) => {
-    const k = `${c.team.workspace.id}:${c.type}:${c.path}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-}
-
-// src/fs/hq-fs-provider.ts
-var vscode8 = __toESM(require("vscode"), 1);
-var HQ_SCHEME = "hq";
-function relPathOf(uri) {
-  const parts = uri.path.split("/").filter((p) => p.length > 0);
-  const alias = parts.shift() ?? "";
-  return { alias, path: parts.join("/") };
-}
-function teamRootUri(team) {
-  return vscode8.Uri.from({ scheme: HQ_SCHEME, authority: team.org.slug, path: `/${team.alias}` });
-}
-function teamFileUri(team, path4) {
-  return vscode8.Uri.from({
-    scheme: HQ_SCHEME,
-    authority: team.org.slug,
-    path: path4 === "" ? `/${team.alias}` : `/${team.alias}/${path4}`
-  });
-}
-function toType(t) {
-  if (t === "dir") return vscode8.FileType.Directory;
-  if (t === "symlink") return vscode8.FileType.SymbolicLink;
-  return vscode8.FileType.File;
-}
-function toVsError(err, uri) {
-  if (!(err instanceof FsCoreError)) return err instanceof Error ? err : new Error(String(err));
-  switch (err.kind) {
-    case "not-found":
-      return vscode8.FileSystemError.FileNotFound(uri);
-    case "exists":
-      return vscode8.FileSystemError.FileExists(uri);
-    case "no-permissions":
-      return vscode8.FileSystemError.NoPermissions(err.message);
-    case "not-a-dir":
-      return vscode8.FileSystemError.FileNotADirectory(uri);
-    case "is-a-dir":
-      return vscode8.FileSystemError.FileIsADirectory(uri);
-    case "too-large":
-      return vscode8.FileSystemError.NoPermissions(err.message);
-    default:
-      return vscode8.FileSystemError.Unavailable(err.message);
-  }
-}
-var HqFileSystemProvider = class {
-  constructor(core) {
-    this.core = core;
-    core.onDidChange((changes) => this.queue(changes));
-  }
-  core;
-  emitter = new vscode8.EventEmitter();
-  onDidChangeFile = this.emitter.event;
-  pending = [];
-  flushTimer = null;
-  /** Coalesce 100 ms into one `FileChangeEvent[]` (FEATURE §7a). */
-  queue(changes) {
-    for (const c of changes) {
-      this.pending.push({
-        type: c.type === "deleted" ? vscode8.FileChangeType.Deleted : c.type === "created" ? vscode8.FileChangeType.Created : vscode8.FileChangeType.Changed,
-        uri: teamFileUri(c.team, c.path)
-      });
-    }
-    if (this.flushTimer !== null) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
-      const batch = this.pending;
-      this.pending = [];
-      if (batch.length > 0) this.emitter.fire(batch);
-    }, 100);
-  }
-  resolve(uri) {
-    const { alias, path: path4 } = relPathOf(uri);
-    return { team: this.core.team(uri.authority, alias), path: path4 };
-  }
-  watch(uri) {
-    try {
-      const { team } = this.resolve(uri);
-      const sub = this.core.watch(team);
-      return new vscode8.Disposable(() => sub.dispose());
-    } catch {
-      return new vscode8.Disposable(() => void 0);
-    }
-  }
-  async stat(uri) {
-    try {
-      const { team, path: path4 } = this.resolve(uri);
-      const s = await this.core.stat(team, path4);
-      return {
-        type: toType(s.type),
-        ctime: s.mtimeMs,
-        mtime: s.mtimeMs,
-        size: s.size,
-        ...s.readonly ? { permissions: vscode8.FilePermission.Readonly } : {}
-      };
-    } catch (err) {
-      throw toVsError(err, uri);
-    }
-  }
-  async readDirectory(uri) {
-    try {
-      const { team, path: path4 } = this.resolve(uri);
-      return (await this.core.readDirectory(team, path4)).map(([n, t]) => [n, toType(t)]);
-    } catch (err) {
-      throw toVsError(err, uri);
-    }
-  }
-  async readFile(uri) {
-    try {
-      const { team, path: path4 } = this.resolve(uri);
-      return await this.core.readFile(team, path4);
-    } catch (err) {
-      throw toVsError(err, uri);
-    }
-  }
-  async writeFile(uri, content, options) {
-    try {
-      const { team, path: path4 } = this.resolve(uri);
-      await this.core.writeFile(team, path4, content, options);
-    } catch (err) {
-      throw toVsError(err, uri);
-    }
-  }
-  async createDirectory(uri) {
-    try {
-      const { team, path: path4 } = this.resolve(uri);
-      await this.core.createDirectory(team, path4);
-    } catch (err) {
-      throw toVsError(err, uri);
-    }
-  }
-  async delete(uri, options) {
-    try {
-      const { team, path: path4 } = this.resolve(uri);
-      await this.core.delete(team, path4, options.recursive);
-    } catch (err) {
-      throw toVsError(err, uri);
-    }
-  }
-  async rename(oldUri, newUri, options) {
-    try {
-      const from = this.resolve(oldUri);
-      const to = this.resolve(newUri);
-      if (from.team.workspace.id !== to.team.workspace.id) {
-        throw new FsCoreError("no-permissions", COPY.fsViewOnly);
-      }
-      await this.core.rename(from.team, from.path, to.path, options.overwrite);
-    } catch (err) {
-      throw toVsError(err, oldUri);
-    }
-  }
-  dispose() {
-    if (this.flushTimer !== null) clearTimeout(this.flushTimer);
-    this.emitter.dispose();
-  }
-};
-function teamFolderName(team) {
-  return COPY.teamFolderName(
-    cleanLabel(team.workspace.name) || team.alias,
-    cleanLabel(team.org.name) || team.org.slug
-  );
-}
-
-// src/fs/hq-fs-issues.ts
-var vscode9 = __toESM(require("vscode"), 1);
-var HqTeamIssues = class {
-  constructor(deps) {
-    this.deps = deps;
-  }
-  deps;
-  emitter = new vscode9.EventEmitter();
-  onDidChangeFileDecorations = this.emitter.event;
-  byRoot = /* @__PURE__ */ new Map();
-  /** fs-core's `teamIssue`: the team's issue changed (null = it serves files again). */
-  onIssue(team, issue) {
-    const uri = teamRootUri(team);
-    if (issue) this.byRoot.set(uri.toString(), { team, issue });
-    else this.byRoot.delete(uri.toString());
-    this.emitter.fire([uri]);
-    if (!issue) return;
-    const name = cleanLabel(team.workspace.name) || team.alias;
-    if (issue.kind === "needs-update") {
-      void Promise.resolve(
-        vscode9.window.showWarningMessage(COPY.updateNeededLong(name), COPY.openTeamSettings)
-      ).then((choice) => {
-        if (choice === COPY.openTeamSettings) this.openSettings(team);
-      });
-      return;
-    }
-    void vscode9.window.showInformationMessage(COPY.fsUpdating(name, issue.etaSeconds));
-  }
-  openSettings(team) {
-    const host = this.deps.host();
-    if (!host) return;
-    void vscode9.env.openExternal(vscode9.Uri.parse(teamSettingsUrl(host, team.workspace.id)));
-  }
-  /** Only a team ROOT carries the reason; files below it keep VS Code's own decorations. */
-  provideFileDecoration(uri) {
-    const hit = this.byRoot.get(uri.toString());
-    if (!hit) return void 0;
-    const name = cleanLabel(hit.team.workspace.name) || hit.team.alias;
-    const { issue } = hit;
-    return issue.kind === "needs-update" ? new vscode9.FileDecoration(
-      "\u2191",
-      COPY.updateNeededLong(name),
-      new vscode9.ThemeColor("list.warningForeground")
-    ) : new vscode9.FileDecoration(
-      "\u2026",
-      COPY.fsUpdating(name, issue.etaSeconds),
-      new vscode9.ThemeColor("list.warningForeground")
-    );
-  }
-  /** Sign-out or revocation: every folder loses its reason. */
-  clear() {
-    const uris = [...this.byRoot.values()].map(({ team }) => teamRootUri(team));
-    this.byRoot.clear();
-    if (uris.length > 0) this.emitter.fire(uris);
-  }
-  dispose() {
-    this.byRoot.clear();
-    this.emitter.dispose();
-  }
-};
-var UnopenableNames = class {
-  constructor(core) {
-    this.core = core;
-  }
-  core;
-  provideFileDecoration(uri) {
-    if (uri.scheme !== HQ_SCHEME) return void 0;
-    const { alias, path: path4 } = relPathOf(uri);
-    if (path4 === "") return void 0;
-    let team;
-    try {
-      team = this.core.team(uri.authority, alias);
-    } catch {
-      return void 0;
-    }
-    if (!this.core.isUnopenable(team, path4)) return void 0;
-    return new vscode9.FileDecoration(
-      "\u2298",
-      COPY.fsControlName,
-      new vscode9.ThemeColor("disabledForeground")
-    );
-  }
-};
-
-// src/search/search-view.ts
-var vscode10 = __toESM(require("vscode"), 1);
-function groupByFile(team, res) {
-  const byPath = /* @__PURE__ */ new Map();
-  for (const m of res.matches) {
-    const list = byPath.get(m.path) ?? [];
-    list.push(m);
-    byPath.set(m.path, list);
-  }
-  const summary = {
-    kind: "summary",
-    text: res.matches.length === 0 ? COPY.searchNone : COPY.searchResults(res.matches.length, res.truncated)
-  };
-  return [
-    summary,
-    ...[...byPath.entries()].map(([path4, matches]) => ({
-      kind: "file",
-      team,
-      path: path4,
-      matches
-    }))
-  ];
-}
-async function withShownPaths(nodes, shownPath) {
-  return Promise.all(
-    nodes.map(
-      async (n) => n.kind === "file" ? { ...n, shown: await shownPath(n.team, n.path).catch(() => n.path) } : n
-    )
-  );
-}
-function parseGlobs(text) {
-  return (text ?? "").split(",").map((g) => g.trim()).filter((g) => g.length > 0);
-}
-var SearchView = class {
-  changed = new vscode10.EventEmitter();
-  onDidChangeTreeData = this.changed.event;
-  roots = [];
-  show(nodes) {
-    this.roots = nodes;
-    this.changed.fire(void 0);
-  }
-  clear() {
-    this.show([]);
-  }
-  getChildren(node) {
-    if (!node) return this.roots;
-    if (node.kind === "file") {
-      return node.matches.map((match) => ({ kind: "match", team: node.team, match }));
-    }
-    return [];
-  }
-  getTreeItem(node) {
-    if (node.kind === "summary") {
-      const item2 = new vscode10.TreeItem(node.text);
-      item2.contextValue = "search:summary";
-      return item2;
-    }
-    if (node.kind === "file") {
-      const item2 = new vscode10.TreeItem(
-        cleanLabel(node.shown ?? node.path),
-        vscode10.TreeItemCollapsibleState.Expanded
-      );
-      item2.description = String(node.matches.length);
-      item2.iconPath = new vscode10.ThemeIcon("file");
-      item2.contextValue = "search:file";
-      return item2;
-    }
-    const m = node.match;
-    const item = new vscode10.TreeItem(cleanLabel(m.preview).trim() || `${m.line}`);
-    item.description = `${m.line}`;
-    item.contextValue = "search:match";
-    item.command = {
-      command: "hq.search.open",
-      title: COPY.searchTitle,
-      arguments: [node]
-    };
-    return item;
-  }
-};
-async function openMatch(node, shownPath = async (_t, p) => p) {
-  if (node.kind !== "match") return;
-  if (hasControlChars(node.match.path)) {
-    void vscode10.window.showWarningMessage(COPY.fsControlName);
-    return;
-  }
-  const uri = teamFileUri(node.team, await shownPath(node.team, node.match.path));
-  const line = Math.max(0, node.match.line - 1);
-  await vscode10.window.showTextDocument(uri, {
-    selection: new vscode10.Range(line, 0, line, 0),
-    preview: true
-  });
-}
+var EXTENSION_VERSION = "0.2.0".length > 0 ? "0.2.0" : "0.0.0-dev";
 
 // src/extension.ts
 function vscodeUi() {
   return {
+    // A cancellable progress notification, not an information message: it can be CLOSED when the
+    // sign-in ends (an information message stays in the notification center for good).
     showDeviceCode: (code, onCancel) => {
-      let done = false;
-      void vscode11.window.showInformationMessage(COPY.deviceCode(code), COPY.deviceCodeCancel).then((choice) => {
-        if (!done && choice === COPY.deviceCodeCancel) onCancel();
-      });
-      return {
-        close: () => {
-          done = true;
+      let close = () => void 0;
+      const ended = new Promise((r) => close = r);
+      void vscode15.window.withProgress(
+        {
+          location: vscode15.ProgressLocation.Notification,
+          title: notificationText(COPY.deviceCode(code)),
+          cancellable: true
+        },
+        (_progress, token) => {
+          token.onCancellationRequested(() => onCancel());
+          return ended;
         }
-      };
+      );
+      return { close };
     },
-    openExternal: async (url) => vscode11.env.openExternal(vscode11.Uri.parse(url)),
-    copyToClipboard: async (text) => vscode11.env.clipboard.writeText(text),
-    info: (message) => void vscode11.window.showInformationMessage(message),
-    askToSignIn: async (message, modal) => await (modal ? vscode11.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode11.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
-    modal: (message) => void vscode11.window.showErrorMessage(message, { modal: true }),
-    offerSignInHere: async (message) => await vscode11.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction
+    openExternal: async (url) => vscode15.env.openExternal(vscode15.Uri.parse(url)),
+    copyToClipboard: async (text) => vscode15.env.clipboard.writeText(text),
+    info: (message) => void vscode15.window.showInformationMessage(message),
+    askToSignIn: async (_ref, message, modal) => await (modal ? vscode15.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode15.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
+    modal: (message) => void vscode15.window.showErrorMessage(message, { modal: true }),
+    offerSignInHere: async (message) => await vscode15.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction,
+    confirm: async (message, action) => await vscode15.window.showWarningMessage(message, { modal: true }, action) === action
   };
 }
 function hostSetting() {
-  const config = vscode11.workspace.getConfiguration("hq");
+  const config = vscode15.workspace.getConfiguration("hq");
   const host = config.inspect("host");
   const allowed = config.inspect("allowedHosts");
   return resolveHqHost(host?.globalValue ?? host?.defaultValue, allowed?.globalValue ?? []);
 }
-async function pickTeam(service, node, filter = () => true) {
+function nodeAccount(node) {
+  return node && "account" in node ? node.account : void 0;
+}
+async function pickTeam(b, node, filter = () => true) {
   if (node && (node.kind === "team" || node.kind === "session" || node.kind === "message")) {
     return node.team;
   }
-  let teams = service.teams().filter(filter);
+  await b.service.refreshOrgsIfOlder(3e4);
+  let teams = b.service.teams().filter(filter);
   if (teams.length === 0) {
-    await service.refreshOrgs().catch(() => void 0);
-    teams = service.teams().filter(filter);
+    await b.service.refreshOrgs().catch(() => void 0);
+    teams = b.service.teams().filter(filter);
   }
   if (teams.length === 1) return teams[0];
-  const picked = await vscode11.window.showQuickPick(
+  const picked = await vscode15.window.showQuickPick(
     teams.map((t) => ({
       label: cleanLabel(t.workspace.name) || t.alias,
       description: `${cleanLabel(t.org.name)} \xB7 ${teamState(t.workspace) === "running" ? COPY.stateRunning : teamState(t.workspace) === "starting" ? COPY.stateStarting : COPY.stateOff}`,
@@ -14961,183 +17412,327 @@ async function pickTeam(service, node, filter = () => true) {
   );
   return picked?.team;
 }
+async function showWakeNotice(n, node) {
+  const labels = n.actions.map(
+    (a) => a === "newSession" ? COPY.startSessionAction : COPY.openInHqAction
+  );
+  const choice = n.level === "info" ? await vscode15.window.showInformationMessage(n.message, ...labels) : n.level === "warning" ? await vscode15.window.showWarningMessage(n.message, ...labels) : await vscode15.window.showErrorMessage(n.message, ...labels);
+  if (choice === COPY.startSessionAction) {
+    await vscode15.commands.executeCommand("hq.newSessionTerminal", node);
+  } else if (choice === COPY.openInHqAction) {
+    await vscode15.commands.executeCommand("hq.openInHqWeb", node);
+  }
+}
 function activate(context) {
+  const channel = vscode15.window.createOutputChannel("AI Workforce One HQ", { log: true });
+  context.subscriptions.push(channel);
+  const log = redactingLog(channel);
+  log.info(`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode15.env.appName}`);
   const store = new SessionStore(context.secrets, context.globalState);
-  const service = new HqService({
-    store,
-    ui: vscodeUi(),
-    host: hostSetting,
-    extensionVersion: EXTENSION_VERSION,
-    appName: vscode11.env.appName
-  });
-  const teamsTree = new TeamsTree(service);
-  const accountTree = new AccountTree(service);
-  const ports = new Ports(service, context.globalState);
-  const terminals = new Terminals({ service, offerPorts: (team, p) => ports.offer(team, p) });
-  const status = new StatusBar(service, terminals, ports);
-  const auth = new HqAuthenticationProvider(service);
-  const fsApi = new HqFsApi(async () => {
-    const c = await service.client();
-    if (!c) throw new NotLoggedInError(COPY.signedOutWelcome);
-    return c;
-  });
-  const events = new EventsHub({
-    client: () => service.client(),
-    onUnauthorized: () => service.refreshOrgs().catch(() => void 0),
-    // Nonprod 2026-09-30: a refused socket used to retry silently forever; say it once.
+  const ui = vscodeUi();
+  const teamIssues = new HqTeamIssues({ host: () => accounts.host() });
+  const teamOffNotices = new TeamOffNotices();
+  const maskedSaid = /* @__PURE__ */ new Set();
+  const fsHooks = (b) => ({
     onRefused: (org) => {
-      const name = service.teams().find((t) => t.org.slug === org)?.org.name ?? org;
-      void vscode11.window.showWarningMessage(COPY.fsEventsRefused(cleanLabel(name) || org));
+      const name = b.service.teams().find((t) => t.org.slug === org)?.org.name ?? org;
+      void vscode15.window.showWarningMessage(COPY.fsEventsRefused(cleanLabel(name) || org));
+    },
+    ui: {
+      // Its Wake Team link runs as the folder's OWN account, whichever is active (MA-S19).
+      teamOff: (team, action) => teamOffNotices.say(
+        b.tag,
+        team.workspace.id,
+        cleanLabel(team.workspace.name) || team.alias,
+        action
+      ),
+      masked: (team, path5) => {
+        const k = `${b.tag}:${team.workspace.id}:${path5}`;
+        if (maskedSaid.has(k)) return;
+        maskedSaid.add(k);
+        void vscode15.window.showInformationMessage(COPY.fsMasked);
+      },
+      teamIssue: (team, issue) => teamIssues.onIssue(b.tag, (t) => rootsFor(b, t, accounts.isLegacyUser(b)), team, issue)
     }
   });
-  const teamIssues = new HqTeamIssues({ host: () => service.host() });
-  const offSaid = /* @__PURE__ */ new Map();
-  const maskedSaid = /* @__PURE__ */ new Set();
-  const fsCore = new HqFsCore({
-    teams: () => service.teams(),
-    api: fsApi,
-    events,
-    onApiError: (err) => void service.handleError(err),
-    ui: {
-      teamOff: (team, action) => {
-        const last = offSaid.get(team.workspace.id) ?? 0;
-        if (Date.now() - last < 6e4) return;
-        offSaid.set(team.workspace.id, Date.now());
-        const name = cleanLabel(team.workspace.name) || team.alias;
-        void vscode11.window.showWarningMessage(
-          action === "open" ? COPY.fsOffOpen(name) : COPY.fsOffSave(name),
-          COPY.wakeTeam
-        ).then((choice) => {
-          if (choice === COPY.wakeTeam) {
-            void vscode11.commands.executeCommand("hq.wakeTeam", { kind: "team", team });
+  const accounts = new HqAccounts({
+    store,
+    ui,
+    host: hostSetting,
+    extensionVersion: EXTENSION_VERSION,
+    appName: vscode15.env.appName,
+    windowState: context.workspaceState,
+    log,
+    windowFocused: () => vscode15.window.state.focused,
+    firstFolderAuthority: () => (vscode15.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === HQ_SCHEME)?.uri.authority,
+    fsHooks
+  });
+  const c = { accounts, onAccountMissing: (ref) => accountMissing(ref) };
+  const notices = new AccountNotices();
+  const sayUnavailable = (info) => notices.say(info);
+  const accountMissing = (ref) => {
+    const tag = accountTag(ref.host, ref.userId);
+    const t = store.tombstone(ref.host, tag);
+    sayUnavailable({ key: tag, email: t?.email ?? null, tag, userId: ref.userId });
+  };
+  const teamsTree = new TeamsTree(accounts);
+  const teamsView = vscode15.window.createTreeView("hq.teams", { treeDataProvider: teamsTree });
+  const accountTree = new AccountTree(accounts);
+  const ports = new Ports({
+    accounts,
+    memento: context.globalState,
+    onAccountMissing: accountMissing
+  });
+  const terminals = new Terminals({
+    accounts,
+    offerPorts: (account, team, p) => ports.offer(account, team, p),
+    // A terminal of the team attached: if the team refused files, ask it again (it may still boot).
+    onAttached: (account, team) => accounts.get(account)?.core.expectUp(team, { force: true }),
+    onAccountMissing: accountMissing
+  });
+  const status = new StatusBar(accounts, terminals, ports);
+  const auth = new HqAuthenticationProvider(accounts);
+  const fsProvider = new HqFileSystemProvider({ accounts, onUnavailable: sayUnavailable });
+  const searchView = new SearchView();
+  const reviveGate = new ReviveGate();
+  const reviveSoon = (b) => {
+    const wait = reviveGate.schedule(b.tag);
+    if (wait === null) return;
+    setTimeout(
+      () => {
+        void reviveAccountViews({
+          belongs: (uri) => {
+            if (uri.scheme !== HQ_SCHEME) return false;
+            const r = accounts.resolveAuthority(uri.authority);
+            return r.kind === "ok" && r.bundle.tag === b.tag;
+          },
+          // Only what the provider refused and never served since: a loaded tab keeps its undo.
+          refused: (uri) => fsProvider.isRefused(uri),
+          reopened: (uri) => fsProvider.noteReopened(uri)
+        }).then((r) => {
+          if (r.explorer || r.reopened > 0) {
+            log.info(
+              `account ${b.tag} usable again: Explorer refreshed ${r.explorer}, editors reopened ${r.reopened}`
+            );
           }
         });
       },
-      masked: (team, path4) => {
-        const k = `${team.workspace.id}:${path4}`;
-        if (maskedSaid.has(k)) return;
-        maskedSaid.add(k);
-        void vscode11.window.showInformationMessage(COPY.fsMasked);
-      },
-      teamIssue: (team, issue) => teamIssues.onIssue(team, issue)
-    }
-  });
-  const fsProvider = new HqFileSystemProvider(fsCore);
-  const searchView = new SearchView();
-  service.onRevoked(() => {
-    fsCore.clear();
-    teamIssues.clear();
-    events.closeAll();
-    searchView.clear();
-  });
+      Math.max(250, wait)
+    );
+  };
   void warnIfKeyringMissing({
-    missing: () => keyringMissingHere(vscode11.env.appName),
+    missing: () => keyringMissingHere(vscode15.env.appName),
     memento: context.globalState,
-    warn: (message) => void vscode11.window.showWarningMessage(message)
+    warn: (message) => void vscode15.window.showWarningMessage(message)
   });
   const setContext = () => {
-    void vscode11.commands.executeCommand("setContext", "hq.signedIn", service.signedIn());
-    void vscode11.commands.executeCommand("setContext", "hq.hasOrgs", service.teams().length > 0);
+    const active = accounts.active();
+    teamsView.description = active ? cleanLabel(active.email) : "";
+    void vscode15.commands.executeCommand("setContext", "hq.signedIn", active !== null);
+    void vscode15.commands.executeCommand(
+      "setContext",
+      "hq.hasOrgs",
+      (active?.service.teams().length ?? 0) > 0
+    );
+    void vscode15.commands.executeCommand("setContext", "hq.accountCount", accounts.count());
   };
   setContext();
+  const labelMode = () => accounts.list().map((b) => accounts.shortLabel(b.ref) ?? "").join("|");
+  let lastLabels = labelMode();
+  let renameTimer = null;
+  const onLabelsMaybeChanged = () => {
+    const now = labelMode();
+    if (now === lastLabels) return;
+    lastLabels = now;
+    if (renameTimer) clearTimeout(renameTimer);
+    renameTimer = setTimeout(() => {
+      renameTimer = null;
+      void renameHqFolders({ accounts });
+    }, 1e3);
+  };
   context.subscriptions.push(
-    store,
-    service,
-    teamsTree,
-    accountTree,
     ports,
     terminals,
     status,
     auth,
-    vscode11.authentication.registerAuthenticationProvider(
+    teamsTree,
+    teamsView,
+    accountTree,
+    fsProvider,
+    teamIssues,
+    vscode15.authentication.registerAuthenticationProvider(
       AUTH_PROVIDER_ID,
       AUTH_PROVIDER_LABEL,
       auth,
-      {
-        supportsMultipleAccounts: false
-      }
+      { supportsMultipleAccounts: true }
     ),
-    vscode11.window.registerTreeDataProvider("hq.teams", teamsTree),
-    vscode11.window.registerTreeDataProvider("hq.ports", ports),
-    vscode11.window.registerTreeDataProvider("hq.account", accountTree),
-    vscode11.window.registerTreeDataProvider("hq.search", searchView),
-    vscode11.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
-    fsProvider,
-    teamIssues,
-    vscode11.window.registerFileDecorationProvider(teamIssues),
-    vscode11.window.registerFileDecorationProvider(new UnopenableNames(fsCore)),
-    { dispose: () => events.closeAll() },
-    fsCore,
-    service.onDidChange(setContext),
-    vscode11.workspace.onDidChangeConfiguration((e) => {
+    vscode15.window.registerTreeDataProvider("hq.ports", ports),
+    vscode15.window.registerTreeDataProvider("hq.account", accountTree),
+    vscode15.window.registerTreeDataProvider("hq.search", searchView),
+    vscode15.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
+    vscode15.window.registerFileDecorationProvider(teamIssues),
+    vscode15.window.registerFileDecorationProvider(
+      new UnopenableNames((authority) => {
+        const r = accounts.resolveAuthority(authority);
+        return r.kind === "ok" ? { core: r.bundle.core, orgSlug: r.orgSlug } : null;
+      })
+    ),
+    accounts.onDidChange(() => {
+      setContext();
+      onLabelsMaybeChanged();
+    }),
+    { dispose: () => notices.dispose() },
+    // U23: a "!" root and a failed editor of an account that just became usable come back by
+    // themselves (VS Code does not re-resolve them on a Changed event); its notice closes.
+    accounts.onAccountUsable((b) => {
+      notices.closeFor(b.tag);
+      fsProvider.resetReopens(b.tag);
+      reviveSoon(b);
+    }),
+    // Live re-test #2: a tab refused while its team was asleep is retried once the team answers.
+    fsProvider.onRefusedReachable((tag) => {
+      const b = accounts.byTag(tag);
+      if (b) reviveSoon(b);
+    }),
+    fsProvider.onTeamUp(({ tag, workspaceId }) => teamOffNotices.closeFor(tag, workspaceId)),
+    { dispose: () => teamOffNotices.dispose() },
+    accounts.onAccountRemoved((ref) => {
+      teamIssues.clear(accountTag(ref.host, ref.userId));
+      teamOffNotices.forgetAccount(accountTag(ref.host, ref.userId));
+      searchView.clearAccount((a) => sameAccount(a, ref));
+      notices.forget(accountTag(ref.host, ref.userId));
+    }),
+    accounts.onAccountRenewed((ref) => accounts.get(ref)?.events.reconnectAll()),
+    { dispose: () => renameTimer && clearTimeout(renameTimer) },
+    // Decision 23: another window may have added, signed out or renewed an account.
+    vscode15.window.onDidChangeWindowState((s) => {
+      if (s.focused) accounts.rederive("focus");
+    }),
+    vscode15.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("hq.host") || e.affectsConfiguration("hq.allowedHosts")) {
-        service.hostChanged();
+        accounts.rederive("host");
         setContext();
         const verdict = hostSetting();
-        if (!verdict.ok) void vscode11.window.showErrorMessage(COPY.hostNotAllowed(verdict.host));
-        else if (!service.signedIn()) void vscode11.window.showInformationMessage(COPY.hostChanged);
+        if (!verdict.ok) void vscode15.window.showErrorMessage(COPY.hostNotAllowed(verdict.host));
+        else if (accounts.count() === 0)
+          void vscode15.window.showInformationMessage(COPY.hostChanged);
       }
     }),
-    vscode11.commands.registerCommand("hq.signIn", () => service.signIn()),
-    vscode11.commands.registerCommand("hq.signOut", () => service.signOut()),
-    vscode11.commands.registerCommand("hq.refresh", async () => {
+    store,
+    { dispose: () => accounts.dispose() },
+    // ── accounts ───────────────────────────────────────────────────────────────────────────────
+    vscode15.commands.registerCommand("hq.signIn", async () => {
+      if (accounts.count() === 0) return (await accounts.signIn({ kind: "first" })).outcome;
+      await switchAccount(c);
+      return "busy";
+    }),
+    vscode15.commands.registerCommand("hq.signOut", async () => {
+      const active = accounts.active();
+      if (active) await accounts.signOut(active.ref, { confirm: true });
+      else await signOutAccount(c);
+    }),
+    vscode15.commands.registerCommand(
+      "hq.addAccount",
+      async () => accounts.count() === 0 ? (await accounts.signIn({ kind: "first" })).outcome : (await accounts.signIn({ kind: "add" })).outcome
+    ),
+    vscode15.commands.registerCommand(
+      "hq.switchAccount",
+      (ref) => switchAccount(c, ref && "userId" in ref ? ref : void 0)
+    ),
+    vscode15.commands.registerCommand(
+      "hq.signOutAccount",
+      (arg) => signOutAccount(c, arg && "ref" in arg ? arg.ref : arg)
+    ),
+    // The notice's "Sign in as <email>" link (account-notices.ts). Renews a listed account.
+    vscode15.commands.registerCommand("hq.signInAs", async (tag, userId) => {
+      if (typeof tag === "string" && typeof userId === "string") {
+        await accounts.signInAs(tag, userId);
+      }
+    }),
+    vscode15.commands.registerCommand("hq.renewAccount", async (ref) => {
+      if (ref) await accounts.signIn({ kind: "renew", ref });
+    }),
+    vscode15.commands.registerCommand("hq.accounts.primaryAction", () => primaryAction(c)),
+    // ── teams ──────────────────────────────────────────────────────────────────────────────────
+    vscode15.commands.registerCommand("hq.refresh", async () => {
       teamsTree.refresh();
-      await service.refreshOrgs().catch(() => void 0);
+      const b = await requireAccount(c);
+      await b?.service.refreshOrgs().catch(() => void 0);
     }),
-    vscode11.commands.registerCommand("hq.manageDevices", () => {
-      const host = service.host();
-      if (host) void vscode11.env.openExternal(vscode11.Uri.parse(`${host}/account/devices`));
+    vscode15.commands.registerCommand("hq.manageDevices", () => {
+      const host = accounts.host();
+      if (host) void vscode15.env.openExternal(vscode15.Uri.parse(`${host}/account/devices`));
     }),
-    vscode11.commands.registerCommand("hq.openInHqWeb", (node) => {
-      const host = service.host();
+    vscode15.commands.registerCommand("hq.openInHqWeb", (node) => {
+      const host = accounts.host();
       if (!host || !node || node.kind === "org") return;
       const url = node.kind === "session" ? webUrl(host, { workspaceId: node.team.workspace.id, sessionId: node.session.id }) : webUrl(host, { workspaceId: node.team.workspace.id });
-      void vscode11.env.openExternal(vscode11.Uri.parse(url));
+      void vscode15.env.openExternal(vscode15.Uri.parse(url));
     }),
-    vscode11.commands.registerCommand("hq.wakeTeam", async (node) => {
-      const team = await pickTeam(service, node, (t) => teamState(t.workspace) !== "running");
+    vscode15.commands.registerCommand("hq.wakeTeam", async (node) => {
+      const b = await requireAccount(c, nodeAccount(node));
+      if (!b) return;
+      const team = await pickTeam(b, node, (t) => teamState(t.workspace) !== "running");
       if (!team) return;
       const name = cleanLabel(team.workspace.name) || team.alias;
       teamsTree.setWaking(team.workspace.id, true);
+      b.core.expectUp(team, { force: true });
       try {
-        const outcome = await vscode11.window.withProgress(
-          { location: vscode11.ProgressLocation.Notification, title: COPY.waking(name) },
-          (progress) => service.call(
+        const outcome = await vscode15.window.withProgress(
+          {
+            location: vscode15.ProgressLocation.Notification,
+            title: notificationText(COPY.waking(name))
+          },
+          (progress) => b.service.call(
             (client) => wakeTeam(client, team, {
               now: Date.now,
               sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-              report: (message) => progress.report({ message: message === COPY.waking(name) ? "" : message })
+              report: (message) => progress.report({
+                message: message === COPY.waking(name) ? "" : notificationText(message)
+              })
             })
           )
         );
-        if (outcome.kind === "running") void vscode11.window.showInformationMessage(COPY.woke(name));
-        else if (outcome.kind === "timeout")
-          void vscode11.window.showWarningMessage(COPY.wakeTimeout(name));
-        else if (outcome.kind === "no-machine")
-          void vscode11.window.showWarningMessage(COPY.wakeNoMachine(name));
-        else if (outcome.kind === "throttled")
-          void vscode11.window.showWarningMessage(COPY.wakeThrottled);
-        else if (outcome.kind === "unavailable")
-          void vscode11.window.showWarningMessage(COPY.wakeUnavailable);
-        else if (outcome.error.status === 403)
-          void vscode11.window.showErrorMessage(COPY.forwardNotAllowed(name));
-        else void vscode11.window.showErrorMessage(outcome.error.message);
+        if (outcome.kind === "running") b.core.expectUp(team, { force: true });
+        void showWakeNotice(wakeNotice(outcome, name, team), {
+          kind: "team",
+          account: b.ref,
+          team
+        });
       } catch {
       } finally {
         teamsTree.setWaking(team.workspace.id, false);
-        await service.refreshOrgs().catch(() => void 0);
+        await b.service.refreshOrgs().catch(() => void 0);
       }
     }),
-    vscode11.commands.registerCommand("hq.attachSession", async (node) => {
+    // The off notice's "Wake Team" link (team-off-notices.ts): [tag, workspaceId], validated.
+    vscode15.commands.registerCommand(
+      "hq.wakeTeamOf",
+      async (tag, workspaceId) => {
+        if (!isTag(tag) || typeof workspaceId !== "string") return;
+        const b = accounts.byTag(tag);
+        const team = b?.service.teams().find((t) => t.workspace.id === workspaceId);
+        if (b && team) {
+          await vscode15.commands.executeCommand("hq.wakeTeam", {
+            kind: "team",
+            account: b.ref,
+            team
+          });
+        }
+      }
+    ),
+    vscode15.commands.registerCommand("hq.attachSession", async (node) => {
       if (node?.kind === "session") {
-        terminals.attach({ team: node.team, session: node.session });
+        terminals.attach({ account: node.account, team: node.team, session: node.session });
         return;
       }
-      const team = await pickTeam(service, node, (t) => t.workspace.rights.attach);
+      const b = await requireAccount(c, nodeAccount(node));
+      if (!b) return;
+      const team = await pickTeam(b, node, (t) => t.workspace.rights.attach);
       if (!team) return;
       teamsTree.refresh();
-      const sessions = await teamsTree.getChildren({ kind: "team", team }) ?? [];
-      const picked = await vscode11.window.showQuickPick(
+      const sessions = await teamsTree.getChildren({ kind: "team", account: b.ref, team }) ?? [];
+      const picked = await vscode15.window.showQuickPick(
         sessions.filter((n) => n.kind === "session").map((n) => ({
           label: cleanLabel(n.session.name),
           description: cleanLabel(n.session.ownerName),
@@ -15145,61 +17740,92 @@ function activate(context) {
         })),
         { placeHolder: COPY.pickSession }
       );
-      if (picked) terminals.attach({ team: picked.node.team, session: picked.node.session });
+      if (picked) {
+        terminals.attach({
+          account: picked.node.account,
+          team: picked.node.team,
+          session: picked.node.session
+        });
+      }
     }),
-    vscode11.commands.registerCommand("hq.newSessionTerminal", async (node) => {
-      const team = await pickTeam(service, node, (t) => t.workspace.rights.forward);
+    vscode15.commands.registerCommand("hq.newSessionTerminal", async (node) => {
+      const b = await requireAccount(c, nodeAccount(node));
+      if (!b) return;
+      const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
       if (!team) return;
-      await terminals.newSession(team);
+      await terminals.newSession(b.ref, team);
       teamsTree.refresh();
     }),
-    vscode11.commands.registerCommand("hq.forwardPort", async (node) => {
-      const team = await pickTeam(service, node, (t) => t.workspace.rights.forward);
+    // ── ports ──────────────────────────────────────────────────────────────────────────────────
+    vscode15.commands.registerCommand("hq.forwardPort", async (node) => {
+      const b = await requireAccount(c, nodeAccount(node));
+      if (!b) return;
+      const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
       if (!team) return;
       const chosen = await askForPorts();
-      if (chosen) await ports.start(team, chosen.remote, chosen.local);
+      if (chosen) await ports.start(b.ref, team, chosen.remote, chosen.local);
     }),
-    vscode11.commands.registerCommand("hq.ports.open", (entry) => {
+    vscode15.commands.registerCommand("hq.ports.open", (entry) => {
       const url = ports.localUrl(entry);
-      if (url) void vscode11.env.openExternal(vscode11.Uri.parse(url));
+      if (url) void vscode15.env.openExternal(vscode15.Uri.parse(url));
     }),
-    vscode11.commands.registerCommand("hq.ports.copy", async (entry) => {
+    vscode15.commands.registerCommand("hq.ports.copy", async (entry) => {
       const url = ports.localUrl(entry);
       if (!url) return;
-      await vscode11.env.clipboard.writeText(url);
-      void vscode11.window.setStatusBarMessage(COPY.addressCopied(url), 3e3);
+      await vscode15.env.clipboard.writeText(url);
+      void vscode15.window.setStatusBarMessage(COPY.addressCopied(url), 3e3);
     }),
-    vscode11.commands.registerCommand("hq.ports.stop", (entry) => ports.stop(entry)),
-    vscode11.commands.registerCommand("hq.ports.resume", (entry) => ports.resume(entry)),
-    vscode11.commands.registerCommand("hq.ports.forwardDetected", async (entry) => {
-      if (entry.kind === "detected") await ports.start(entry.team, entry.port, entry.port);
+    vscode15.commands.registerCommand("hq.ports.stop", (entry) => ports.stop(entry)),
+    vscode15.commands.registerCommand("hq.ports.resume", (entry) => ports.resume(entry)),
+    vscode15.commands.registerCommand("hq.ports.forwardDetected", async (entry) => {
+      if (entry.kind === "detected") {
+        await ports.start(entry.account, entry.team, entry.port, entry.port);
+      }
     }),
-    vscode11.commands.registerCommand(
+    vscode15.commands.registerCommand(
       "hq.ports.dismissDetected",
       (entry) => ports.dismiss(entry)
     ),
-    vscode11.commands.registerCommand("hq.openTeamFiles", async (node) => {
-      const team = await pickTeam(service, node, (t) => t.workspace.rights.files?.read === true);
+    // ── team files ─────────────────────────────────────────────────────────────────────────────
+    vscode15.commands.registerCommand("hq.openTeamFiles", async (node) => {
+      const b = await requireAccount(c, nodeAccount(node));
+      if (!b) return;
+      const team = await pickTeam(b, node, (t) => t.workspace.rights.files?.read === true);
       if (!team) return;
-      const uri = teamRootUri(team);
-      const folders = vscode11.workspace.workspaceFolders ?? [];
-      if (folders.some((f) => f.uri.toString() === uri.toString())) return;
-      vscode11.workspace.updateWorkspaceFolders(folders.length, 0, {
-        uri,
-        name: teamFolderName(team)
+      const open = openFolderOf(b, team, accounts.isLegacyUser(b));
+      if (open) {
+        void vscode15.commands.executeCommand("revealInExplorer", open.uri);
+        return;
+      }
+      const folders = vscode15.workspace.workspaceFolders ?? [];
+      vscode15.workspace.updateWorkspaceFolders(folders.length, 0, {
+        uri: teamRootUri(b.ref, team),
+        name: teamFolderName(team, accounts.shortLabel(b.ref))
       });
     }),
-    vscode11.commands.registerCommand("hq.searchTeamFiles", async (node) => {
-      const active = vscode11.window.activeTextEditor?.document.uri;
-      let team = active?.scheme === HQ_SCHEME ? service.teams().find((t) => t.org.slug === active.authority && t.alias === relPathOf(active).alias) : void 0;
-      if (!team) {
-        team = await pickTeam(service, node, (t) => t.workspace.rights.files?.read === true);
+    vscode15.commands.registerCommand("hq.searchTeamFiles", async (node) => {
+      const active = vscode15.window.activeTextEditor?.document.uri;
+      let b = null;
+      let team;
+      if (!node && active?.scheme === HQ_SCHEME) {
+        const r = accounts.resolveAuthority(active.authority);
+        if (r.kind === "ok") {
+          b = r.bundle;
+          const alias = relPathOf(active).alias;
+          team = b.service.teams().find((t) => t.org.slug === r.orgSlug && t.alias === alias);
+        }
+      }
+      if (!b || !team) {
+        b = await requireAccount(c, nodeAccount(node));
+        if (!b) return;
+        team = await pickTeam(b, node, (t) => t.workspace.rights.files?.read === true);
       }
       if (!team) return;
-      const query = await vscode11.window.showInputBox({ prompt: COPY.searchPrompt });
+      const bundle = b;
+      const query = await vscode15.window.showInputBox({ prompt: COPY.searchPrompt });
       if (!query) return;
       const canRegex = team.workspace.rights.files?.write === true;
-      const options = await vscode11.window.showQuickPick(
+      const options = await vscode15.window.showQuickPick(
         [...canRegex ? [COPY.searchRegex] : [], COPY.searchCase, COPY.searchWord].map(
           (label) => ({ label })
         ),
@@ -15207,8 +17833,8 @@ function activate(context) {
       );
       if (options === void 0) return;
       const picked = new Set(options.map((o) => o.label));
-      const include = parseGlobs(await vscode11.window.showInputBox({ prompt: COPY.searchInclude }));
-      const exclude = parseGlobs(await vscode11.window.showInputBox({ prompt: COPY.searchExclude }));
+      const include = parseGlobs(await vscode15.window.showInputBox({ prompt: COPY.searchInclude }));
+      const exclude = parseGlobs(await vscode15.window.showInputBox({ prompt: COPY.searchExclude }));
       const req = {
         query,
         isRegex: picked.has(COPY.searchRegex),
@@ -15217,27 +17843,39 @@ function activate(context) {
         ...include.length ? { include } : {},
         ...exclude.length ? { exclude } : {}
       };
+      const searchTeam = team;
       try {
-        const res = await vscode11.window.withProgress(
-          { location: vscode11.ProgressLocation.Notification, title: COPY.searchTitle },
-          () => fsApi.search(team, req)
+        const res = await vscode15.window.withProgress(
+          { location: vscode15.ProgressLocation.Notification, title: COPY.searchTitle },
+          () => bundle.fsApi.search(searchTeam, req)
         );
         searchView.show(
-          await withShownPaths(groupByFile(team, res), (t, p) => fsCore.shownPath(t, p))
+          await withShownPaths(
+            groupByFile(bundle.ref, searchTeam, res),
+            (t, p) => bundle.core.shownPath(t, p)
+          )
         );
-        void vscode11.commands.executeCommand("setContext", "hq.hasSearch", true);
-        void vscode11.commands.executeCommand("hq.search.focus");
+        void vscode15.commands.executeCommand("setContext", "hq.hasSearch", true);
+        void vscode15.commands.executeCommand("hq.search.focus");
       } catch (err) {
+        void bundle.service.handleError(err);
         const detail = err instanceof FsApiError || err instanceof Error ? err.message : COPY.unreachable;
-        void vscode11.window.showErrorMessage(COPY.searchFailed(detail));
+        void vscode15.window.showErrorMessage(COPY.searchFailed(detail));
       }
     }),
-    vscode11.commands.registerCommand(
-      "hq.search.open",
-      (node) => openMatch(node, (team, p) => fsCore.shownPath(team, p))
-    )
+    vscode15.commands.registerCommand("hq.search.open", (node) => {
+      const b = node.kind === "summary" ? null : accounts.get(node.account);
+      if (node.kind !== "summary" && !b) accountMissing(node.account);
+      return openMatch(
+        node,
+        b ? {
+          shownPath: (team, p) => b.core.shownPath(team, p),
+          uriOf: (team, p) => uriFor(b, team, p, accounts.isLegacyUser(b))
+        } : null
+      );
+    })
   );
-  if (service.signedIn()) void service.refreshOrgs().catch(() => void 0);
+  void accounts.active()?.service.refreshOrgs().catch(() => void 0);
 }
 function deactivate() {
 }

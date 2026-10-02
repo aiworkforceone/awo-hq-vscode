@@ -3,29 +3,38 @@
  * Search view (file → matching lines). Previews arrive masked and re-matched on the server (a query
  * for a secret finds nothing); they are cleaned again here before display. Clicking a line opens the
  * file over `hq://` at the match.
+ *
+ * Every result carries the ACCOUNT that searched (hq-vscode-multi-account §6): opening a hit reads
+ * it as that account, under the form the team's folder is open in (decision 24), never the active
+ * account.
  */
 import * as vscode from 'vscode';
 import type { Team } from '@hq/client/teams.js';
 import type { FsSearchMatch, FsSearchTextResponse } from '@kpa/shared/remote-fs.types';
 import { COPY } from '../copy.js';
+import type { AccountRef } from '../hq/account-ref.js';
 import { cleanLabel } from '../util/text.js';
-import { teamFileUri } from '../fs/hq-fs-provider.js';
 import { hasControlChars } from '../fs/fs-core.js';
 
 export type SearchNode =
   | { kind: 'summary'; text: string }
   | {
       kind: 'file';
+      account: AccountRef;
       team: Team;
       path: string;
       matches: FsSearchMatch[];
       /** The path the Explorer shows (twins differ by their ~hash), set by `withShownPaths`. */
       shown?: string;
     }
-  | { kind: 'match'; team: Team; match: FsSearchMatch };
+  | { kind: 'match'; account: AccountRef; team: Team; match: FsSearchMatch };
 
 /** Group matches by file, in the order the machine found them. */
-export function groupByFile(team: Team, res: FsSearchTextResponse): SearchNode[] {
+export function groupByFile(
+  account: AccountRef,
+  team: Team,
+  res: FsSearchTextResponse,
+): SearchNode[] {
   const byPath = new Map<string, FsSearchMatch[]>();
   for (const m of res.matches) {
     const list = byPath.get(m.path) ?? [];
@@ -43,6 +52,7 @@ export function groupByFile(team: Team, res: FsSearchTextResponse): SearchNode[]
     summary,
     ...[...byPath.entries()].map(([path, matches]) => ({
       kind: 'file' as const,
+      account,
       team,
       path,
       matches,
@@ -87,10 +97,20 @@ export class SearchView implements vscode.TreeDataProvider<SearchNode> {
     this.show([]);
   }
 
+  /** An account signed out: its results go (another account's stay). */
+  clearAccount(isIt: (account: AccountRef) => boolean): void {
+    if (this.roots.some((n) => n.kind === 'file' && isIt(n.account))) this.clear();
+  }
+
   getChildren(node?: SearchNode): SearchNode[] {
     if (!node) return this.roots;
     if (node.kind === 'file') {
-      return node.matches.map((match) => ({ kind: 'match' as const, team: node.team, match }));
+      return node.matches.map((match) => ({
+        kind: 'match' as const,
+        account: node.account,
+        team: node.team,
+        match,
+      }));
     }
     return [];
   }
@@ -124,21 +144,25 @@ export class SearchView implements vscode.TreeDataProvider<SearchNode> {
   }
 }
 
+/** How a hit of ONE account becomes a URI: its shown path, and the form its folder is open in. */
+export interface MatchOpener {
+  shownPath(team: Team, realPath: string): Promise<string>;
+  uriOf(team: Team, shownPath: string): vscode.Uri;
+}
+
 /**
  * Open a match's file at its line (the column is the preview's, so only the line is exact). The URI
  * is built from the path the Explorer SHOWS (W4: `HqFsCore.shownPath`), so a file with a cleaned
- * name has one URI, not two.
+ * name has one URI, not two, and in the form its team's folder is open in (decision 24).
  */
-export async function openMatch(
-  node: SearchNode,
-  shownPath: (team: Team, realPath: string) => Promise<string> = async (_t, p) => p,
-): Promise<void> {
+export async function openMatch(node: SearchNode, opener: MatchOpener | null): Promise<void> {
   if (node.kind !== 'match') return;
   if (hasControlChars(node.match.path)) {
     void vscode.window.showWarningMessage(COPY.fsControlName);
     return;
   }
-  const uri = teamFileUri(node.team, await shownPath(node.team, node.match.path));
+  if (!opener) return; // the account that searched is not signed in any more
+  const uri = opener.uriOf(node.team, await opener.shownPath(node.team, node.match.path));
   const line = Math.max(0, node.match.line - 1);
   await vscode.window.showTextDocument(uri, {
     selection: new vscode.Range(line, 0, line, 0),

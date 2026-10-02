@@ -131,7 +131,13 @@ export type EventsErrorCode =
   | 'THROTTLED';
 
 export type EventsClientFrame =
-  | { type: 'subscribe'; workspaceId: string }
+  /**
+   * `intent` (fix/vscode-presence, 0.2.0): `open` is a person opening the team's folder and counts
+   * as presence when the team is running; `reconnect` is the client re-making its subscriptions by
+   * itself after a gap (the hourly LB recycle, a dropped socket) and never does. Absent (0.1.x) or
+   * unknown reads as `open`, the old behaviour.
+   */
+  | { type: 'subscribe'; workspaceId: string; intent?: 'open' | 'reconnect' }
   | { type: 'unsubscribe'; workspaceId: string }
   | { type: 'remote-token'; token: string };
 

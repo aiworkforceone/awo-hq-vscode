@@ -47,6 +47,13 @@ export interface EventsHubDeps {
    * guard re-arms when the check has finished AND this long has passed. Default 30 s.
    */
   unauthorizedQuietMs?: number;
+  /**
+   * hq-vscode-multi-account decision 26: the grant a client was built for, and the account's grant
+   * now. A 4401 on a socket dialled with an OLD grant (renewed in another window, which revoked the
+   * old one) redials with the new one: it is not a revocation.
+   */
+  grantOf?(client: HqClient): string | undefined;
+  currentGrant?(): string | null;
 }
 
 type Listener = (frame: EventsServerFrame) => void;
@@ -143,6 +150,10 @@ class OrgSocket {
   private refusalSaid = false;
   /** A 401 was already handed to the service; cleared when a socket opens. */
   private unauthorizedSaid = false;
+  /** A reconnect was asked while a dial was in flight: dial again once it finishes. */
+  private redial = false;
+  /** Teams already subscribed once on this org's socket (any of its dials). */
+  private readonly announced = new Set<string>();
 
   constructor(
     private readonly org: string,
@@ -189,6 +200,11 @@ class OrgSocket {
     }
     // Closed (last watch disposed, sign-out) while the headers were being built: never dial.
     if (this.closedForGood) return;
+    // Renewed while this dial built its headers with the old client: start over with the new one.
+    if (this.redial) {
+      this.redial = false;
+      return this.connect();
+    }
     this.lastToken = /^Bearer (.+)$/.exec(headers.Authorization ?? '')?.[1] ?? null;
     const ws = (this.deps.ws ?? defaultWs)(wsUrl(client.host, REMOTE_EVENTS_WS_PATH), headers);
     this.adopt(ws);
@@ -237,8 +253,18 @@ class OrgSocket {
       if (this.subs.size > 0) this.scheduleReconnect();
     };
     ws.on('close', (code) => {
-      // 4401: the login may be gone. Stop dialling, and have the service ask HQ now (U28).
+      // A socket this one replaced: whatever it says is about the old dial.
+      if (this.ws !== ws) return;
       if (code === 4401) {
+        const built = this.deps.grantOf?.(client);
+        const now = this.deps.currentGrant?.();
+        if (built !== undefined && now !== undefined && now !== null && built !== now) {
+          // The OLD grant's socket after a renew elsewhere: dial again with the new grant.
+          this.backoff = this.deps.minBackoffMs ?? 1_000;
+          down();
+          return;
+        }
+        // 4401: the login may be gone. Stop dialling, and have the service ask HQ now (U28).
         this.closedForGood = true;
         this.unauthorized();
       }
@@ -348,12 +374,52 @@ class OrgSocket {
     this.tokenTimer = null;
   }
 
+  /**
+   * fix/vscode-presence: the first subscribe of a team is a person opening its folder (`open`, which
+   * HQ counts as presence on a running team); every later one, re-made after a drop, the hourly LB
+   * recycle or a renewed sign-in, is the client's own (`reconnect`, which never counts).
+   */
   sendSubscribe(id: string): void {
-    if (this.isOpen()) this.ws!.send(JSON.stringify({ type: 'subscribe', workspaceId: id }));
+    if (!this.isOpen()) return;
+    const intent = this.announced.has(id) ? 'reconnect' : 'open';
+    this.announced.add(id);
+    this.ws!.send(JSON.stringify({ type: 'subscribe', workspaceId: id, intent }));
+  }
+
+  /** The team's folder was closed: its next subscribe is a person opening it again. */
+  forget(id: string): void {
+    this.announced.delete(id);
   }
 
   sendUnsubscribe(id: string): void {
     if (this.isOpen()) this.ws!.send(JSON.stringify({ type: 'unsubscribe', workspaceId: id }));
+  }
+
+  /**
+   * Drop the open socket and dial again now, through `deps.client()` (hq-vscode-multi-account
+   * decision 26: the slot was renewed in another window, and the token timer above holds the old
+   * client and swallows its errors). The re-made subscriptions carry a resync.
+   */
+  reconnectNow(): void {
+    // A 4401 from the OLD grant closed it "for good"; the renewed grant may dial again. A socket
+    // closed because its last watch went (no subscriptions) stays closed.
+    if (this.closedForGood && this.subs.size === 0) return;
+    this.closedForGood = false;
+    this.unauthorizedSaid = false;
+    if (this.connecting) {
+      this.redial = true;
+      return;
+    }
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    const ws = this.ws;
+    this.ws = null;
+    this.acked.clear();
+    this.stopTokenRotation();
+    ws?.terminate();
+    this.everConnected = this.everConnected || ws !== null;
+    this.backoff = this.deps.minBackoffMs ?? 1_000;
+    if (this.subs.size > 0 && !this.connecting) void this.connect();
   }
 
   close(): void {
@@ -408,6 +474,7 @@ export class EventsHub {
         }
         org!.subs.delete(id);
         org!.acked.delete(id);
+        org!.forget(id);
         org!.sendUnsubscribe(id);
         if (org!.subs.size === 0) {
           org!.close();
@@ -421,6 +488,11 @@ export class EventsHub {
   isLive(team: Team): boolean {
     const org = this.orgs.get(team.org.slug);
     return org !== undefined && org.isOpen() && org.acked.has(team.workspace.id);
+  }
+
+  /** The account's slot was renewed: every open socket redials with the new grant. */
+  reconnectAll(): void {
+    for (const org of this.orgs.values()) org.reconnectNow();
   }
 
   /** Sign-out, revocation, host change: every socket goes. */

@@ -25,6 +25,19 @@ const team = {
 const root = Uri.from({ scheme: 'hq', authority: 'awo', path: '/hq-3f9a1c2e' });
 const file = Uri.from({ scheme: 'hq', authority: 'awo', path: '/hq-3f9a1c2e/src/a.ts' });
 const flush = () => new Promise((r) => setTimeout(r, 0));
+const TAG = 'a0123456789ab';
+const ACCOUNT = {
+  host: 'https://hq-test.aiworkforceone.com',
+  userId: 'u1',
+  slot: 'legacy',
+  profileKey: '',
+} as const;
+const rootsOf = () => [root as never];
+const opener = (shown: (p: string) => string) => ({
+  shownPath: async (_t: Team, p: string) => shown(p),
+  uriOf: (t: Team, p: string) =>
+    Uri.from({ scheme: 'hq', authority: t.org.slug, path: `/${t.alias}/${p}` }) as never,
+});
 
 let issues: HqTeamIssues;
 let changed: string[];
@@ -39,14 +52,14 @@ beforeEach(() => {
 describe('HqTeamIssues', () => {
   it('needs an update: one warning with the sentence; Open Team Settings opens the team settings page', async () => {
     stub.choice = COPY.openTeamSettings;
-    issues.onIssue(team, { kind: 'needs-update' });
+    issues.onIssue(TAG, rootsOf, team, { kind: 'needs-update' });
     await flush();
     expect(stub.messages).toEqual([{ level: 'warn', text: COPY.updateNeededLong('Backend team') }]);
     expect(stub.opened).toEqual([`https://hq-test.aiworkforceone.com/workspaces/${WS}/settings`]);
   });
 
   it('the team root carries the reason (badge + tooltip); files below it and other teams do not', () => {
-    issues.onIssue(team, { kind: 'needs-update' });
+    issues.onIssue(TAG, rootsOf, team, { kind: 'needs-update' });
     expect(changed).toEqual([root.toString()]);
     expect(issues.provideFileDecoration(root as never)).toMatchObject({
       badge: '↑',
@@ -56,7 +69,7 @@ describe('HqTeamIssues', () => {
   });
 
   it('updating: an info notice with the ETA, and the folder tooltip says it too', () => {
-    issues.onIssue(team, { kind: 'updating', etaSeconds: 90 });
+    issues.onIssue(TAG, rootsOf, team, { kind: 'updating', etaSeconds: 90 });
     expect(stub.messages).toEqual([{ level: 'info', text: COPY.fsUpdating('Backend team', 90) }]);
     expect(issues.provideFileDecoration(root as never)).toMatchObject({
       badge: '…',
@@ -65,20 +78,20 @@ describe('HqTeamIssues', () => {
   });
 
   it('back to normal: the decoration goes, with no notice; sign-out clears every folder', () => {
-    issues.onIssue(team, { kind: 'needs-update' });
+    issues.onIssue(TAG, rootsOf, team, { kind: 'needs-update' });
     stub.reset();
-    issues.onIssue(team, null);
+    issues.onIssue(TAG, rootsOf, team, null);
     expect(stub.messages).toEqual([]);
     expect(issues.provideFileDecoration(root as never)).toBeUndefined();
-    issues.onIssue(team, { kind: 'updating', etaSeconds: null });
+    issues.onIssue(TAG, rootsOf, team, { kind: 'updating', etaSeconds: null });
     changed = [];
-    issues.clear();
+    issues.clear(TAG);
     expect(changed).toEqual([root.toString()]);
     expect(issues.provideFileDecoration(root as never)).toBeUndefined();
   });
 
   it('dismissing the warning opens nothing', async () => {
-    issues.onIssue(team, { kind: 'needs-update' });
+    issues.onIssue(TAG, rootsOf, team, { kind: 'needs-update' });
     await flush();
     expect(stub.opened).toEqual([]);
   });
@@ -90,8 +103,13 @@ describe('W4: a search result opens the uri the Explorer shows', () => {
     const FFFD = String.fromCharCode(0xfffd);
     const real = `src/evil${RLO}.txt`;
     await openMatch(
-      { kind: 'match', team, match: { path: real, line: 3, column: 1, length: 1, preview: 'x' } },
-      async (_t, p) => p.replace(RLO, FFFD),
+      {
+        kind: 'match',
+        account: ACCOUNT,
+        team,
+        match: { path: real, line: 3, column: 1, length: 1, preview: 'x' },
+      },
+      opener((p) => p.replace(RLO, FFFD)),
     );
     expect(stub.shownDocs).toEqual([`hq://awo/hq-3f9a1c2e/src/evil${FFFD}.txt`]);
   });
@@ -103,7 +121,7 @@ describe('train 42 re-test: search results', () => {
   const ZW = String.fromCharCode(0x200b);
 
   it('each file is labelled with the path the Explorer shows (twins no longer look the same)', async () => {
-    const nodes = groupByFile(team, {
+    const nodes = groupByFile(ACCOUNT, team, {
       matches: [
         { path: `src/a${RLO}b.txt`, line: 1, column: 1, length: 1, preview: 'x' },
         { path: `src/a${ZW}b.txt`, line: 2, column: 1, length: 1, preview: 'y' },
@@ -125,10 +143,11 @@ describe('train 42 re-test: search results', () => {
     await openMatch(
       {
         kind: 'match',
+        account: ACCOUNT,
         team,
         match: { path: `src/evil${ESC}.txt`, line: 1, column: 1, length: 1, preview: 'x' },
       },
-      async (_t, p) => p,
+      opener((p) => p),
     );
     expect(stub.messages).toEqual([{ level: 'warn', text: COPY.fsControlName }]);
     expect(stub.shownDocs).toEqual([]);
@@ -142,7 +161,9 @@ describe('train 42 re-test: control-character names are marked in the Explorer',
       team: () => team,
       isUnopenable: (_t: unknown, p: string) => p === `evil${FFFD}.txt`,
     };
-    const marks = new UnopenableNames(core);
+    const marks = new UnopenableNames((authority) =>
+      authority === 'awo' ? { core, orgSlug: 'awo' } : null,
+    );
     const bad = Uri.from({ scheme: 'hq', authority: 'awo', path: `/hq-3f9a1c2e/evil${FFFD}.txt` });
     const ok = Uri.from({ scheme: 'hq', authority: 'awo', path: '/hq-3f9a1c2e/ok.txt' });
     expect(marks.provideFileDecoration(bad as never)).toMatchObject({

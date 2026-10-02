@@ -26,6 +26,13 @@ const cases = {
       'hq.ports.stop',
       'hq.openTeamFiles',
       'hq.searchTeamFiles',
+      // hq-vscode-multi-account (0.2.0)
+      'hq.addAccount',
+      'hq.switchAccount',
+      'hq.signOutAccount',
+      'hq.renewAccount',
+      'hq.signInAs',
+      'hq.accounts.primaryAction',
     ]) {
       assert.ok(all.includes(id), `${id} is registered`);
     }
@@ -69,6 +76,43 @@ const cases = {
     }
     // Not FileNotFound: nothing is known about the team until someone signs in, and no request left.
     assert.equal(code, 'Unavailable');
+  },
+
+  async 'a tagged hq:// folder of an account not signed in fails closed (D3, MA-S10, MA-S11)'() {
+    // A well-formed tag of nobody signed in here, and malformed authorities: all Unavailable, never
+    // another account's folder.
+    for (const authority of [
+      'a0123456789ab@awo',
+      'A0123456789AB@awo',
+      'a0123456789ab@awo:443',
+      'x@y@awo',
+    ]) {
+      let code;
+      try {
+        await vscode.workspace.fs.stat(
+          vscode.Uri.parse(`hq://${authority}/hq-3f9a1c2e/src/app.py`),
+        );
+      } catch (err) {
+        code = err && err.code;
+      }
+      assert.equal(code, 'Unavailable', authority);
+    }
+  },
+
+  async 'more than one account: the Accounts provider lists none while signed out, and its sessions are not credentials'() {
+    const ext = vscode.extensions.getExtension(EXTENSION_ID);
+    const auth = ext.packageJSON.contributes.authentication;
+    assert.deepEqual(auth, [{ id: 'aiworkforceone-hq', label: 'AI Workforce One HQ' }]);
+    const session = await vscode.authentication.getSession('aiworkforceone-hq', [], {
+      createIfNone: false,
+      silent: true,
+    });
+    assert.equal(session, undefined);
+  },
+
+  async 'the extension reports 0.2.0'() {
+    const ext = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.equal(ext.packageJSON.version, '0.2.0');
   },
 
   async 'a host outside the allow-list is never signed in to'() {

@@ -18,16 +18,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RemoteOrg } from '@kpa/shared/remote.types';
-import { generateDeviceKeyMaterial, toOpenSshPrivateKey } from '@hq/client/device-key.js';
 import { withTeamAliases } from '@hq/client/teams.js';
-import { HqService } from '../../src/hq/hq-service.js';
-import { SessionStore, type MementoLike, type SecretsLike } from '../../src/hq/session-store.js';
+import type { HqAccounts } from '../../src/hq/accounts.js';
+import type { HqService } from '../../src/hq/hq-service.js';
 import { HqPty } from '../../src/terminal/hq-pty.js';
 import { teamIsRunning } from '../../src/terminal/terminals.js';
 import { forwardError, Ports } from '../../src/ports/ports.js';
 import { COPY } from '../../src/copy.js';
 import { HqApiError } from '@hq/client/api.js';
 import { ConnectRefusedError } from '@hq/client/connect.js';
+import { legacySignedIn, memento } from './harness.js';
 import { stub } from './vscode-stub.js';
 
 const WS_ID = '3f9a1c2e-1111-4222-8333-444455556666';
@@ -124,32 +124,10 @@ async function startHq(): Promise<FakeHq> {
   return fake;
 }
 
-function secrets(): SecretsLike {
-  const data = new Map<string, string>();
-  return {
-    get: async (k) => data.get(k),
-    store: async (k, v) => void data.set(k, v),
-    delete: async (k) => void data.delete(k),
-    onDidChange: () => ({ dispose: () => undefined }),
-  };
-}
-
-function memento(): MementoLike & vscodeMemento {
-  const data = new Map<string, unknown>();
-  return {
-    get: <T>(k: string, fallback?: T) => (data.has(k) ? (data.get(k) as T) : fallback) as T,
-    update: async (k: string, v: unknown) => {
-      if (v === undefined) data.delete(k);
-      else data.set(k, v);
-    },
-    keys: () => [...data.keys()],
-  };
-}
-type vscodeMemento = { keys(): readonly string[] };
-
 let fake: FakeHq;
 let lockDir: string;
 let svc: HqService;
+let accounts: HqAccounts;
 let mem: ReturnType<typeof memento>;
 
 beforeEach(async () => {
@@ -157,35 +135,7 @@ beforeEach(async () => {
   fake = await startHq();
   lockDir = mkdtempSync(path.join(tmpdir(), 'hq-vscode-t-'));
   mem = memento();
-  const store = new SessionStore(secrets(), mem);
-  const { seed32, pub32 } = generateDeviceKeyMaterial();
-  await store.saveDeviceKey(fake.url, toOpenSshPrivateKey(seed32, pub32, 'test'));
-  await store.saveTokens(fake.url, {
-    accessToken: `hqa_${'a'.repeat(43)}`,
-    accessExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-    refreshToken: `hqr_${'r'.repeat(43)}`,
-  });
-  await store.saveOrgs(fake.url, orgs());
-  await store.saveAccount(fake.url, {
-    grantId: 'g1',
-    user: { id: 'u1', email: 'jean@example.com', name: 'Jean' },
-  });
-  svc = new HqService({
-    store,
-    ui: {
-      showDeviceCode: () => ({ close: () => undefined }),
-      openExternal: async () => undefined,
-      copyToClipboard: async () => undefined,
-      info: () => undefined,
-      askToSignIn: async () => false,
-      modal: () => undefined,
-      offerSignInHere: async () => false,
-    },
-    host: () => ({ ok: true, host: fake.url }),
-    extensionVersion: '0.1.0',
-    appName: 'Code',
-    lockDir,
-  });
+  ({ svc, accounts } = await legacySignedIn(fake.url, orgs(), lockDir, { mem }));
 });
 
 afterEach(async () => {
@@ -249,6 +199,7 @@ describe('HqPty (D4, D5)', () => {
         offerPorts: (_t, p) => offered.push(p),
       },
       {
+        account: svc.ref,
         team,
         session: {
           id: 's-1',
@@ -304,7 +255,7 @@ describe('HqPty: revocation from HQ web (U28)', () => {
       });
     };
     let revoked = 0;
-    svc.onRevoked(() => void (revoked += 1));
+    accounts.onAccountRemoved(() => void (revoked += 1));
     const team = withTeamAliases(orgs())[0]!;
     const pty = new HqPty(
       {
@@ -315,13 +266,14 @@ describe('HqPty: revocation from HQ web (U28)', () => {
         offerPorts: () => undefined,
       },
       {
+        account: svc.ref,
         team,
         session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running', canType: true },
       },
     );
     pty.open({ columns: 80, rows: 24 });
     await waitFor(() => revoked === 1);
-    expect(svc.signedIn()).toBe(false);
+    expect(accounts.count()).toBe(0);
   });
 });
 
@@ -366,7 +318,7 @@ describe('a machine that started before Developer access was turned on', () => {
 });
 
 describe('code review S5/S6', () => {
-  it('S6: a STOPPED team gets its own sentence, not "has no machine yet"', () => {
+  it('S6 / ALSO-3: a STOPPED team (either hint) gets the stopped sentence, never "has no machine yet"', () => {
     const e = new ConnectRefusedError(
       'hq: x',
       new HqApiError(409, 'RUNNER_UNAVAILABLE', 'x', { state: 'stopped', hint: 'stopped' }),
@@ -376,7 +328,7 @@ describe('code review S5/S6', () => {
       'hq: x',
       new HqApiError(409, 'RUNNER_UNAVAILABLE', 'x', { state: 'stopped', hint: 'start_in_hq' }),
     );
-    expect(forwardError('Backend team', none)).toBe(COPY.wakeNoMachine('Backend team'));
+    expect(forwardError('Backend team', none)).toBe(COPY.forwardTeamStopped('Backend team'));
   });
 
   it('S5: a team that is STARTING attaches passively and comes back by itself (no key needed)', async () => {
@@ -415,6 +367,7 @@ describe('code review S5/S6', () => {
         teamRunning: async () => teamIsRunning({ ...team.workspace, state: 'starting' }),
       },
       {
+        account: svc.ref,
         team,
         session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running', canType: true },
       },
@@ -461,6 +414,7 @@ describe('HqPty on a team that is off (item 10)', () => {
         teamRunning: async () => false,
       },
       {
+        account: svc.ref,
         team,
         session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running', canType: true },
       },
@@ -484,9 +438,9 @@ describe('HqPty on a team that is off (item 10)', () => {
 
 describe('Ports (D11)', () => {
   it('forwards on 127.0.0.1 only, one hq-vscode row, bytes through the tunnel; Stop closes the row', async () => {
-    const ports = new Ports(svc, mem as never);
+    const ports = new Ports({ accounts, memento: mem as never });
     const team = withTeamAliases(orgs())[0]!;
-    await ports.start(team, 5173, 0);
+    await ports.start(svc.ref, team, 5173, 0);
     const conn = fake.requests.find((r) => r.method === 'POST' && r.path.endsWith('/connections'))!;
     expect(JSON.parse(conn.body)).toMatchObject({
       scope: 'forward',
@@ -524,8 +478,8 @@ describe('Ports (D11)', () => {
   });
 
   it('refuses the inspector port before any request', async () => {
-    const ports = new Ports(svc, mem as never);
-    await ports.start(withTeamAliases(orgs())[0]!, 9229, 9229);
+    const ports = new Ports({ accounts, memento: mem as never });
+    await ports.start(svc.ref, withTeamAliases(orgs())[0]!, 9229, 9229);
     expect(fake.requests.filter((r) => r.path.endsWith('/connections'))).toEqual([]);
     expect(stub.messages.map((m) => m.text)).toEqual([
       'Port 9229 cannot be forwarded: the team machine uses it itself.',
@@ -535,8 +489,8 @@ describe('Ports (D11)', () => {
   it.each([2375, 2376])(
     'docker-in-teams D27: refuses the Docker API port %i before any request',
     async (port) => {
-      const ports = new Ports(svc, mem as never);
-      await ports.start(withTeamAliases(orgs())[0]!, port, port);
+      const ports = new Ports({ accounts, memento: mem as never });
+      await ports.start(svc.ref, withTeamAliases(orgs())[0]!, port, port);
       expect(fake.requests.filter((r) => r.path.endsWith('/connections'))).toEqual([]);
       expect(stub.messages.map((m) => m.text)).toEqual([
         `Port ${port} cannot be forwarded: the team machine uses it itself.`,
@@ -545,8 +499,8 @@ describe('Ports (D11)', () => {
   );
 
   it('docker-in-teams D27: a Docker API listener is never offered', () => {
-    const ports = new Ports(svc, mem as never);
-    ports.offer(withTeamAliases(orgs())[0]!, [8000, 2375, 2376]);
+    const ports = new Ports({ accounts, memento: mem as never });
+    ports.offer(svc.ref, withTeamAliases(orgs())[0]!, [8000, 2375, 2376]);
     expect(ports.getChildren().map((e) => (e.kind === 'detected' ? e.port : null))).toEqual([8000]);
   });
 
@@ -560,7 +514,7 @@ describe('Ports (D11)', () => {
         localPort: 0,
       },
     ]);
-    const ports = new Ports(svc, mem as never);
+    const ports = new Ports({ accounts, memento: mem as never });
     const [entry] = ports.getChildren();
     expect(entry?.kind).toBe('paused');
     expect(ports.getTreeItem(entry!).contextValue).toBe('port:paused');
@@ -571,13 +525,13 @@ describe('Ports (D11)', () => {
   });
 
   it('listening ports are offered once, never the inspector, and a dismissal sticks', async () => {
-    const ports = new Ports(svc, mem as never);
+    const ports = new Ports({ accounts, memento: mem as never });
     const team = withTeamAliases(orgs())[0]!;
-    ports.offer(team, [8000, 9229, 80]);
+    ports.offer(svc.ref, team, [8000, 9229, 80]);
     const offers = ports.getChildren();
     expect(offers.map((e) => (e.kind === 'detected' ? e.port : null))).toEqual([8000]);
     await ports.dismiss(offers[0]!);
-    ports.offer(team, [8000]);
+    ports.offer(svc.ref, team, [8000]);
     expect(ports.getChildren()).toEqual([]);
   });
 });

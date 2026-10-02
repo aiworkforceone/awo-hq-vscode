@@ -2,7 +2,7 @@
   "name": "awo-hq",
   "displayName": "AI Workforce One HQ",
   "description": "Your AI Workforce One HQ teams inside VS Code: join their session terminals and forward their ports, without SSH.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "aiworkforceone",
   "license": "SEE LICENSE IN LICENSE.txt",
   "private": true,
@@ -82,7 +82,12 @@
       {
         "view": "hq.teams",
         "contents": "Sign in to see your teams.\n[Sign in](command:hq.signIn)",
-        "when": "!hq.signedIn"
+        "when": "!hq.signedIn && !hq.accountCount"
+      },
+      {
+        "view": "hq.teams",
+        "contents": "You have other HQ accounts signed in on this computer.\n[Switch Account](command:hq.switchAccount)\n[Add Another Account](command:hq.addAccount)",
+        "when": "!hq.signedIn && hq.accountCount > 0"
       },
       {
         "view": "hq.teams",
@@ -97,7 +102,7 @@
       {
         "view": "hq.account",
         "contents": "Sign in to see your teams.\n[Sign in](command:hq.signIn)",
-        "when": "!hq.signedIn"
+        "when": "!hq.accountCount"
       }
     ],
     "commands": [
@@ -109,6 +114,39 @@
       {
         "command": "hq.signOut",
         "title": "Sign Out",
+        "category": "HQ"
+      },
+      {
+        "command": "hq.addAccount",
+        "title": "Add Another Account",
+        "category": "HQ",
+        "icon": "$(add)"
+      },
+      {
+        "command": "hq.switchAccount",
+        "title": "Switch Account",
+        "category": "HQ",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "hq.signOutAccount",
+        "title": "Sign Out of Account...",
+        "category": "HQ",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "hq.signInAs",
+        "title": "Sign In As...",
+        "category": "HQ"
+      },
+      {
+        "command": "hq.renewAccount",
+        "title": "Sign In Again",
+        "category": "HQ"
+      },
+      {
+        "command": "hq.accounts.primaryAction",
+        "title": "Accounts",
         "category": "HQ"
       },
       {
@@ -217,6 +255,26 @@
           "when": "hq.signedIn"
         },
         {
+          "command": "hq.switchAccount",
+          "when": "hq.accountCount > 0"
+        },
+        {
+          "command": "hq.signOutAccount",
+          "when": "hq.accountCount > 0"
+        },
+        {
+          "command": "hq.signInAs",
+          "when": "false"
+        },
+        {
+          "command": "hq.renewAccount",
+          "when": "false"
+        },
+        {
+          "command": "hq.accounts.primaryAction",
+          "when": "false"
+        },
+        {
           "command": "hq.wakeTeam",
           "when": "hq.signedIn"
         },
@@ -283,6 +341,16 @@
           "command": "hq.forwardPort",
           "when": "view == hq.ports && hq.signedIn",
           "group": "navigation"
+        },
+        {
+          "command": "hq.switchAccount",
+          "when": "view == hq.teams && hq.accountCount > 1",
+          "group": "navigation@2"
+        },
+        {
+          "command": "hq.addAccount",
+          "when": "view == hq.teams && hq.accountCount > 0",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -370,6 +438,11 @@
           "command": "hq.ports.dismissDetected",
           "when": "view == hq.ports && viewItem == port:detected",
           "group": "inline@2"
+        },
+        {
+          "command": "hq.signOutAccount",
+          "when": "view == hq.account && viewItem =~ /^account:/",
+          "group": "inline"
         }
       ]
     },

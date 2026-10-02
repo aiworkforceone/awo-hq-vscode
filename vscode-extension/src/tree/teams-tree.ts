@@ -5,12 +5,17 @@
  *
  * READS ONLY. Expanding a team lists its sessions (`GET …/sessions`, which never wakes a machine);
  * nothing here starts one. Wake Team, New Session Terminal and Attach are the explicit actions.
+ *
+ * The window's ACTIVE account only (hq-vscode-multi-account decision 8): rows of two accounts look
+ * alike and carry one-click actions. Every node carries its account, so an action on a row runs as
+ * the account that listed it even if the window switched since.
  */
 import * as vscode from 'vscode';
 import type { RemoteOrg, RemoteSessionSummary } from '@kpa/shared/remote.types';
 import type { Team } from '@hq/client/teams.js';
 import { COPY } from '../copy.js';
-import type { HqService } from '../hq/hq-service.js';
+import { accountTag, type AccountRef } from '../hq/account-ref.js';
+import type { HqAccounts } from '../hq/accounts.js';
 import { teamPath } from '../hq/wake.js';
 import { cleanLabel } from '../util/text.js';
 import {
@@ -24,10 +29,14 @@ import {
 } from './labels.js';
 
 export type TeamsNode =
-  | { kind: 'org'; org: RemoteOrg; teams: Team[] }
-  | { kind: 'team'; team: Team }
-  | { kind: 'session'; team: Team; session: RemoteSessionSummary }
-  | { kind: 'message'; team: Team; text: string };
+  | { kind: 'org'; account: AccountRef; org: RemoteOrg; teams: Team[] }
+  | { kind: 'team'; account: AccountRef; team: Team }
+  | { kind: 'session'; account: AccountRef; team: Team; session: RemoteSessionSummary }
+  | { kind: 'message'; account: AccountRef; team: Team; text: string };
+
+function tagOfNode(node: { account: AccountRef }): string {
+  return accountTag(node.account.host, node.account.userId);
+}
 
 /** Sessions of an expanded team are re-read after this long (or on Refresh). */
 const SESSIONS_TTL_MS = 30_000;
@@ -42,9 +51,14 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
   /** Teams a wake is in flight for (the row shows a spinner). */
   private readonly waking = new Set<string>();
 
-  constructor(private readonly service: HqService) {
-    service.onDidChange(() => this.refresh(false));
-    service.onRevoked(() => this.sessions.clear());
+  constructor(
+    private readonly accounts: Pick<
+      HqAccounts,
+      'active' | 'get' | 'onDidChange' | 'onAccountRemoved'
+    >,
+  ) {
+    accounts.onDidChange(() => this.refresh(false));
+    accounts.onAccountRemoved(() => this.sessions.clear());
   }
 
   refresh(clearSessions = true): void {
@@ -52,6 +66,7 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
     this.changed.fire(undefined);
   }
 
+  /** Keyed by the team ALONE: a wake is about the machine, whichever account asked. */
   setWaking(teamId: string, on: boolean): void {
     if (on) this.waking.add(teamId);
     else this.waking.delete(teamId);
@@ -59,27 +74,39 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
   }
 
   getChildren(node?: TeamsNode): vscode.ProviderResult<TeamsNode[]> {
-    if (!this.service.signedIn()) return [];
     if (!node) {
+      const active = this.accounts.active();
+      if (!active) return [];
+      const account = active.ref;
       const byOrg = new Map<string, { org: RemoteOrg; teams: Team[] }>();
-      for (const team of this.service.teams()) {
+      for (const team of active.service.teams()) {
         const entry = byOrg.get(team.org.id) ?? { org: team.org, teams: [] };
         entry.teams.push(team);
         byOrg.set(team.org.id, entry);
       }
-      return [...byOrg.values()].map((e) => ({ kind: 'org' as const, org: e.org, teams: e.teams }));
+      return [...byOrg.values()].map((e) => ({
+        kind: 'org' as const,
+        account,
+        org: e.org,
+        teams: e.teams,
+      }));
     }
-    if (node.kind === 'org') return node.teams.map((team) => ({ kind: 'team' as const, team }));
-    if (node.kind === 'team') return this.sessionNodes(node.team);
+    if (node.kind === 'org') {
+      return node.teams.map((team) => ({ kind: 'team' as const, account: node.account, team }));
+    }
+    if (node.kind === 'team') return this.sessionNodes(node.account, node.team);
     return [];
   }
 
-  private async sessionNodes(team: Team): Promise<TeamsNode[]> {
-    const cached = this.sessions.get(team.workspace.id);
+  private async sessionNodes(account: AccountRef, team: Team): Promise<TeamsNode[]> {
+    const service = this.accounts.get(account)?.service;
+    if (!service) return [];
+    const key = `${service.tag}:${team.workspace.id}`;
+    const cached = this.sessions.get(key);
     let list = cached && Date.now() - cached.at < SESSIONS_TTL_MS ? cached.list : undefined;
     if (list === undefined) {
       try {
-        list = await this.service.call(
+        list = await service.call(
           async (c) =>
             (
               await c.request<RemoteSessionSummary[]>('GET', `${teamPath(team)}/sessions`, {
@@ -90,11 +117,11 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
       } catch {
         list = null;
       }
-      this.sessions.set(team.workspace.id, { at: Date.now(), list });
+      this.sessions.set(key, { at: Date.now(), list });
     }
-    if (list === null) return [{ kind: 'message', team, text: COPY.sessionsFailed }];
-    if (list.length === 0) return [{ kind: 'message', team, text: COPY.noSessions }];
-    return list.map((session) => ({ kind: 'session' as const, team, session }));
+    if (list === null) return [{ kind: 'message', account, team, text: COPY.sessionsFailed }];
+    if (list.length === 0) return [{ kind: 'message', account, team, text: COPY.noSessions }];
+    return list.map((session) => ({ kind: 'session' as const, account, team, session }));
   }
 
   getTreeItem(node: TeamsNode): vscode.TreeItem {
@@ -114,7 +141,7 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
           cleanLabel(t.workspace.name) || t.alias,
           vscode.TreeItemCollapsibleState.Collapsed,
         );
-        item.id = `team:${t.workspace.id}`;
+        item.id = `${tagOfNode(node)}:team:${t.workspace.id}`;
         item.description = teamDescription(t);
         item.contextValue = teamContextValue(t);
         const state = this.waking.has(t.workspace.id) ? 'starting' : teamState(t.workspace);
@@ -133,7 +160,7 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
       }
       case 'session': {
         const item = new vscode.TreeItem(sessionLabel(node.session));
-        item.id = `session:${node.session.id}`;
+        item.id = `${tagOfNode(node)}:session:${node.session.id}`;
         item.description = sessionDescription(node.session);
         item.contextValue = sessionContextValue(node.session);
         item.iconPath = new vscode.ThemeIcon(node.session.canType ? 'terminal' : 'eye');
