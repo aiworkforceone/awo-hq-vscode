@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- The first published release of the 0.2 line. It contains everything listed under 0.2.0 below;
+  0.2.0 itself was not published.
+
 ## 0.2.0
 
 - **More than one HQ account.** Run **HQ: Add Another Account** to sign in to another account on

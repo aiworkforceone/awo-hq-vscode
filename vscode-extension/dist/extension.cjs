@@ -17350,7 +17350,7 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.2.0".length > 0 ? "0.2.0" : "0.0.0-dev";
+var EXTENSION_VERSION = "0.2.1".length > 0 ? "0.2.1" : "0.0.0-dev";
 
 // src/extension.ts
 function vscodeUi() {

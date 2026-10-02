@@ -2,7 +2,7 @@
   "name": "awo-hq",
   "displayName": "AI Workforce One HQ",
   "description": "Your AI Workforce One HQ teams inside VS Code: join their session terminals and forward their ports, without SSH.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "aiworkforceone",
   "license": "SEE LICENSE IN LICENSE.txt",
   "private": true,
