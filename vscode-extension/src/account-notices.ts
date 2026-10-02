@@ -25,8 +25,11 @@ export class AccountNotices {
   private readonly unknownSaid = new Set<string>();
   /** Accounts whose notice the person dismissed (review N1): not shown again until usable/removed. */
   private readonly dismissed = new Set<string>();
+  /** 0.2.2 live: the extension host is shutting down; what it can no longer resolve is not news. */
+  private disposed = false;
 
   say(info: UnavailableAccount): void {
+    if (this.disposed) return;
     if (!info.email || !info.tag || !info.userId) {
       if (this.unknownSaid.has(info.key)) return;
       this.unknownSaid.add(info.key);
@@ -70,6 +73,7 @@ export class AccountNotices {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const end of this.open.values()) end();
     this.open.clear();
   }

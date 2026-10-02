@@ -11,7 +11,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { HqApiError, type HqClient } from '@hq/client/api.js';
 import type { Team } from '@hq/client/teams.js';
 import type { EventsServerFrame } from '@kpa/shared/remote-fs.types';
-import { EventsHub } from '../../src/fs/events-client.js';
+import { EventsHub, parseEventsFrame } from '../../src/fs/events-client.js';
 import { ContentCache, ListingCache } from '../../src/fs/caches.js';
 
 const WS_ID = '3f9a1c2e-1111-4222-8333-444455556666';
@@ -660,5 +660,15 @@ describe('EventsHub across a renew (hq-vscode-multi-account decision 26, review 
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toBe(2);
     expect(sockets.map((s) => (s as unknown as { auth: string }).auth)).toEqual(['Bearer hqa_g2']);
+  });
+});
+
+describe('0.2.2: `secrets-changed` is a frame the client takes', () => {
+  it('with a team id it is passed on (content-free); without one it is dropped', () => {
+    expect(parseEventsFrame({ type: 'secrets-changed', workspaceId: WS_ID })).toEqual({
+      type: 'secrets-changed',
+      workspaceId: WS_ID,
+    });
+    expect(parseEventsFrame({ type: 'secrets-changed' })).toBeNull();
   });
 });

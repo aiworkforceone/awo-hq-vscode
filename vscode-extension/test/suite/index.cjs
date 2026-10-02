@@ -33,9 +33,48 @@ const cases = {
       'hq.renewAccount',
       'hq.signInAs',
       'hq.accounts.primaryAction',
+      // hq-vscode-image-paste (0.2.2)
+      'hq.terminalPaste',
     ]) {
       assert.ok(all.includes(id), `${id} is registered`);
     }
+  },
+
+  async "image paste: the keys are bound only in an HQ terminal, and anywhere else the paste is VS Code's own"() {
+    const ext = vscode.extensions.getExtension(EXTENSION_ID);
+    const keys = ext.packageJSON.contributes.keybindings.filter(
+      (k) => k.command === 'hq.terminalPaste',
+    );
+    assert.equal(keys.length, 2);
+    for (const k of keys) assert.match(k.when, /terminalFocus && hq\.activeTerminal/);
+    assert.deepEqual(
+      keys.map((k) => [k.key, k.mac, k.linux, k.args.fallback]),
+      [
+        ['ctrl+v', 'cmd+v', 'ctrl+shift+v', 'paste'],
+        ['ctrl+v', undefined, undefined, 'ctrlV'],
+      ],
+    );
+    assert.match(keys[1].when, /^isLinux && /);
+    // A terminal that is not an HQ one: the command is VS Code's terminal paste, bracketed paste and all.
+    const typed = [];
+    const write = new vscode.EventEmitter();
+    const pty = {
+      onDidWrite: write.event,
+      open: () => write.fire('$ '),
+      close: () => undefined,
+      handleInput: (d) => typed.push(d),
+    };
+    const t = vscode.window.createTerminal({ name: 'not HQ', pty });
+    t.show();
+    await new Promise((r) => setTimeout(r, 500));
+    await vscode.env.clipboard.writeText('plain text');
+    await vscode.commands.executeCommand('hq.terminalPaste', { fallback: 'paste' });
+    const end = Date.now() + 5000;
+    while (!typed.join('').includes('plain text') && Date.now() < end) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    t.dispose();
+    assert.ok(typed.join('').includes('plain text'), `pasted: ${JSON.stringify(typed)}`);
   },
 
   async 'runs on the local UI host (extensionKind ui, D15)'() {
@@ -110,9 +149,9 @@ const cases = {
     assert.equal(session, undefined);
   },
 
-  async 'the extension reports 0.2.1'() {
+  async 'the extension reports 0.2.2'() {
     const ext = vscode.extensions.getExtension(EXTENSION_ID);
-    assert.equal(ext.packageJSON.version, '0.2.1');
+    assert.equal(ext.packageJSON.version, '0.2.2');
   },
 
   async 'a host outside the allow-list is never signed in to'() {

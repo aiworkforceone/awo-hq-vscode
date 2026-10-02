@@ -67,6 +67,7 @@ import {
 } from './search/search-view.js';
 import { StatusBar } from './status-bar.js';
 import { Terminals } from './terminal/terminals.js';
+import { registerTerminalPaste, rewriteInputFor } from './terminal/terminal-paste-wiring.js';
 import { AccountTree, type AccountNode } from './tree/account-tree.js';
 import { teamState, webUrl } from './tree/labels.js';
 import { TeamsTree, type TeamsNode } from './tree/teams-tree.js';
@@ -200,14 +201,30 @@ export function activate(context: vscode.ExtensionContext): void {
           cleanLabel(team.workspace.name) || team.alias,
           action,
         ),
-      masked: (team, path) => {
+      masked: (team, path, names) => {
         const k = `${b.tag}:${team.workspace.id}:${path}`;
         if (maskedSaid.has(k)) return;
         maskedSaid.add(k);
-        void vscode.window.showInformationMessage(COPY.fsMasked);
+        // 0.2.2: which file, which secret (by name, when HQ said), and what to do instead.
+        const file = cleanLabel(path.split('/').pop() ?? path) || path;
+        void vscode.window.showInformationMessage(notificationText(COPY.fsMaskedFile(file, names)));
       },
       teamIssue: (team, issue) =>
         teamIssues.onIssue(b.tag, (t) => rootsFor(b, t, accounts.isLegacyUser(b)), team, issue),
+      // 0.2.2 review S2: only files open in an editor are re-read when the team's secrets change.
+      openState: (team, path) => {
+        const doc = vscode.workspace.textDocuments.find((d) => {
+          if (d.uri.scheme !== HQ_SCHEME || d.uri.path !== `/${team.alias}/${path}`) return false;
+          const r = accounts.resolveAuthority(d.uri.authority);
+          return r.kind === 'ok' && r.bundle.tag === b.tag && r.orgSlug === team.org.slug;
+        });
+        if (!doc) return 'closed';
+        return doc.isDirty ? 'dirty' : 'open';
+      },
+      maskedWhileDirty: (_team, path) => {
+        const file = cleanLabel(path.split('/').pop() ?? path) || path;
+        void vscode.window.showWarningMessage(notificationText(COPY.fsMaskedWhileEditing(file)));
+      },
     },
   });
 
@@ -251,7 +268,28 @@ export function activate(context: vscode.ExtensionContext): void {
     // A terminal of the team attached: if the team refused files, ask it again (it may still boot).
     onAttached: (account, team) => accounts.get(account)?.core.expectUp(team, { force: true }),
     onAccountMissing: accountMissing,
+    // hq-vscode-image-paste: a dropped image file (or a file of the team's own folder) is typed as
+    // its path on the team's machine.
+    rewriteInput: rewriteInputFor(accounts),
+    // 0.2.2 live FAIL 2: this window's HQ tabs, so a restarted extension host can replace them.
+    memento: context.workspaceState,
   });
+  // A restarted extension host finds the HQ tabs VS Code kept, with nothing behind them: they are
+  // closed and their sessions attached again in fresh terminals.
+  terminals.adoptOrphans(vscode.window.terminals);
+  // Cmd/Ctrl+V in an HQ terminal: an image on the clipboard is uploaded and its path typed.
+  context.subscriptions.push(
+    registerTerminalPaste({
+      accounts,
+      terminals,
+      // The extension runs on the local UI host (extensionKind "ui"); were it ever in a remote
+      // extension host, the clipboard it can read would not be this computer's.
+      remoteHost: () =>
+        vscode.env.remoteName !== undefined &&
+        context.extension.extensionKind === vscode.ExtensionKind.Workspace,
+      log,
+    }),
+  );
   const status = new StatusBar(accounts, terminals, ports);
   const auth = new HqAuthenticationProvider(accounts);
   const fsProvider = new HqFileSystemProvider({ accounts, onUnavailable: sayUnavailable });

@@ -36,7 +36,28 @@ export interface TerminalsDeps {
   onAccountMissing?: (account: AccountRef) => void;
   /** A terminal of `account` attached to `team` (the team is up). */
   onAttached?: (account: AccountRef, team: Team) => void;
+  /**
+   * 0.2.2 live FAIL 2: where this window records its HQ terminals (the workspace state), so the next
+   * extension host can recognise the tabs VS Code kept and replace them. Absent: nothing recorded.
+   */
+  memento?: {
+    get<T>(key: string): T | undefined;
+    update(key: string, value: unknown): Thenable<void> | Promise<void>;
+  };
+  /** hq-vscode-image-paste: the drop rewrite for one terminal's input (see `HqPty`). */
+  rewriteInput?: (target: SessionTarget) => (chunk: string) => Promise<string | null> | null;
 }
+
+/** One HQ terminal as this window recorded it (0.2.2 live FAIL 2). Names and ids only. */
+interface RecordedTerminal {
+  /** The tab's name without a state suffix (`· waking`, `· view only`, `· stopped`). */
+  name: string;
+  account: AccountRef;
+  teamId: string;
+  session: RemoteSessionSummary;
+}
+
+const RECORD_KEY = 'hq.terminals';
 
 interface Open {
   terminal: vscode.Terminal;
@@ -96,6 +117,7 @@ export class Terminals {
           if (o.terminal === t) {
             this.open.delete(id);
             o.pty.dispose();
+            this.forget(id); // the person closed it: nothing to bring back
             this.changed.fire();
           }
         }
@@ -118,6 +140,21 @@ export class Terminals {
     return `${accountTag(target.account.host, target.account.userId)}:${target.session.id}`;
   }
 
+  /** The state of the terminal open for this session as this account, if any. */
+  stateOf(target: Pick<SessionTarget, 'account' | 'session'>): Open['state'] | null {
+    return this.open.get(Terminals.key(target))?.state ?? null;
+  }
+
+  /** The active terminal and its HQ session, if it is one of ours. */
+  activeTerminal(): { terminal: vscode.Terminal; target: SessionTarget } | null {
+    const t = vscode.window.activeTerminal;
+    if (!t) return null;
+    for (const o of this.open.values()) {
+      if (o.terminal === t) return { terminal: t, target: o.pty.target };
+    }
+    return null;
+  }
+
   /** The HQ session behind the active terminal, if it is one of ours. */
   active(): (SessionTarget & { state: Open['state'] }) | null {
     const t = vscode.window.activeTerminal;
@@ -128,12 +165,21 @@ export class Terminals {
     return null;
   }
 
-  attach(target: SessionTarget): void {
+  /** `preserveFocus`: show the tab without taking focus (a tab adopted at activation). */
+  attach(target: SessionTarget, opts?: { preserveFocus?: boolean }): void {
     const key = Terminals.key(target);
     const existing = this.open.get(key);
-    if (existing) {
-      existing.terminal.show();
+    if (existing && existing.state !== 'ended') {
+      existing.terminal.show(opts?.preserveFocus);
       return;
+    }
+    if (existing) {
+      // 0.2.2: its attach ended (an extension-host restart, a lost link): showing that tab again
+      // would show a dead terminal. It is closed, and a fresh one attaches.
+      this.open.delete(key);
+      existing.terminal.dispose();
+      existing.pty.dispose();
+      this.changed.fire();
     }
     const service = this.deps.accounts.get(target.account)?.service;
     if (!service) {
@@ -156,6 +202,7 @@ export class Terminals {
           );
         },
         onEchoOrgOff: (team) => this.echoOrgOff.show(team),
+        ...(this.deps.rewriteInput ? { rewriteInput: this.deps.rewriteInput(target) } : {}),
         windowActive: () =>
           vscode.window.state.focused ||
           (vscode.window.state as { active?: boolean }).active === true,
@@ -195,7 +242,13 @@ export class Terminals {
     entry.terminal = terminal;
     entry.pty = pty;
     this.open.set(key, entry as Open);
-    terminal.show();
+    this.remember(key, {
+      name: terminalName(target, { canType: true }, label()),
+      account: target.account,
+      teamId: target.team.workspace.id,
+      session: target.session,
+    });
+    terminal.show(opts?.preserveFocus);
     this.changed.fire();
   }
 
@@ -226,12 +279,77 @@ export class Terminals {
     this.attach({ account, team, session: created });
   }
 
+  private records(): Record<string, RecordedTerminal> {
+    return this.deps.memento?.get<Record<string, RecordedTerminal>>(RECORD_KEY) ?? {};
+  }
+
+  private saveRecords(all: Record<string, RecordedTerminal>): void {
+    void this.deps.memento?.update(RECORD_KEY, Object.keys(all).length > 0 ? all : undefined);
+  }
+
+  private remember(key: string, rec: RecordedTerminal): void {
+    if (!this.deps.memento) return;
+    this.saveRecords({ ...this.records(), [key]: rec });
+  }
+
+  private forget(key: string): void {
+    if (!this.deps.memento) return;
+    const all = this.records();
+    if (!(key in all)) return;
+    delete all[key];
+    this.saveRecords(all);
+  }
+
+  /**
+   * 0.2.2 live FAIL 2: VS Code keeps an HQ tab across an extension-host restart, but the pty behind
+   * it lived in the old host: the tab is dead (no output, typing goes nowhere, no "press any key").
+   * At activation, each tab recorded by this window that this host does not run is closed and its
+   * session attached again in a fresh terminal (the same name). An account or team that is gone
+   * only closes it. Records that match no tab (the window was reloaded) are dropped.
+   */
+  adoptOrphans(existing: ReadonlyArray<Pick<vscode.Terminal, 'name' | 'dispose'>>): void {
+    if (!this.deps.memento) return;
+    const all = this.records();
+    const suffixes = [
+      '',
+      COPY.terminalSuffixViewOnly,
+      COPY.terminalSuffixWaking,
+      COPY.terminalSuffixStopped,
+    ];
+    // A tab claimed once is ours: two sessions with the same name each take their own dead tab.
+    const ours = new Set([...this.open.values()].map((o) => o.terminal as unknown));
+    const kept: Record<string, RecordedTerminal> = {};
+    for (const [key, rec] of Object.entries(all)) {
+      const dead = existing.find(
+        (t) => !ours.has(t) && suffixes.some((sfx) => t.name === `${rec.name}${sfx}`),
+      );
+      if (!dead) continue; // no tab left (a reload): forgotten
+      ours.add(dead);
+      dead.dispose();
+      const team = this.deps.accounts
+        .get(rec.account)
+        ?.service.teams()
+        .find((t) => t.workspace.id === rec.teamId);
+      if (!team) continue; // the account or the team went: the dead tab is just closed
+      kept[key] = rec;
+    }
+    this.saveRecords(kept);
+    for (const rec of Object.values(kept)) {
+      const team = this.deps.accounts
+        .get(rec.account)!
+        .service.teams()
+        .find((t) => t.workspace.id === rec.teamId)!;
+      this.attach({ account: rec.account, team, session: rec.session }, { preserveFocus: true });
+    }
+  }
+
   /** One account signed out or revoked (any window): only its terminals close. */
   closeAccount(ref: AccountRef): void {
     let closed = false;
     for (const [k, o] of [...this.open]) {
       if (!sameAccount(o.pty.target.account, ref)) continue;
       this.open.delete(k);
+      this.forget(k);
       o.terminal.dispose();
       closed = true;
     }

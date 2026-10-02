@@ -12,7 +12,9 @@ import type { Team } from '@hq/client/teams.js';
 import {
   HQ_ACTIVITY_BACKGROUND,
   HQ_HEADER_ACTIVITY,
+  HQ_HEADER_MASK_VERSION,
   HQ_HEADER_MASKED,
+  HQ_HEADER_MASKED_NAMES,
   type FsDirPage,
   type FsSearchTextRequest,
   type FsSearchTextResponse,
@@ -46,8 +48,17 @@ function activityHeaders(opts: FsCallOpts | undefined): Record<string, string> |
 }
 
 export type FsRead =
-  | { kind: 'bytes'; bytes: Uint8Array; etag: string; masked: boolean }
-  | { kind: 'not-modified'; etag: string };
+  | {
+      kind: 'bytes';
+      bytes: Uint8Array;
+      etag: string;
+      masked: boolean;
+      /** 0.2.2: the team's mask version this read was masked with (absent from an older HQ). */
+      maskVersion?: string;
+      /** 0.2.2: the secrets a masked text matched, by name (only for a caller who may type). */
+      maskedNames?: string[];
+    }
+  | { kind: 'not-modified'; etag: string; maskVersion?: string };
 
 async function toError(res: Response): Promise<FsApiError> {
   let body: { error?: unknown; message?: unknown; code?: unknown; details?: unknown } = {};
@@ -123,19 +134,44 @@ export class HqFsApi {
     );
   }
 
-  async read(team: Team, path: string, ifNoneMatch?: string): Promise<FsRead> {
+  /**
+   * `maskVersion` (0.2.2): the mask version the cached copy was read with, sent with
+   * `If-None-Match` so HQ answers 304 only when the file AND the team's secrets are unchanged.
+   */
+  async read(
+    team: Team,
+    path: string,
+    ifNoneMatch?: string,
+    maskVersion?: string,
+    opts?: FsCallOpts,
+  ): Promise<FsRead> {
     const c = await this.client();
+    // The extension's own read (`background`) is sent as such: no presence stamp (review S3).
+    const headers: Record<string, string> = { ...(activityHeaders(opts) ?? {}) };
+    if (ifNoneMatch) headers['if-none-match'] = ifNoneMatch;
+    if (ifNoneMatch && maskVersion) headers[HQ_HEADER_MASK_VERSION] = maskVersion;
     const res = await c.send('GET', `${this.base(team)}/file?path=${this.q(path)}`, {
       org: team.org.slug,
-      ...(ifNoneMatch ? { headers: { 'if-none-match': ifNoneMatch } } : {}),
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });
-    if (res.status === 304) return { kind: 'not-modified', etag: res.headers.get('etag') ?? '' };
+    const version = res.headers.get(HQ_HEADER_MASK_VERSION) ?? undefined;
+    const withVersion = version && /^[0-9a-f]{16}$/.test(version) ? { maskVersion: version } : {};
+    if (res.status === 304) {
+      return { kind: 'not-modified', etag: res.headers.get('etag') ?? '', ...withVersion };
+    }
     if (!res.ok) throw await toError(res);
+    const names = (res.headers.get(HQ_HEADER_MASKED_NAMES) ?? '')
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n))
+      .slice(0, 8);
     return {
       kind: 'bytes',
       bytes: new Uint8Array(await res.arrayBuffer()),
       etag: res.headers.get('etag') ?? '',
       masked: res.headers.get(HQ_HEADER_MASKED) === '1',
+      ...withVersion,
+      ...(names.length > 0 ? { maskedNames: names } : {}),
     };
   }
 

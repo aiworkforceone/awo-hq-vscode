@@ -127,6 +127,11 @@ export interface HqClientOptions {
   /** A refresh call that has not answered after this long is abandoned. Default: none. */
   refreshTimeoutMs?: number;
   /**
+   * 0.2.2: a nonce fetch that has not answered after this long is abandoned (a hung nonce once left
+   * a terminal reconnecting forever). Default `NONCE_TIMEOUT_MS`.
+   */
+  nonceTimeoutMs?: number;
+  /**
    * After a `409 REFRESH_RACE`, how many times the store is re-read for the racer's new pair, and
    * how long apart. Default once, at once (the CLI's rule).
    */
@@ -136,6 +141,9 @@ export interface HqClientOptions {
   lockStaleMs?: number;
   lockWaitMs?: number;
 }
+
+/** A nonce fetch is abandoned after this long (the caller retries; it is never the end). */
+export const NONCE_TIMEOUT_MS = 10_000;
 
 /** Refresh when fewer than this many ms remain on the access token. */
 export const REFRESH_MARGIN_MS = 2 * 60 * 1000;
@@ -370,14 +378,22 @@ export class HqClient {
 
   /** `GET /api/remote/nonce`, never the cache. */
   private async fetchNonce(): Promise<string> {
-    const res = await this.fetchFn(`${this.host}/api/remote/nonce`, {
-      headers: {
-        Authorization: `Bearer ${await this.accessToken()}`,
-        ...this.clientHeaders,
-      },
-    });
-    if (!res.ok) throw await this.toError(res);
-    return ((await res.json()) as { nonce: string }).nonce;
+    const auth = `Bearer ${await this.accessToken()}`;
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      this.opts.nonceTimeoutMs ?? NONCE_TIMEOUT_MS,
+    );
+    try {
+      const res = await this.fetchFn(`${this.host}/api/remote/nonce`, {
+        headers: { Authorization: auth, ...this.clientHeaders },
+        signal: controller.signal,
+      });
+      if (!res.ok) throw await this.toError(res);
+      return ((await res.json()) as { nonce: string }).nonce;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Headers for a signed WebSocket upgrade (`GET <path>`, empty body). */

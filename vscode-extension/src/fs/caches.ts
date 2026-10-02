@@ -88,6 +88,22 @@ export class ListingCache {
     if (s && s.etag === etag) s.masked = true;
   }
 
+  /** 0.2.2: a read said "not masked" (or the team's secrets changed): the flag goes. */
+  unmarkMasked(teamId: string, path: string): void {
+    const s = this.stats.get(teamId)?.get(path);
+    if (s) delete s.masked;
+    const f = this.folders.get(teamId)?.get(parentOf(path));
+    const e = f?.entries.find((x) => x.path === path);
+    if (e) delete e.masked;
+  }
+
+  /** 0.2.2: the paths of this team held masked. */
+  maskedPaths(teamId: string): string[] {
+    return [...(this.stats.get(teamId)?.values() ?? [])]
+      .filter((s) => s.masked === true)
+      .map((s) => s.path);
+  }
+
   /** A path changed on the machine: forget it, its folder's listing, and (for a folder) below it. */
   invalidate(teamId: string, path: string): void {
     const t = this.team(teamId);

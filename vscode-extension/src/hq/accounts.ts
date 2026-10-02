@@ -200,6 +200,11 @@ export class HqAccounts {
   private readonly flowState: FlowState = { signingIn: false, flow: null };
   /** The activation's own work (the interrupted sign-out sweep) has finished. */
   readonly settled: Promise<void>;
+  /** The activation's first health check of every account (the init re-derive's). */
+  private initHealth: Promise<void> = Promise.resolve();
+  private readonly loaded: Promise<void>;
+  private loadedNow = false;
+  private disposedNow = false;
   private tooOldShown = false;
   private poll: ReturnType<typeof setInterval> | null = null;
   private readonly subscriptions: Array<{ dispose(): unknown }> = [];
@@ -228,6 +233,9 @@ export class HqAccounts {
     this.activeTag = this.resolveActive();
     this.everActive = this.activeTag !== null;
     this.settled = this.finishInterruptedSignOuts().catch(() => undefined);
+    this.loaded = Promise.all([this.settled, this.initHealth]).then(() => {
+      this.loadedNow = true;
+    });
     this.subscriptions.push(
       deps.store.onSecretChanged((key) => {
         // A renew elsewhere rewrote this slot's key: the built client is stale (decision 26).
@@ -299,6 +307,23 @@ export class HqAccounts {
   /** Is this the 0.1.x user's account (its bundle also serves untagged URIs, decision 24)? */
   isLegacyUser(b: AccountBundle): boolean {
     return this.legacy()?.tag === b.tag;
+  }
+
+  /**
+   * 0.2.2 live: the accounts have loaded (the activation sweep and the first health check). Until
+   * then an authority that does not resolve may only be not known YET: no "not signed in" notice.
+   */
+  isReady(): boolean {
+    return this.loadedNow;
+  }
+
+  whenReady(): Promise<void> {
+    return this.loaded;
+  }
+
+  /** Closed (the extension host is shutting down): nothing resolves, and nobody is told so. */
+  isDisposed(): boolean {
+    return this.disposedNow;
   }
 
   /** The account a `hq://` authority names, or why not. */
@@ -465,7 +490,8 @@ export class HqAccounts {
     if (reason !== 'poll') {
       // Reads the legacy key once it is there; never on the 5 s poll (a zombie would re-read it).
       void this.deps.store.recordLegacyUser(host).catch(() => null);
-      void this.refreshHealth();
+      const health = this.refreshHealth().catch(() => undefined);
+      if (reason === 'init') this.initHealth = health;
     } else {
       // Review C1: the shared legacy secrets can change hands with no event (another profile):
       // the poll re-checks that one slot's health, so its folders fail closed within 5 s.
@@ -708,6 +734,7 @@ export class HqAccounts {
   }
 
   dispose(): void {
+    this.disposedNow = true;
     if (this.poll) clearInterval(this.poll);
     for (const s of this.subscriptions) s.dispose();
     for (const b of this.bundles.values()) b.dispose();

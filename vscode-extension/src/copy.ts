@@ -113,6 +113,21 @@ export const COPY = {
   wakeUnavailable:
     'Waking a team from VS Code is not available on this HQ yet. Open one of its session terminals to wake it.',
 
+  // ── image paste and drop (hq-vscode-image-paste; the web terminal's sentences) ────────────────
+  imageUploading: 'Uploading image...',
+  imageAdded: 'Image added. Describe it, then press Enter.',
+  imageWrongType: 'Only PNG, JPEG, GIF, or WebP images can be pasted.',
+  imageTooLarge: 'That image is too large. Pasted images must be 10 MB or smaller.',
+  imageUploadFailed: (detail: string) => `The image was not added: ${detail}`,
+  imageUploadTimeout: 'The image upload did not finish.',
+  imageUploadConfirm: (files: string, team: string) => `Upload ${files} to ${team}?`,
+  imageUploadAction: 'Upload',
+  imageTypePathAction: 'Type the path',
+  imageDropOtherTeam: (team: string) =>
+    `That file is in another team. Drop files from ${team}'s folder, or from your computer.`,
+  imagePasteRemoteHost:
+    'Pasting an image needs the HQ extension on this computer. Drag the image file onto the terminal instead.',
+
   // ── terminal ─────────────────────────────────────────────────────────────────────────────────
   // Decision 21: the account's short label, only while 2 or more accounts are signed in.
   terminalName: (team: string, session: string, label?: string) =>
@@ -125,7 +140,11 @@ export const COPY = {
   teamOffTerminal: (team: string) => `${team} is off.`,
   pressKeyToWake: 'Press any key to wake it.',
   reconnecting: 'Connection lost, reconnecting...',
-  connectionLost: 'The connection to HQ was lost. Close this terminal and attach again.',
+  connectionLost: 'The connection to HQ was lost.',
+  // 0.2.2: an ended or lost terminal comes back in place on the next key.
+  pressKeyToReconnect: 'Press any key to reconnect.',
+  sessionStoppedTerminal: 'The session stopped.',
+  sessionErrorTerminal: 'The session exited with an error.',
   sessionAccessEnded: 'Your access to this session ended.',
   detached: 'Detached. The session keeps running in HQ.',
   nowViewOnly: 'You can watch this session but not type in it.',
@@ -186,6 +205,22 @@ export const COPY = {
   fsPlanReadOnly:
     'Your plan is read-only. Reactivate billing in HQ to save files or start sessions.',
   fsMasked: 'This file contains masked secret values. Edit it from an HQ terminal.',
+  // 0.2.2 review: unsaved edits in a file that just became masked cannot be saved through HQ.
+  fsMaskedWhileEditing: (file: string) =>
+    `${file} now holds the value of a secret, so it is shown masked and can't be saved here. Copy your changes out (for example into a new file) before you close it.`,
+  // 0.2.2: the one-time notice for a masked file, naming the secret(s) when HQ said which.
+  fsMaskedFile: (file: string, given: readonly string[]) => {
+    const names = Array.isArray(given) ? given : [];
+    if (names.length === 0) {
+      return `${file} contains the value of a secret, so it's shown masked and read-only. Edit it in the terminal, or read the secret from its environment variable instead of keeping its value in the file.`;
+    }
+    if (names.length === 1) {
+      return `${file} contains the value of a secret (${names[0]}), so it's shown masked and read-only. Edit it in the terminal, or read the secret from $${names[0]} instead of keeping its value in the file.`;
+    }
+    const vars = names.map((n) => `$${n}`);
+    const said = `${vars.slice(0, -1).join(', ')} and ${vars[vars.length - 1]}`;
+    return `${file} contains the values of secrets (${names.join(', ')}), so it's shown masked and read-only. Edit it in the terminal, or read the secrets from ${said} instead of keeping their values in the file.`;
+  },
   // The web's `TEMPLATE_READ_ONLY_SENTENCE` (client/src/lib/template-protected-path.ts).
   fsProtected: 'This file came from an AI Workforce One HQ template, so it is read-only.',
   fsTooLarge: 'This file is too large to open here. Open it in HQ or from a terminal.',

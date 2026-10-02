@@ -3059,16 +3059,16 @@ var require_websocket = __commonJS({
         process.nextTick(cb, err);
       }
     }
-    function receiverOnConclude(code, reason) {
+    function receiverOnConclude(code, reason2) {
       const websocket = this[kWebSocket];
       websocket._closeFrameReceived = true;
-      websocket._closeMessage = reason;
+      websocket._closeMessage = reason2;
       websocket._closeCode = code;
       if (websocket._socket[kWebSocket] === void 0) return;
       websocket._socket.removeListener("data", socketOnData);
       process.nextTick(resume, websocket._socket);
       if (code === 1005) websocket.close();
-      else websocket.close(code, reason);
+      else websocket.close(code, reason2);
     }
     function receiverOnDrain() {
       const websocket = this[kWebSocket];
@@ -8787,7 +8787,7 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode15 = __toESM(require("vscode"), 1);
+var vscode16 = __toESM(require("vscode"), 1);
 
 // src/accounts-ui.ts
 var vscode2 = __toESM(require("vscode"), 1);
@@ -8872,6 +8872,18 @@ var COPY = {
   wakeThrottled: "Too many wake requests for this team. Wait a few minutes and try again.",
   wakeTeam: "Wake Team",
   wakeUnavailable: "Waking a team from VS Code is not available on this HQ yet. Open one of its session terminals to wake it.",
+  // ── image paste and drop (hq-vscode-image-paste; the web terminal's sentences) ────────────────
+  imageUploading: "Uploading image...",
+  imageAdded: "Image added. Describe it, then press Enter.",
+  imageWrongType: "Only PNG, JPEG, GIF, or WebP images can be pasted.",
+  imageTooLarge: "That image is too large. Pasted images must be 10 MB or smaller.",
+  imageUploadFailed: (detail) => `The image was not added: ${detail}`,
+  imageUploadTimeout: "The image upload did not finish.",
+  imageUploadConfirm: (files, team) => `Upload ${files} to ${team}?`,
+  imageUploadAction: "Upload",
+  imageTypePathAction: "Type the path",
+  imageDropOtherTeam: (team) => `That file is in another team. Drop files from ${team}'s folder, or from your computer.`,
+  imagePasteRemoteHost: "Pasting an image needs the HQ extension on this computer. Drag the image file onto the terminal instead.",
   // ── terminal ─────────────────────────────────────────────────────────────────────────────────
   // Decision 21: the account's short label, only while 2 or more accounts are signed in.
   terminalName: (team, session, label) => label ? `HQ \xB7 ${label} \xB7 ${team} \xB7 ${session}` : `HQ \xB7 ${team} \xB7 ${session}`,
@@ -8882,7 +8894,11 @@ var COPY = {
   teamOffTerminal: (team) => `${team} is off.`,
   pressKeyToWake: "Press any key to wake it.",
   reconnecting: "Connection lost, reconnecting...",
-  connectionLost: "The connection to HQ was lost. Close this terminal and attach again.",
+  connectionLost: "The connection to HQ was lost.",
+  // 0.2.2: an ended or lost terminal comes back in place on the next key.
+  pressKeyToReconnect: "Press any key to reconnect.",
+  sessionStoppedTerminal: "The session stopped.",
+  sessionErrorTerminal: "The session exited with an error.",
   sessionAccessEnded: "Your access to this session ended.",
   detached: "Detached. The session keeps running in HQ.",
   nowViewOnly: "You can watch this session but not type in it.",
@@ -8924,6 +8940,21 @@ var COPY = {
   fsViewOnly: "You can view this team but not change its files.",
   fsPlanReadOnly: "Your plan is read-only. Reactivate billing in HQ to save files or start sessions.",
   fsMasked: "This file contains masked secret values. Edit it from an HQ terminal.",
+  // 0.2.2 review: unsaved edits in a file that just became masked cannot be saved through HQ.
+  fsMaskedWhileEditing: (file) => `${file} now holds the value of a secret, so it is shown masked and can't be saved here. Copy your changes out (for example into a new file) before you close it.`,
+  // 0.2.2: the one-time notice for a masked file, naming the secret(s) when HQ said which.
+  fsMaskedFile: (file, given) => {
+    const names = Array.isArray(given) ? given : [];
+    if (names.length === 0) {
+      return `${file} contains the value of a secret, so it's shown masked and read-only. Edit it in the terminal, or read the secret from its environment variable instead of keeping its value in the file.`;
+    }
+    if (names.length === 1) {
+      return `${file} contains the value of a secret (${names[0]}), so it's shown masked and read-only. Edit it in the terminal, or read the secret from $${names[0]} instead of keeping its value in the file.`;
+    }
+    const vars = names.map((n) => `$${n}`);
+    const said = `${vars.slice(0, -1).join(", ")} and ${vars[vars.length - 1]}`;
+    return `${file} contains the values of secrets (${names.join(", ")}), so it's shown masked and read-only. Edit it in the terminal, or read the secrets from ${said} instead of keeping their values in the file.`;
+  },
   // The web's `TEMPLATE_READ_ONLY_SENTENCE` (client/src/lib/template-protected-path.ts).
   fsProtected: "This file came from an AI Workforce One HQ template, so it is read-only.",
   fsTooLarge: "This file is too large to open here. Open it in HQ or from a terminal.",
@@ -9308,6 +9339,7 @@ var RefreshUnansweredError = class extends Error {
     this.name = "RefreshUnansweredError";
   }
 };
+var NONCE_TIMEOUT_MS = 1e4;
 var REFRESH_MARGIN_MS = 2 * 60 * 1e3;
 var REFRESH_LOCK_STALE_MS = 3e4;
 var REFRESH_LOCK_WAIT_MS = 2e4;
@@ -9503,14 +9535,22 @@ var HqClient = class {
   }
   /** `GET /api/remote/nonce`, never the cache. */
   async fetchNonce() {
-    const res = await this.fetchFn(`${this.host}/api/remote/nonce`, {
-      headers: {
-        Authorization: `Bearer ${await this.accessToken()}`,
-        ...this.clientHeaders
-      }
-    });
-    if (!res.ok) throw await this.toError(res);
-    return (await res.json()).nonce;
+    const auth = `Bearer ${await this.accessToken()}`;
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      this.opts.nonceTimeoutMs ?? NONCE_TIMEOUT_MS
+    );
+    try {
+      const res = await this.fetchFn(`${this.host}/api/remote/nonce`, {
+        headers: { Authorization: auth, ...this.clientHeaders },
+        signal: controller.signal
+      });
+      if (!res.ok) throw await this.toError(res);
+      return (await res.json()).nonce;
+    } finally {
+      clearTimeout(timer);
+    }
   }
   /** Headers for a signed WebSocket upgrade (`GET <path>`, empty body). */
   async upgradeHeaders(path5, org, extra = {}) {
@@ -9625,6 +9665,8 @@ var FS_READ_CHUNK_BYTES = 4 * 1024 * 1024;
 var FS_MAX_BINARY_BYTES = 64 * 1024 * 1024;
 var FS_MAX_WRITE_BYTES = 16 * 1024 * 1024;
 var HQ_HEADER_MASKED = "x-hq-masked";
+var HQ_HEADER_MASK_VERSION = "x-hq-mask-version";
+var HQ_HEADER_MASKED_NAMES = "x-hq-masked-names";
 var HQ_HEADER_ACTIVITY = "x-hq-activity";
 var HQ_ACTIVITY_BACKGROUND = "background";
 var REMOTE_EVENTS_WS_PATH = "/ws/remote/events";
@@ -10154,6 +10196,18 @@ var ListingCache = class {
     const s = this.stats.get(teamId)?.get(path5);
     if (s && s.etag === etag) s.masked = true;
   }
+  /** 0.2.2: a read said "not masked" (or the team's secrets changed): the flag goes. */
+  unmarkMasked(teamId, path5) {
+    const s = this.stats.get(teamId)?.get(path5);
+    if (s) delete s.masked;
+    const f = this.folders.get(teamId)?.get(parentOf(path5));
+    const e = f?.entries.find((x) => x.path === path5);
+    if (e) delete e.masked;
+  }
+  /** 0.2.2: the paths of this team held masked. */
+  maskedPaths(teamId) {
+    return [...this.stats.get(teamId)?.values() ?? []].filter((s) => s.masked === true).map((s) => s.path);
+  }
   /** A path changed on the machine: forget it, its folder's listing, and (for a folder) below it. */
   invalidate(teamId, path5) {
     const t = this.team(teamId);
@@ -10497,19 +10551,33 @@ var HqFsApi = class {
       })
     );
   }
-  async read(team, path5, ifNoneMatch) {
+  /**
+   * `maskVersion` (0.2.2): the mask version the cached copy was read with, sent with
+   * `If-None-Match` so HQ answers 304 only when the file AND the team's secrets are unchanged.
+   */
+  async read(team, path5, ifNoneMatch, maskVersion, opts) {
     const c = await this.client();
+    const headers = { ...activityHeaders(opts) ?? {} };
+    if (ifNoneMatch) headers["if-none-match"] = ifNoneMatch;
+    if (ifNoneMatch && maskVersion) headers[HQ_HEADER_MASK_VERSION] = maskVersion;
     const res = await c.send("GET", `${this.base(team)}/file?path=${this.q(path5)}`, {
       org: team.org.slug,
-      ...ifNoneMatch ? { headers: { "if-none-match": ifNoneMatch } } : {}
+      ...Object.keys(headers).length > 0 ? { headers } : {}
     });
-    if (res.status === 304) return { kind: "not-modified", etag: res.headers.get("etag") ?? "" };
+    const version = res.headers.get(HQ_HEADER_MASK_VERSION) ?? void 0;
+    const withVersion = version && /^[0-9a-f]{16}$/.test(version) ? { maskVersion: version } : {};
+    if (res.status === 304) {
+      return { kind: "not-modified", etag: res.headers.get("etag") ?? "", ...withVersion };
+    }
     if (!res.ok) throw await toError(res);
+    const names = (res.headers.get(HQ_HEADER_MASKED_NAMES) ?? "").split(",").map((n) => n.trim()).filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n)).slice(0, 8);
     return {
       kind: "bytes",
       bytes: new Uint8Array(await res.arrayBuffer()),
       etag: res.headers.get("etag") ?? "",
-      masked: res.headers.get(HQ_HEADER_MASKED) === "1"
+      masked: res.headers.get(HQ_HEADER_MASKED) === "1",
+      ...withVersion,
+      ...names.length > 0 ? { maskedNames: names } : {}
     };
   }
   async write(team, path5, bytes, pre) {
@@ -10950,7 +11018,7 @@ var HqFsCore = class {
     return {
       type: s.type,
       size: s.size,
-      mtimeMs: s.mtimeMs,
+      mtimeMs: s.mtimeMs + (this.statNudge.get(this.key(team, s.path)) ?? 0),
       readonly: this.rootReadOnly(team) || s.readonly !== void 0 || s.masked === true || s.type === "file" && s.size > MAX_EDIT_BYTES
     };
   }
@@ -10960,14 +11028,14 @@ var HqFsCore = class {
    * tries again (a write is never replayed), a success clears the team's issue and a typed 409
    * records one.
    */
-  async call(team, run, opts = {}) {
+  async call(team, run2, opts = {}) {
     const gate = this.gateFor(team);
     const generation = this.generation;
     let out;
     let renewRetried = false;
     for (let attempt = 0; ; attempt++) {
       try {
-        out = await gate.run(opts.priority ?? "normal", run);
+        out = await gate.run(opts.priority ?? "normal", run2);
         break;
       } catch (err) {
         if (err instanceof SlotRenewedError && !renewRetried) {
@@ -11258,9 +11326,13 @@ var HqFsCore = class {
     const last = this.contents.last(key);
     if (!last && await this.knownAbsent(team, path5)) throw new FsCoreError("not-found", path5);
     const lastEtag = last ? this.contentEtag(key) : void 0;
+    const secretsGen = this.secretsGen.get(team.workspace.id) ?? 0;
+    const lastMask = lastEtag !== void 0 ? this.maskVersions.get(key) : void 0;
     let r;
     try {
-      r = await this.call(team, () => this.deps.api.read(team, path5, lastEtag), { read: true });
+      r = await this.call(team, () => this.deps.api.read(team, path5, lastEtag, lastMask), {
+        read: true
+      });
     } catch (err) {
       if (err instanceof FsApiError && err.status === 404) this.noteAbsent(team, path5);
       if (this.isOff(err) && last) {
@@ -11271,18 +11343,108 @@ var HqFsCore = class {
     if (generation !== this.generation) throw new SignedOutError();
     if (this.servedFrom.size >= 5e3) this.servedFrom.clear();
     this.servedFrom.set(this.key(team, shown), path5);
-    if (r.kind === "not-modified") return last ?? new Uint8Array();
+    if ((this.secretsGen.get(team.workspace.id) ?? 0) !== secretsGen) {
+      return r.kind === "not-modified" ? last ?? new Uint8Array() : r.bytes;
+    }
+    if (r.kind === "not-modified") {
+      if (r.maskVersion) this.maskVersions.set(key, r.maskVersion);
+      return last ?? new Uint8Array();
+    }
     this.contents.put(key, r.etag, r.bytes);
     this.etags.set(key, r.etag);
-    if (r.masked) await this.markMasked(team, path5, r.etag);
+    if (r.maskVersion) this.maskVersions.set(key, r.maskVersion);
+    else this.maskVersions.delete(key);
+    if (r.masked) await this.markMasked(team, path5, r.etag, r.maskedNames ?? []);
+    else if (this.listings.stat(team.workspace.id, path5)?.masked === true) {
+      this.listings.unmarkMasked(team.workspace.id, path5);
+      this.fire([{ team, path: path5, type: "changed" }]);
+    }
     return r.bytes;
+  }
+  /** 0.2.2: the mask version each cached copy was read with (`key` → version). */
+  maskVersions = /* @__PURE__ */ new Map();
+  /** Review CODE 1: bumped per team by `secrets-changed`; a read that spans a bump caches nothing. */
+  secretsGen = /* @__PURE__ */ new Map();
+  /**
+   * 0.2.2 live FAIL 1: milliseconds added to a file's reported mtime each time its served bytes
+   * changed with the team's secrets (`key` → nudge), so VS Code's stat check sees a change.
+   */
+  statNudge = /* @__PURE__ */ new Map();
+  /**
+   * 0.2.2: the team's effective secrets changed (`secrets-changed`): nothing held for it is trusted
+   * any more. Its cached bytes and masked marks go, and VS Code re-reads every file it holds, so an
+   * open editor shows the new masking and its read-only state follows.
+   */
+  async secretsChanged(team) {
+    const id = team.workspace.id;
+    const prefix = `${id}:`;
+    this.secretsGen.set(id, (this.secretsGen.get(id) ?? 0) + 1);
+    const wasMasked = new Set(this.listings.maskedPaths(id));
+    const held = /* @__PURE__ */ new Map();
+    for (const k of this.contents.keys()) {
+      if (!k.startsWith(prefix)) continue;
+      const bytes = this.contents.last(k);
+      if (bytes) held.set(k.slice(prefix.length), bytes);
+      this.contents.drop(k);
+      this.maskVersions.delete(k);
+    }
+    for (const p of wasMasked) this.listings.unmarkMasked(id, p);
+    const paths = /* @__PURE__ */ new Set([...held.keys(), ...wasMasked]);
+    const moved = [];
+    await Promise.all(
+      [...paths].map(async (path5) => {
+        const shown = this.toShown(team, path5);
+        const state = this.deps.ui.openState ? this.deps.ui.openState(team, shown) : "open";
+        if (state === "closed") return;
+        const key = this.key(team, path5);
+        const before = held.get(path5);
+        const now = await this.refetch(team, path5);
+        if (now === null) {
+          const etag = this.etags.get(key);
+          if (before && etag !== void 0) this.contents.put(key, etag, before);
+          if (!wasMasked.has(path5)) return;
+          if (etag !== void 0) this.listings.markMasked(id, path5, etag);
+        } else {
+          if (before && sameBytes(before, now)) return;
+          const nowMasked = this.listings.stat(id, path5)?.masked === true;
+          if (state === "dirty" && nowMasked && !wasMasked.has(path5)) {
+            this.deps.ui.maskedWhileDirty?.(team, shown);
+          }
+        }
+        this.statNudge.set(key, (this.statNudge.get(key) ?? 0) + 1);
+        moved.push(path5);
+      })
+    );
+    this.fire(moved.map((path5) => ({ team, path: path5, type: "changed" })));
+  }
+  /** 0.2.2: a file's bytes as HQ serves them now (cached, its masking marked); null if unreadable. */
+  async refetch(team, path5) {
+    const id = team.workspace.id;
+    const key = this.key(team, path5);
+    const gen = this.secretsGen.get(id) ?? 0;
+    try {
+      const r = await this.call(
+        team,
+        () => this.deps.api.read(team, path5, void 0, void 0, { background: true }),
+        { read: true }
+      );
+      if (r.kind !== "bytes") return null;
+      if ((this.secretsGen.get(id) ?? 0) !== gen) return r.bytes;
+      this.contents.put(key, r.etag, r.bytes);
+      this.etags.set(key, r.etag);
+      if (r.maskVersion) this.maskVersions.set(key, r.maskVersion);
+      if (r.masked) await this.markMasked(team, path5, r.etag, r.maskedNames ?? []);
+      return r.bytes;
+    } catch {
+      return null;
+    }
   }
   /** The etag of what the content cache holds for `key` (kept beside it). */
   etags = /* @__PURE__ */ new Map();
   contentEtag(key) {
     return this.etags.get(key);
   }
-  async markMasked(team, path5, etag) {
+  async markMasked(team, path5, etag, names) {
     let s = this.listings.stat(team.workspace.id, path5);
     if (!s || s.etag !== etag) {
       try {
@@ -11292,7 +11454,7 @@ var HqFsCore = class {
       }
     }
     this.listings.markMasked(team.workspace.id, path5, etag);
-    this.deps.ui.masked(team, path5);
+    this.deps.ui.masked(team, path5, names);
     this.fire([{ team, path: path5, type: "changed" }]);
   }
   // ── writes ────────────────────────────────────────────────────────────────────────────────────
@@ -11558,6 +11720,11 @@ var HqFsCore = class {
       if (team) await this.resync(team);
       return;
     }
+    if (frame.type === "secrets-changed") {
+      const team = this.teamById(frame.workspaceId);
+      if (team) await this.secretsChanged(team);
+      return;
+    }
     if ((frame.type === "workspace-state" || frame.type === "subscribed") && frame.state === "running") {
       const team = this.teamById(frame.workspaceId);
       if (team) this.expectUp(team, { force: true });
@@ -11610,6 +11777,8 @@ var HqFsCore = class {
     this.contents.clear();
     this.ownWrites.clear();
     this.etags.clear();
+    this.maskVersions.clear();
+    this.statNudge.clear();
   }
 };
 function isAccountError(err) {
@@ -11635,9 +11804,15 @@ function dedupe(changes) {
     return true;
   });
 }
+function sameBytes(a, b) {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
 
 // src/fs/hq-fs-provider.ts
 var HQ_SCHEME = "hq";
+var ACCOUNTS_READY_MS = 5e3;
 var MAX_REOPENS = 2;
 function relPathOf(uri) {
   const parts = uri.path.split("/").filter((p) => p.length > 0);
@@ -11878,11 +12053,25 @@ var HqFileSystemProvider = class {
       if (batch.length > 0) this.emitter.fire(batch);
     }, 100);
   }
-  /** The account and team a URI names, or Unavailable (zero requests, one notice). */
-  resolve(uri) {
-    const r = this.deps.accounts.resolveAuthority(uri.authority);
+  /**
+   * The account and team a URI names, or Unavailable (zero requests, one notice). 0.2.2 live: during
+   * activation a call waits (bounded) for the accounts to load instead of answering gone, and once
+   * they closed (the extension host is shutting down) it is refused with no notice.
+   */
+  async resolve(uri) {
+    const accounts = this.deps.accounts;
+    let r = accounts.resolveAuthority(uri.authority);
+    if (r.kind === "gone" && !accounts.isReady() && !accounts.isDisposed()) {
+      let timer;
+      await Promise.race([
+        accounts.whenReady(),
+        new Promise((done) => timer = setTimeout(done, ACCOUNTS_READY_MS))
+      ]);
+      clearTimeout(timer);
+      r = accounts.resolveAuthority(uri.authority);
+    }
     if (r.kind === "gone") {
-      this.deps.onUnavailable(r);
+      if (!accounts.isDisposed()) this.deps.onUnavailable(r);
       throw vscode.FileSystemError.Unavailable(
         r.email ? COPY.fsAccountGone(r.email) : COPY.fsAccountUnknown
       );
@@ -11939,7 +12128,7 @@ var HqFileSystemProvider = class {
   }
   async stat(uri) {
     try {
-      const { bundle, team, path: path5 } = this.resolve(uri);
+      const { bundle, team, path: path5 } = await this.resolve(uri);
       const s = await bundle.core.stat(team, path5);
       return {
         type: toType(s.type),
@@ -11954,7 +12143,7 @@ var HqFileSystemProvider = class {
   }
   async readDirectory(uri) {
     try {
-      const { bundle, team, path: path5 } = this.resolve(uri);
+      const { bundle, team, path: path5 } = await this.resolve(uri);
       const entries = (await bundle.core.readDirectory(team, path5)).map(
         ([n, t]) => [n, toType(t)]
       );
@@ -11966,7 +12155,7 @@ var HqFileSystemProvider = class {
   }
   async readFile(uri) {
     try {
-      const { bundle, team, path: path5 } = this.resolve(uri);
+      const { bundle, team, path: path5 } = await this.resolve(uri);
       const bytes = await bundle.core.readFile(team, path5);
       this.served(uri);
       return bytes;
@@ -11976,7 +12165,7 @@ var HqFileSystemProvider = class {
   }
   async writeFile(uri, content, options) {
     try {
-      const { bundle, team, path: path5 } = this.resolve(uri);
+      const { bundle, team, path: path5 } = await this.resolve(uri);
       await bundle.core.writeFile(team, path5, content, options);
     } catch (err) {
       throw this.refuse(toVsError(err, uri), uri);
@@ -11984,7 +12173,7 @@ var HqFileSystemProvider = class {
   }
   async createDirectory(uri) {
     try {
-      const { bundle, team, path: path5 } = this.resolve(uri);
+      const { bundle, team, path: path5 } = await this.resolve(uri);
       await bundle.core.createDirectory(team, path5);
     } catch (err) {
       throw this.refuse(toVsError(err, uri), uri);
@@ -11992,7 +12181,7 @@ var HqFileSystemProvider = class {
   }
   async delete(uri, options) {
     try {
-      const { bundle, team, path: path5 } = this.resolve(uri);
+      const { bundle, team, path: path5 } = await this.resolve(uri);
       await bundle.core.delete(team, path5, options.recursive);
     } catch (err) {
       throw this.refuse(toVsError(err, uri), uri);
@@ -12000,8 +12189,8 @@ var HqFileSystemProvider = class {
   }
   async rename(oldUri, newUri, options) {
     try {
-      const from = this.resolve(oldUri);
-      const to = this.resolve(newUri);
+      const from = await this.resolve(oldUri);
+      const to = await this.resolve(newUri);
       if (from.bundle !== to.bundle || from.team.workspace.id !== to.team.workspace.id) {
         throw new FsCoreError("no-permissions", COPY.fsViewOnly);
       }
@@ -12302,7 +12491,10 @@ var AccountNotices = class {
   unknownSaid = /* @__PURE__ */ new Set();
   /** Accounts whose notice the person dismissed (review N1): not shown again until usable/removed. */
   dismissed = /* @__PURE__ */ new Set();
+  /** 0.2.2 live: the extension host is shutting down; what it can no longer resolve is not news. */
+  disposed = false;
   say(info) {
+    if (this.disposed) return;
     if (!info.email || !info.tag || !info.userId) {
       if (this.unknownSaid.has(info.key)) return;
       this.unknownSaid.add(info.key);
@@ -12342,6 +12534,7 @@ var AccountNotices = class {
     this.dismissed.delete(tag);
   }
   dispose() {
+    this.disposed = true;
     for (const end of this.open.values()) end();
     this.open.clear();
   }
@@ -12780,6 +12973,7 @@ function parseEventsFrame(v) {
       return hasWs && Array.isArray(v.ports) && v.ports.every((p) => Number.isInteger(p)) ? v : null;
     case "resync":
     case "unsubscribed":
+    case "secrets-changed":
       return hasWs ? v : null;
     case "subscribed":
       return hasWs && state(v.state) && typeof v.watch === "boolean" ? v : null;
@@ -14225,6 +14419,9 @@ var HqAccounts = class {
     this.activeTag = this.resolveActive();
     this.everActive = this.activeTag !== null;
     this.settled = this.finishInterruptedSignOuts().catch(() => void 0);
+    this.loaded = Promise.all([this.settled, this.initHealth]).then(() => {
+      this.loadedNow = true;
+    });
     this.subscriptions.push(
       deps.store.onSecretChanged((key) => {
         for (const b of this.bundles.values()) {
@@ -14255,6 +14452,11 @@ var HqAccounts = class {
   flowState = { signingIn: false, flow: null };
   /** The activation's own work (the interrupted sign-out sweep) has finished. */
   settled;
+  /** The activation's first health check of every account (the init re-derive's). */
+  initHealth = Promise.resolve();
+  loaded;
+  loadedNow = false;
+  disposedNow = false;
   tooOldShown = false;
   poll = null;
   subscriptions = [];
@@ -14317,6 +14519,20 @@ var HqAccounts = class {
   /** Is this the 0.1.x user's account (its bundle also serves untagged URIs, decision 24)? */
   isLegacyUser(b) {
     return this.legacy()?.tag === b.tag;
+  }
+  /**
+   * 0.2.2 live: the accounts have loaded (the activation sweep and the first health check). Until
+   * then an authority that does not resolve may only be not known YET: no "not signed in" notice.
+   */
+  isReady() {
+    return this.loadedNow;
+  }
+  whenReady() {
+    return this.loaded;
+  }
+  /** Closed (the extension host is shutting down): nothing resolves, and nobody is told so. */
+  isDisposed() {
+    return this.disposedNow;
   }
   /** The account a `hq://` authority names, or why not. */
   resolveAuthority(authority) {
@@ -14394,7 +14610,7 @@ var HqAccounts = class {
   }
   // ── decision 23 ────────────────────────────────────────────────────────────────────────────────
   /** Re-read the account list from globalState; fire added / removed / renewed. Cheap; called often. */
-  rederive(reason) {
+  rederive(reason2) {
     const host = this.host();
     let changed = false;
     if (host !== this.hostNow) {
@@ -14403,7 +14619,7 @@ var HqAccounts = class {
       for (const tag of [...this.bundles.keys()]) this.drop(tag);
       changed = this.hostNow !== null || host !== null;
       this.hostNow = host;
-      if (reason !== "init") this.activeTag = null;
+      if (reason2 !== "init") this.activeTag = null;
     }
     if (!host) {
       if (changed) this.changedEmitter.fire();
@@ -14434,8 +14650,8 @@ var HqAccounts = class {
       if (!b) {
         const bundle = this.build(tag, e.ref, e.account);
         this.bundles.set(tag, bundle);
-        if (reason !== "init") {
-          this.log.info(`account ${tag} appeared (${e.ref.slot} slot, ${reason})`);
+        if (reason2 !== "init") {
+          this.log.info(`account ${tag} appeared (${e.ref.slot} slot, ${reason2})`);
         } else this.log.info(`account ${tag} found (${e.ref.slot} slot)`);
         added.push(bundle);
         changed = true;
@@ -14456,14 +14672,15 @@ var HqAccounts = class {
       this.activeTag = null;
       changed = true;
     }
-    if (!this.activeTag && !this.everActive && reason !== "init" && this.bundles.size > 0) {
+    if (!this.activeTag && !this.everActive && reason2 !== "init" && this.bundles.size > 0) {
       this.activeTag = this.resolveActive();
       this.everActive = this.activeTag !== null;
       if (this.everActive) changed = true;
     }
-    if (reason !== "poll") {
+    if (reason2 !== "poll") {
       void this.deps.store.recordLegacyUser(host).catch(() => null);
-      void this.refreshHealth();
+      const health = this.refreshHealth().catch(() => void 0);
+      if (reason2 === "init") this.initHealth = health;
     } else {
       void this.refreshHealth((b) => b.ref.slot === "legacy" || b.health === "needs-sign-in");
       const a = this.active();
@@ -14472,7 +14689,7 @@ var HqAccounts = class {
       }
     }
     for (const b of added) this.addedEmitter.fire(b);
-    if (reason !== "init") for (const b of added) this.usableEmitter.fire(b);
+    if (reason2 !== "init") for (const b of added) this.usableEmitter.fire(b);
     if (changed) this.changedEmitter.fire();
   }
   /** Decision 18's state of every account, for the Account view and URI resolution. */
@@ -14679,6 +14896,7 @@ var HqAccounts = class {
     return a !== null && sameAccount(a.ref, ref);
   }
   dispose() {
+    this.disposedNow = true;
     if (this.poll) clearInterval(this.poll);
     for (const s of this.subscriptions) s.dispose();
     for (const b of this.bundles.values()) b.dispose();
@@ -15346,8 +15564,24 @@ var CLI_ATTACH_COPY = {
   reconnecting: "hq: connection lost, reconnecting...",
   accessEnded: "hq: your access to this session ended.",
   detached: "hq: detached.",
-  nowViewOnly: "hq: you can watch this session but not type in it."
+  nowViewOnly: "hq: you can watch this session but not type in it.",
+  sessionStopped: "hq: the session stopped.",
+  sessionError: "hq: the session exited with an error."
 };
+var ACCOUNT_ERROR_NAMES = /* @__PURE__ */ new Set([
+  "NeedsSignInError",
+  "AccountGoneError",
+  "SlotRenewedError"
+]);
+var ADMIT_STABLE_MS = 5e3;
+function isTransientUpgradeError(err) {
+  if (err instanceof NotLoggedInError || err instanceof RefreshNeedsRenewingError) return false;
+  if (err instanceof Error && ACCOUNT_ERROR_NAMES.has(err.name)) return false;
+  if (err instanceof HqApiError) {
+    return err.status >= 500 || err.status === 429 || err.status === 408;
+  }
+  return true;
+}
 var sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
 function cleanPorts(value) {
   if (!Array.isArray(value)) return null;
@@ -15372,14 +15606,28 @@ function createAttachSession(client, target, sink, opts = {}) {
     canType = next;
     opts.onCanTypeChanged?.(next);
   };
-  async function run() {
+  async function run2() {
     let announced = false;
     let intent = opts.initialIntent ?? "open";
     let reconnects = 0;
+    let admittedAt = null;
     for (; ; ) {
       if (detachRequested) return { kind: "ended", exitCode: 0, message: `\r
 ${copy.detached}` };
-      const headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+      let headers;
+      try {
+        headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+      } catch (err) {
+        if (!isTransientUpgradeError(err)) throw err;
+        if ((reconnects > 0 || announced) && reconnects < MAX_RECONNECTS) {
+          await sleep3(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+          reconnects += 1;
+          intent = "reconnect";
+          continue;
+        }
+        if (reconnects >= MAX_RECONNECTS) return { kind: "lost" };
+        return { kind: "refused", status: 0 };
+      }
       const ws = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), headers);
       current = ws;
       const opened = await new Promise((resolve) => {
@@ -15407,11 +15655,15 @@ ${copy.detached}` };
       const end = await runSocket(
         ws,
         () => {
-          reconnects = 0;
+          admittedAt = Date.now();
         },
         intent,
         headers
       );
+      if (admittedAt !== null && Date.now() - admittedAt >= (opts.admitStableMs ?? ADMIT_STABLE_MS)) {
+        reconnects = 0;
+      }
+      admittedAt = null;
       if (end.kind === "dropped" && reconnects < MAX_RECONNECTS) {
         sink.say(`\r
 ${copy.reconnecting}`);
@@ -15445,7 +15697,10 @@ ${copy.reconnecting}`);
       send({ type: "attach", sessionId: session.id, ...size(), intent: i });
     };
     attachFrame(intent);
-    const filter = (opts.createFilter ?? createTerminalQueryFilter)();
+    let filter = (opts.createFilter ?? createTerminalQueryFilter)();
+    let reattachPending = false;
+    let resizeOnAdmit = false;
+    let statusSaid = null;
     return new Promise((resolve) => {
       let exitCode = 0;
       let errorMessage = null;
@@ -15632,11 +15887,42 @@ ${copy.wakeTimeout(team)}`);
           }
         } else if (frame.type === "reset") {
           repaintedAt = Date.now();
+          if ("reattach" in frame && frame.reattach === true) {
+            echo?.lifecycleReset();
+            filter = (opts.createFilter ?? createTerminalQueryFilter)();
+            const wipe = "\x1Bc\x1B[H\x1B[2J\x1B[3J";
+            if (echo) echo.repaint(wipe);
+            else sink.write(wipe);
+            resizeOnAdmit = true;
+            if (attachOutstanding) reattachPending = true;
+            else attachFrame("reconnect");
+            return;
+          }
           if (echo) echo.repaint("\x1B[H\x1B[2J\x1B[3J");
           else sink.write("\x1B[H\x1B[2J\x1B[3J");
+        } else if (frame.type === "status" && "status" in frame) {
+          const st = typeof frame.status === "string" ? frame.status : "";
+          if (st === "error" && (wake.since !== null || wake.asleep)) return;
+          if (st === statusSaid) return;
+          statusSaid = st;
+          if (st === "stopped") say(`\r
+${copy.sessionStopped}`);
+          else if (st === "error") say(`\r
+${copy.sessionError}`);
+        } else if (frame.type === "ownership-changed") {
+          opts.onOwnershipChanged?.();
         } else if (frame.type === "attached") {
           attachOutstanding = false;
           onAdmitted();
+          if (reattachPending) {
+            reattachPending = false;
+            attachFrame("reconnect");
+            return;
+          }
+          if (resizeOnAdmit) {
+            resizeOnAdmit = false;
+            send({ type: "resize", sessionId: session.id, ...size() });
+          }
           if (!answerWaking && !answerAsleep) {
             errorRetries = 0;
             errorSaid = null;
@@ -15753,7 +16039,7 @@ ${copy.detached}` });
     });
   }
   return {
-    run,
+    run: run2,
     detach: () => {
       detachRequested = true;
       for (const hook of [...detachHooks]) hook();
@@ -15761,7 +16047,8 @@ ${copy.detached}` });
         current.terminate();
       }
     },
-    canType: () => canType
+    canType: () => canType,
+    setCanType: (can) => setCanType(can)
   };
 }
 
@@ -16187,23 +16474,23 @@ var PredictionEngine = class {
     return events;
   }
   /** A mismatch or a timeout: drop everything, hide the epoch, suspend until the line ends. */
-  fail(reason) {
+  fail(reason2) {
     const visible = this.pending.filter((p) => p.visible).length;
-    if (reason === "mismatch") this.stats.mismatched += visible;
+    if (reason2 === "mismatch") this.stats.mismatched += visible;
     else this.stats.timedOut += visible;
     this.stats.withdrawn += visible;
     this.epochVisible = false;
     this.suspended = true;
     this.ghosts = [];
     this.anchorHint = null;
-    return this.dropAll(reason);
+    return this.dropAll(reason2);
   }
-  dropAll(reason) {
+  dropAll(reason2) {
     const dropped = this.pending;
     this.pending = [];
     const visible = dropped.filter((p) => p.visible);
     if (visible.length === 0) return [];
-    return [{ type: "withdraw", predictions: visible, reason }];
+    return [{ type: "withdraw", predictions: visible, reason: reason2 }];
   }
 };
 
@@ -16701,6 +16988,49 @@ function createTerminalFilter() {
   return { push, flush };
 }
 
+// src/terminal/ordered-input.ts
+var OrderedInput = class {
+  /**
+   * `rewrite`: null (synchronously) when the chunk is not a candidate; otherwise a promise of the
+   * text to send instead (null: send nothing).
+   */
+  constructor(send, rewrite) {
+    this.send = send;
+    this.rewrite = rewrite;
+  }
+  send;
+  rewrite;
+  tail = null;
+  pending = 0;
+  push(data) {
+    const rewritten = this.rewrite(data);
+    if (rewritten === null && this.tail === null) {
+      this.send(data);
+      return;
+    }
+    this.pending += 1;
+    const step = async () => {
+      let out = data;
+      if (rewritten !== null) {
+        try {
+          out = await rewritten;
+        } catch {
+          out = data;
+        }
+      }
+      if (out === null || out.length === 0) return;
+      try {
+        this.send(out);
+      } catch {
+      }
+    };
+    this.tail = (this.tail ?? Promise.resolve()).then(step).finally(() => {
+      this.pending -= 1;
+      if (this.pending === 0) this.tail = null;
+    });
+  }
+};
+
 // src/terminal/hq-pty.ts
 function terminalName(target, state, label) {
   const base = COPY.terminalName(
@@ -16724,6 +17054,10 @@ var HqPty = class {
     this.target = target;
     this.canType = target.session.canType;
     this.lastName = terminalName(target, { canType: this.canType }, deps.accountLabel?.());
+    this.input = new OrderedInput(
+      (data) => this.inputHandler?.(Buffer.from(data, "utf8")),
+      (chunk) => deps.rewriteInput?.(chunk) ?? null
+    );
   }
   deps;
   target;
@@ -16748,12 +17082,45 @@ var HqPty = class {
   attachedGrant;
   /** The name the tab was given last (relabels that change nothing are not sent). */
   lastName;
+  input;
+  /** 0.2.2: the attach ended or was lost: the next key reconnects in place (it is not sent). */
+  awaitingReconnect = false;
+  /** Review MUST 1: an attach (or its re-attach loop) is running; `run` is then a no-op. */
+  running = false;
   open(initial) {
     if (initial) this.dims = { cols: initial.columns, rows: initial.rows };
     setTimeout(() => void this.run(), initial ? 0 : 250);
   }
   handleInput(data) {
-    this.inputHandler?.(Buffer.from(data, "utf8"));
+    if (this.awaitingReconnect) {
+      this.awaitingReconnect = false;
+      this.stopped = false;
+      this.rename();
+      this.say(COPY.reconnecting);
+      void this.run();
+      return;
+    }
+    this.input.push(data);
+  }
+  /** 0.2.2: the tab stays and says how to come back (an extension-host restart, a lost link). */
+  offerReconnect() {
+    if (this.closedByUser) return;
+    this.awaitingReconnect = true;
+    this.say(COPY.pressKeyToReconnect);
+  }
+  /** 0.2.2: who may type changed (`ownership-changed`): re-read this session's rights, as the web does. */
+  async refreshRights(attach) {
+    const { team, session } = this.target;
+    try {
+      const list = await this.deps.service.call(
+        async (c) => (await c.request("GET", `${teamPath(team)}/sessions`, {
+          org: team.org.slug
+        })).body
+      );
+      const now = Array.isArray(list) ? list.find((s) => s.id === session.id) : void 0;
+      if (now && this.session === attach) attach.setCanType(now.canType === true);
+    } catch {
+    }
   }
   setDimensions(d) {
     this.dims = { cols: d.columns, rows: d.rows };
@@ -16819,7 +17186,23 @@ var HqPty = class {
       rows: this.dims.rows
     });
   }
+  /**
+   * Attach, and attach again while an attach ends asking for it (a renew, `reattach`). Review MUST 1:
+   * ONE at a time: a second call while one runs (a key, a renew) is a no-op, so no tab ever holds
+   * two sessions at once.
+   */
   async run() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      while (await this.attachOnce()) {
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+  /** One attach, to its end. True: attach again now (a renew, or `reattach` asked). */
+  async attachOnce() {
     this.reattaching = false;
     let client;
     try {
@@ -16829,11 +17212,11 @@ var HqPty = class {
       const ours = err instanceof AccountGoneError || err instanceof NeedsSignInError || err instanceof SecretsBusyError;
       this.say(ours ? err.message : COPY.signedOutWelcome);
       this.closed.fire(1);
-      return;
+      return false;
     }
     this.attachedGrant = this.deps.service.grantOfClient(client);
     const { team, session } = this.target;
-    const teamName = cleanLabel(team.workspace.name) || team.alias;
+    const teamName2 = cleanLabel(team.workspace.name) || team.alias;
     this.echo = await this.createEcho();
     const running = this.deps.teamRunning ? await this.deps.teamRunning(team).catch(() => true) : true;
     const attach = createAttachSession(
@@ -16880,18 +17263,21 @@ var HqPty = class {
           this.deps.onState?.(on ? "waking" : "attached");
         },
         onListenPorts: (ports) => this.deps.offerPorts(team, ports),
-        noticeText: (code, text) => code === "workspace_asleep" ? `${COPY.teamOffTerminal(teamName)}\r
+        noticeText: (code, text) => code === "workspace_asleep" ? `${COPY.teamOffTerminal(teamName2)}\r
 ${COPY.pressKeyToWake}` : text,
-        wakeText: (code, message) => code === "SESSION_RESUME_COLD_RESTART" ? message : COPY.waking(teamName),
+        wakeText: (code, message) => code === "SESSION_RESUME_COLD_RESTART" ? message : COPY.waking(teamName2),
         copy: {
           prefix: "",
           stillOnIt: COPY.stillOnIt,
-          wakeTimeout: () => COPY.wakeTimeout(teamName),
+          wakeTimeout: () => COPY.wakeTimeout(teamName2),
           reconnecting: COPY.reconnecting,
           accessEnded: COPY.sessionAccessEnded,
           detached: COPY.detached,
-          nowViewOnly: COPY.nowViewOnly
-        }
+          nowViewOnly: COPY.nowViewOnly,
+          sessionStopped: COPY.sessionStoppedTerminal,
+          sessionError: COPY.sessionErrorTerminal
+        },
+        onOwnershipChanged: () => void this.refreshRights(attach)
       }
     );
     this.session = attach;
@@ -16899,38 +17285,43 @@ ${COPY.pressKeyToWake}` : text,
     try {
       end = await attach.run();
     } catch (err) {
-      if (this.again()) return;
+      if (this.again()) return true;
       await this.deps.service.handleError(err);
       this.say(err instanceof Error ? err.message : COPY.unreachable);
       this.deps.onState?.("ended");
-      return;
+      this.offerReconnect();
+      return false;
     } finally {
       this.echo?.close();
     }
-    if (this.again()) return;
+    if (this.again()) return true;
     this.deps.onState?.("ended");
-    if (this.closedByUser) return;
+    if (this.closedByUser) return false;
     if (end.kind === "refused") {
       if (end.status === 426) this.deps.service.showTooOld();
       if (end.status === 401) {
         await this.deps.service.refreshOrgs().catch(() => void 0);
-        if (this.renewedUnder()) return;
+        if (this.renewedUnder()) return true;
       }
       this.say(COPY.terminalRefused(end.status));
       this.end();
-      return;
+      if (end.status !== 426) this.offerReconnect();
+      return false;
     }
     if (end.kind === "lost") {
       this.say(COPY.connectionLost);
       this.end();
-      return;
+      this.offerReconnect();
+      return false;
     }
     if (end.message) this.say(end.message);
     this.end();
     if (end.unauthorized) {
       await this.deps.service.refreshOrgs().catch(() => void 0);
-      this.renewedUnder();
+      if (this.renewedUnder()) return true;
     }
+    this.offerReconnect();
+    return false;
   }
   /**
    * The account's slot holds another grant than the one this attach used (renewed elsewhere, and
@@ -16939,19 +17330,19 @@ ${COPY.pressKeyToWake}` : text,
   renewedUnder() {
     const now = this.deps.service.currentGrant();
     if (this.closedByUser || now === null || now === this.attachedGrant) return false;
+    this.awaitingReconnect = false;
     this.stopped = false;
     this.rename();
     this.say(COPY.reconnecting);
-    void this.run();
     return true;
   }
   /** The attach ended because `reattach` asked: say so and attach again with the new grant. */
   again() {
     if (!this.reattaching || this.closedByUser) return false;
     this.reattaching = false;
+    this.awaitingReconnect = false;
     this.session = null;
     this.say(COPY.reconnecting);
-    void this.run();
     return true;
   }
   dispose() {
@@ -16963,6 +17354,7 @@ ${COPY.pressKeyToWake}` : text,
 
 // src/terminal/terminals.ts
 var LISTING_FRESH_MS = 1e4;
+var RECORD_KEY = "hq.terminals";
 function teamIsRunning(ws) {
   return teamState(ws) === "running";
 }
@@ -16989,6 +17381,7 @@ var Terminals = class _Terminals {
           if (o.terminal === t) {
             this.open.delete(id);
             o.pty.dispose();
+            this.forget(id);
             this.changed.fire();
           }
         }
@@ -17016,6 +17409,19 @@ var Terminals = class _Terminals {
   static key(target) {
     return `${accountTag(target.account.host, target.account.userId)}:${target.session.id}`;
   }
+  /** The state of the terminal open for this session as this account, if any. */
+  stateOf(target) {
+    return this.open.get(_Terminals.key(target))?.state ?? null;
+  }
+  /** The active terminal and its HQ session, if it is one of ours. */
+  activeTerminal() {
+    const t = vscode12.window.activeTerminal;
+    if (!t) return null;
+    for (const o of this.open.values()) {
+      if (o.terminal === t) return { terminal: t, target: o.pty.target };
+    }
+    return null;
+  }
   /** The HQ session behind the active terminal, if it is one of ours. */
   active() {
     const t = vscode12.window.activeTerminal;
@@ -17025,12 +17431,19 @@ var Terminals = class _Terminals {
     }
     return null;
   }
-  attach(target) {
+  /** `preserveFocus`: show the tab without taking focus (a tab adopted at activation). */
+  attach(target, opts) {
     const key = _Terminals.key(target);
     const existing = this.open.get(key);
-    if (existing) {
-      existing.terminal.show();
+    if (existing && existing.state !== "ended") {
+      existing.terminal.show(opts?.preserveFocus);
       return;
+    }
+    if (existing) {
+      this.open.delete(key);
+      existing.terminal.dispose();
+      existing.pty.dispose();
+      this.changed.fire();
     }
     const service = this.deps.accounts.get(target.account)?.service;
     if (!service) {
@@ -17052,6 +17465,7 @@ var Terminals = class _Terminals {
           );
         },
         onEchoOrgOff: (team) => this.echoOrgOff.show(team),
+        ...this.deps.rewriteInput ? { rewriteInput: this.deps.rewriteInput(target) } : {},
         windowActive: () => vscode12.window.state.focused || vscode12.window.state.active === true,
         offerPorts: (team, ports) => this.deps.offerPorts(target.account, team, ports),
         // The team's live state (F11), else the last listing: an off team attaches passively.
@@ -17085,7 +17499,13 @@ var Terminals = class _Terminals {
     entry.terminal = terminal;
     entry.pty = pty;
     this.open.set(key, entry);
-    terminal.show();
+    this.remember(key, {
+      name: terminalName(target, { canType: true }, label()),
+      account: target.account,
+      teamId: target.team.workspace.id,
+      session: target.session
+    });
+    terminal.show(opts?.preserveFocus);
     this.changed.fire();
   }
   /** F12: start an HQ session on this team, as `account`, from this computer, then attach it. */
@@ -17111,12 +17531,65 @@ var Terminals = class _Terminals {
     }
     this.attach({ account, team, session: created });
   }
+  records() {
+    return this.deps.memento?.get(RECORD_KEY) ?? {};
+  }
+  saveRecords(all) {
+    void this.deps.memento?.update(RECORD_KEY, Object.keys(all).length > 0 ? all : void 0);
+  }
+  remember(key, rec) {
+    if (!this.deps.memento) return;
+    this.saveRecords({ ...this.records(), [key]: rec });
+  }
+  forget(key) {
+    if (!this.deps.memento) return;
+    const all = this.records();
+    if (!(key in all)) return;
+    delete all[key];
+    this.saveRecords(all);
+  }
+  /**
+   * 0.2.2 live FAIL 2: VS Code keeps an HQ tab across an extension-host restart, but the pty behind
+   * it lived in the old host: the tab is dead (no output, typing goes nowhere, no "press any key").
+   * At activation, each tab recorded by this window that this host does not run is closed and its
+   * session attached again in a fresh terminal (the same name). An account or team that is gone
+   * only closes it. Records that match no tab (the window was reloaded) are dropped.
+   */
+  adoptOrphans(existing) {
+    if (!this.deps.memento) return;
+    const all = this.records();
+    const suffixes = [
+      "",
+      COPY.terminalSuffixViewOnly,
+      COPY.terminalSuffixWaking,
+      COPY.terminalSuffixStopped
+    ];
+    const ours = new Set([...this.open.values()].map((o) => o.terminal));
+    const kept = {};
+    for (const [key, rec] of Object.entries(all)) {
+      const dead = existing.find(
+        (t) => !ours.has(t) && suffixes.some((sfx) => t.name === `${rec.name}${sfx}`)
+      );
+      if (!dead) continue;
+      ours.add(dead);
+      dead.dispose();
+      const team = this.deps.accounts.get(rec.account)?.service.teams().find((t) => t.workspace.id === rec.teamId);
+      if (!team) continue;
+      kept[key] = rec;
+    }
+    this.saveRecords(kept);
+    for (const rec of Object.values(kept)) {
+      const team = this.deps.accounts.get(rec.account).service.teams().find((t) => t.workspace.id === rec.teamId);
+      this.attach({ account: rec.account, team, session: rec.session }, { preserveFocus: true });
+    }
+  }
   /** One account signed out or revoked (any window): only its terminals close. */
   closeAccount(ref) {
     let closed = false;
     for (const [k, o] of [...this.open]) {
       if (!sameAccount(o.pty.target.account, ref)) continue;
       this.open.delete(k);
+      this.forget(k);
       o.terminal.dispose();
       closed = true;
     }
@@ -17144,15 +17617,485 @@ function newSessionError(err) {
   return COPY.newSessionFailed(err instanceof Error ? err.message : COPY.unreachable);
 }
 
-// src/tree/account-tree.ts
+// src/terminal/terminal-paste-wiring.ts
+var import_node_child_process = require("node:child_process");
+var import_node_fs6 = require("node:fs");
+var import_node_os5 = require("node:os");
 var vscode13 = __toESM(require("vscode"), 1);
+
+// src/terminal/image-paste.ts
+var MAX_PASTE_IMAGE_BYTES = 10 * 1024 * 1024;
+var PASTE_IMAGE_DIR = ".uploads";
+var CLIPBOARD_TIMEOUT_MS = 3e3;
+var ALLOWED_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+function startsWith(b, sig, at = 0) {
+  if (b.length < at + sig.length) return false;
+  return sig.every((v, i) => b[at + i] === v);
+}
+var ascii = (s) => [...s].map((c) => c.charCodeAt(0));
+function sniffImage(b) {
+  if (startsWith(b, [137, 80, 78, 71, 13, 10, 26, 10]))
+    return { mime: "image/png", ext: "png" };
+  if (startsWith(b, [255, 216, 255])) return { mime: "image/jpeg", ext: "jpg" };
+  if (startsWith(b, ascii("GIF87a")) || startsWith(b, ascii("GIF89a")))
+    return { mime: "image/gif", ext: "gif" };
+  if (startsWith(b, ascii("RIFF")) && startsWith(b, ascii("WEBP"), 8))
+    return { mime: "image/webp", ext: "webp" };
+  return null;
+}
+function pastedImageName(ext, now = /* @__PURE__ */ new Date(), random = Math.random) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const rand = random().toString(16).slice(2, 6).padEnd(4, "0");
+  return `pasted-${stamp}-${rand}.${ext}`;
+}
+var TEXT_BOUND = 2 * MAX_PASTE_IMAGE_BYTES + 64 * 1024;
+var BINARY_BOUND = MAX_PASTE_IMAGE_BYTES + 64 * 1024;
+var TooLarge = class extends Error {
+};
+async function run(deps, file, args, encoding) {
+  try {
+    const { stdout } = await deps.exec(file, args, {
+      timeout: CLIPBOARD_TIMEOUT_MS,
+      maxBuffer: encoding === "buffer" ? BINARY_BOUND : TEXT_BOUND,
+      encoding,
+      windowsHide: true
+    });
+    return stdout;
+  } catch (err) {
+    if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+      throw new TooLarge();
+    return null;
+  }
+}
+var POWERSHELL_SCRIPT = "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $i = [System.Windows.Forms.Clipboard]::GetImage(); if ($i -ne $null) { $m = New-Object System.IO.MemoryStream; $i.Save($m, [System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($m.ToArray()) }";
+async function readRaw(deps) {
+  if (deps.platform === "darwin") {
+    const out2 = await run(
+      deps,
+      "/usr/bin/osascript",
+      ["-e", "the clipboard as \xABclass PNGf\xBB"],
+      "utf8"
+    );
+    const hex = /«data PNGf([0-9A-Fa-f]+)»/.exec(String(out2 ?? ""))?.[1];
+    return hex ? Uint8Array.from(Buffer.from(hex, "hex")) : null;
+  }
+  if (deps.platform === "win32") {
+    const out2 = await run(
+      deps,
+      `${deps.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+      ["-NoProfile", "-NonInteractive", "-STA", "-Command", POWERSHELL_SCRIPT],
+      "utf8"
+    );
+    const b64 = String(out2 ?? "").trim();
+    return /^[A-Za-z0-9+/]+=*$/.test(b64) ? Uint8Array.from(Buffer.from(b64, "base64")) : null;
+  }
+  const wayland = Boolean(deps.env.WAYLAND_DISPLAY);
+  const types = wayland ? await run(deps, "wl-paste", ["--list-types"], "utf8") : await run(deps, "xclip", ["-selection", "clipboard", "-t", "TARGETS", "-o"], "utf8");
+  if (types === null) return null;
+  const listed = String(types).split(/\r?\n/).map((t) => t.trim());
+  const pick = ALLOWED_MIMES.find((m) => listed.includes(m));
+  if (!pick) return null;
+  const out = wayland ? await run(deps, "wl-paste", ["--no-newline", "--type", pick], "buffer") : await run(deps, "xclip", ["-selection", "clipboard", "-t", pick, "-o"], "buffer");
+  return out === null ? null : Uint8Array.from(Buffer.isBuffer(out) ? out : Buffer.from(out));
+}
+async function readClipboardImage(deps) {
+  let bytes;
+  try {
+    bytes = await readRaw(deps);
+  } catch (err) {
+    if (err instanceof TooLarge) return { kind: "too-large" };
+    return { kind: "none" };
+  }
+  if (!bytes || bytes.length === 0) return { kind: "none" };
+  if (bytes.length > MAX_PASTE_IMAGE_BYTES) return { kind: "too-large" };
+  const kind = sniffImage(bytes);
+  return kind ? { kind: "image", bytes, ...kind } : { kind: "wrong-type" };
+}
+var PASTE_OPEN = "\x1B[200~";
+var PASTE_CLOSE = "\x1B[201~";
+function hasControl(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 32 || c === 127) return true;
+  }
+  return false;
+}
+function absolute(p) {
+  return p.startsWith("/") && p.length > 1 || /^[A-Za-z]:\\/.test(p) || /^\\\\[^\\]/.test(p) || /^\\hq-[0-9a-f]{8}(\\|$)/.test(p);
+}
+function parseDroppedPaths(chunk) {
+  let body = chunk;
+  let open = "";
+  let close = "";
+  if (body.startsWith(PASTE_OPEN) && body.endsWith(PASTE_CLOSE)) {
+    open = PASTE_OPEN;
+    close = PASTE_CLOSE;
+    body = body.slice(PASTE_OPEN.length, body.length - PASTE_CLOSE.length);
+  }
+  if (body.length < 2 || hasControl(body)) return null;
+  const tokens = [];
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    let path5;
+    let quote;
+    let escaped = false;
+    if (c === "'" || c === '"') {
+      const end = body.indexOf(c, i + 1);
+      if (end < 0) return null;
+      const inner = body.slice(i + 1, end);
+      path5 = c === "'" ? inner.replace(/\\\\/g, "\\") : inner;
+      quote = c;
+      escaped = false;
+      i = end + 1;
+    } else {
+      let j = i;
+      let raw = "";
+      while (j < body.length && body[j] !== " ") {
+        if (body[j] === "\\" && body[j + 1] === " ") {
+          raw += " ";
+          escaped = true;
+          j += 2;
+          continue;
+        }
+        raw += body[j];
+        j += 1;
+      }
+      path5 = raw;
+      quote = "";
+      i = j;
+    }
+    if (!absolute(path5)) return null;
+    tokens.push({ path: path5, quote, escaped });
+    if (i < body.length) {
+      if (body[i] !== " " || i + 1 >= body.length) return null;
+      i += 1;
+    }
+  }
+  return tokens.length > 0 ? { open, close, tokens } : null;
+}
+function teamPathOf2(path5) {
+  const m = /^[/\\](hq-[0-9a-f]{8})(?:[/\\](.*))?$/.exec(path5);
+  return m ? [m[1], (m[2] ?? "").replace(/\\/g, "/")] : null;
+}
+var SNIFF_BYTES = 16;
+async function rewriteDrop(chunk, ctx) {
+  const parsed = parseDroppedPaths(chunk);
+  if (!parsed) return { kind: "pass" };
+  const inTeam = parsed.tokens.map((t) => teamPathOf2(t.path));
+  if (inTeam.some((x) => x !== null && x[0] !== ctx.teamAlias)) {
+    return { kind: "refuse", reason: "other-team" };
+  }
+  if (inTeam.some((x) => x !== null)) {
+    if (!inTeam.every((x) => x !== null && x[1].length > 0)) return { kind: "pass" };
+    const out = parsed.tokens.map((t, i) => {
+      const rel = inTeam[i][1];
+      return `${t.quote}${t.escaped ? rel.replace(/ /g, "\\ ") : rel}${t.quote}`;
+    });
+    return { kind: "replace", text: `${parsed.open}${out.join(" ")}${parsed.close}` };
+  }
+  const opened = [];
+  try {
+    const kinds = [];
+    for (const t of parsed.tokens) {
+      const f = await ctx.open(t.path).catch(() => null);
+      if (!f) return { kind: "pass" };
+      opened.push(f);
+      if (!f.isFile) return { kind: "pass" };
+      if (f.size > MAX_PASTE_IMAGE_BYTES) return { kind: "refuse", reason: "too-large" };
+      const kind = sniffImage(await f.head(SNIFF_BYTES));
+      if (!kind) return { kind: "pass" };
+      kinds.push(kind);
+    }
+    if (!await ctx.confirm(parsed.tokens.map((t) => t.path))) return { kind: "pass" };
+    const images = [];
+    for (const [i, f] of opened.entries()) {
+      const bytes = await f.all();
+      if (bytes.length > MAX_PASTE_IMAGE_BYTES) return { kind: "refuse", reason: "too-large" };
+      if (sniffImage(bytes)?.mime !== kinds[i].mime) return { kind: "pass" };
+      images.push({ ...kinds[i], bytes });
+    }
+    const paths = [];
+    for (const img of images) paths.push(await ctx.upload(img));
+    return { kind: "replace", text: `${parsed.open}${paths.join(" ")}${parsed.close}` };
+  } finally {
+    await Promise.all(opened.map((f) => f.close().catch(() => void 0)));
+  }
+}
+var isExists = (err) => err.kind === "exists";
+async function uploadPastedImage(fs, image, now = /* @__PURE__ */ new Date()) {
+  await fs.mkdir(PASTE_IMAGE_DIR).catch((err) => {
+    if (!isExists(err)) throw err;
+  });
+  for (let attempt = 0; ; attempt++) {
+    const path5 = `${PASTE_IMAGE_DIR}/${pastedImageName(image.ext, now)}`;
+    try {
+      await fs.writeNew(path5, image.bytes);
+      return path5;
+    } catch (err) {
+      if (!isExists(err) || attempt >= 1) throw err;
+    }
+  }
+}
+
+// src/terminal/terminal-paste.ts
+var reason = (err) => err instanceof Error && err.message ? err.message : COPY.unreachable;
+async function pasteIntoTerminal(d) {
+  const text = await d.readText().catch(() => "");
+  if (text.length > 0) return d.fallback();
+  if (d.remoteHost) {
+    d.info(COPY.imagePasteRemoteHost);
+    return d.fallback();
+  }
+  let clip;
+  try {
+    clip = await d.readImage();
+  } catch {
+    clip = { kind: "none" };
+  }
+  if (clip.kind === "none") return d.fallback();
+  if (clip.kind === "too-large") return d.error(COPY.imageTooLarge);
+  if (clip.kind === "wrong-type") return d.error(COPY.imageWrongType);
+  if (!d.canWrite) return d.info(COPY.fsViewOnly);
+  const { bytes, mime, ext } = clip;
+  let path5;
+  try {
+    path5 = await d.progress(COPY.imageUploading, () => d.upload({ bytes, mime, ext }));
+  } catch (err) {
+    return d.error(COPY.imageUploadFailed(reason(err)));
+  }
+  d.type(path5);
+  d.status(COPY.imageAdded);
+}
+var DROP_TIMEOUT_MS = 3e4;
+function dropRewriter(d) {
+  const limit = d.timeoutMs ?? DROP_TIMEOUT_MS;
+  return (chunk) => {
+    if (d.suppressed() || !parseDroppedPaths(chunk) || !d.canWrite()) return null;
+    return new Promise((resolve) => {
+      let done = false;
+      let timer = null;
+      const settle = (v) => {
+        if (done) return;
+        done = true;
+        if (timer !== null) clearTimeout(timer);
+        resolve(v);
+      };
+      const arm = () => {
+        if (timer !== null) clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (done) return;
+          d.error(COPY.imageUploadTimeout);
+          settle(null);
+        }, limit);
+      };
+      const pause = () => {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+      };
+      const ctx = d.ctx();
+      let uploading = false;
+      const guarded = {
+        ...ctx,
+        confirm: async (names) => {
+          if (done) return false;
+          pause();
+          try {
+            return await ctx.confirm(names);
+          } finally {
+            if (!done) arm();
+          }
+        },
+        upload: (img) => {
+          if (done) return Promise.reject(new Error(COPY.imageUploadTimeout));
+          if (uploading) return ctx.upload(img);
+          uploading = true;
+          return d.progress(
+            COPY.imageUploading,
+            () => ctx.upload(img),
+            () => settle(null)
+          );
+        }
+      };
+      arm();
+      void (async () => {
+        try {
+          const r = await rewriteDrop(chunk, guarded);
+          if (done) return;
+          if (r.kind === "pass") return settle(chunk);
+          if (r.kind === "replace") return settle(r.text);
+          d.error(
+            r.reason === "other-team" ? COPY.imageDropOtherTeam(d.teamName()) : COPY.imageTooLarge
+          );
+          settle(null);
+        } catch (err) {
+          if (done) return;
+          d.error(COPY.imageUploadFailed(reason(err)));
+          settle(null);
+        }
+      })();
+    });
+  };
+}
+function displayPath(path5, home) {
+  if (!home) return path5;
+  const win = /^[A-Za-z]:\\/.test(home) || home.startsWith("\\\\");
+  const sep = win ? "\\" : "/";
+  const same = win ? path5.toLowerCase().startsWith(home.toLowerCase()) : path5.startsWith(home);
+  if (!same) return path5;
+  const rest = path5.slice(home.length);
+  if (rest === "") return "~";
+  return rest.startsWith(sep) ? `~${rest}` : path5;
+}
+
+// src/terminal/terminal-paste-wiring.ts
+var execFileP = (file, args, opts) => new Promise((resolve, reject) => {
+  (0, import_node_child_process.execFile)(file, args, { ...opts, shell: false }, (err, stdout) => {
+    if (err) reject(err);
+    else resolve({ stdout });
+  });
+});
+function canWrite(target) {
+  return target.session.canType && target.team.workspace.rights.files?.write === true;
+}
+var teamName = (target) => cleanLabel(target.team.workspace.name) || target.team.alias;
+function uploader(accounts, target) {
+  return async (img) => {
+    const core = accounts.get(target.account)?.core;
+    if (!core) throw new Error(teamName(target));
+    const team = target.team;
+    return uploadPastedImage(
+      {
+        mkdir: (p) => core.createDirectory(team, p),
+        writeNew: (p, bytes) => core.writeFile(team, p, bytes, { create: true, overwrite: false })
+      },
+      img
+    );
+  };
+}
+var progress = (title, task, onCancel) => Promise.resolve(
+  vscode13.window.withProgress(
+    {
+      location: vscode13.ProgressLocation.Notification,
+      title,
+      cancellable: onCancel !== void 0
+    },
+    (_p, token) => {
+      if (onCancel) token.onCancellationRequested(onCancel);
+      return task();
+    }
+  )
+);
+async function openLocal(path5) {
+  const fh = await import_node_fs6.promises.open(path5, import_node_fs6.constants.O_RDONLY | (import_node_fs6.constants.O_NONBLOCK ?? 0)).catch(() => null);
+  if (!fh) return null;
+  try {
+    const st = await fh.stat();
+    const read = async (n) => {
+      const buf = Buffer.alloc(n);
+      const { bytesRead } = await fh.read(buf, 0, n, 0);
+      return Uint8Array.from(buf.subarray(0, bytesRead));
+    };
+    return {
+      isFile: st.isFile(),
+      size: st.size,
+      head: (n) => read(n),
+      all: () => read(MAX_PASTE_IMAGE_BYTES + 1),
+      close: () => fh.close()
+    };
+  } catch {
+    await fh.close().catch(() => void 0);
+    return null;
+  }
+}
+async function confirmUpload(paths, team) {
+  const home = (0, import_node_os5.homedir)();
+  const files = paths.map((p) => cleanLabel(displayPath(p, home), 400) || "?").join(", ");
+  const choice = await vscode13.window.showWarningMessage(
+    COPY.imageUploadConfirm(files, team),
+    { modal: true },
+    COPY.imageUploadAction,
+    COPY.imageTypePathAction
+  );
+  return choice === COPY.imageUploadAction;
+}
+var ownPasteUntil = /* @__PURE__ */ new WeakMap();
+var OWN_PASTE_TAIL_MS = 1e3;
+function rewriteInputFor(accounts) {
+  return (target) => dropRewriter({
+    canWrite: () => canWrite(target),
+    suppressed: () => Date.now() < (ownPasteUntil.get(target) ?? 0),
+    teamName: () => teamName(target),
+    info: (m) => void vscode13.window.showInformationMessage(m),
+    error: (m) => void vscode13.window.showWarningMessage(m),
+    progress,
+    ctx: () => ({
+      teamAlias: target.team.alias,
+      open: openLocal,
+      confirm: (names) => confirmUpload(names, teamName(target)),
+      upload: uploader(accounts, target)
+    })
+  });
+}
+function registerTerminalPaste(deps) {
+  const setContext = () => void vscode13.commands.executeCommand(
+    "setContext",
+    "hq.activeTerminal",
+    deps.terminals.activeTerminal() !== null
+  );
+  setContext();
+  const onChange = deps.terminals.onDidChange(setContext);
+  const command = vscode13.commands.registerCommand(
+    "hq.terminalPaste",
+    async (args) => {
+      const ctrlV = args?.fallback === "ctrlV";
+      const active = deps.terminals.activeTerminal();
+      const fallback = async () => {
+        if (ctrlV) {
+          active?.terminal.sendText("", false);
+          return;
+        }
+        const target2 = active?.target;
+        if (target2) ownPasteUntil.set(target2, Number.POSITIVE_INFINITY);
+        try {
+          await vscode13.commands.executeCommand("workbench.action.terminal.paste");
+        } finally {
+          if (target2) ownPasteUntil.set(target2, Date.now() + OWN_PASTE_TAIL_MS);
+        }
+      };
+      if (!active) return fallback();
+      const { terminal, target } = active;
+      await pasteIntoTerminal({
+        readText: () => Promise.resolve(vscode13.env.clipboard.readText()),
+        readImage: () => readClipboardImage({ platform: process.platform, env: process.env, exec: execFileP }),
+        fallback,
+        canWrite: canWrite(target),
+        remoteHost: deps.remoteHost(),
+        upload: uploader(deps.accounts, target),
+        type: (text) => {
+          terminal.sendText(text, false);
+          deps.log.info("terminal: an image was pasted");
+        },
+        info: (m) => void vscode13.window.showInformationMessage(m),
+        error: (m) => void vscode13.window.showWarningMessage(m),
+        progress: (title, task) => progress(title, task),
+        status: (m) => void vscode13.window.setStatusBarMessage(m, 4e3)
+      });
+    }
+  );
+  return vscode13.Disposable.from(command, onChange);
+}
+
+// src/tree/account-tree.ts
+var vscode14 = __toESM(require("vscode"), 1);
 var AccountTree = class {
   constructor(accounts) {
     this.accounts = accounts;
     accounts.onDidChange(() => this.changed.fire(void 0));
   }
   accounts;
-  changed = new vscode13.EventEmitter();
+  changed = new vscode14.EventEmitter();
   onDidChangeTreeData = this.changed.event;
   /** Active first, then by email (never by recency). */
   ordered() {
@@ -17176,11 +18119,11 @@ var AccountTree = class {
       case "account": {
         const b = this.accounts.get(node.ref);
         const active = b !== null && this.accounts.active() === b;
-        const item = new vscode13.TreeItem(
+        const item = new vscode14.TreeItem(
           cleanLabel(node.email),
-          vscode13.TreeItemCollapsibleState.Expanded
+          vscode14.TreeItemCollapsibleState.Expanded
         );
-        item.iconPath = new vscode13.ThemeIcon("account");
+        item.iconPath = new vscode14.ThemeIcon("account");
         item.contextValue = active ? "account:active" : "account:other";
         if (b?.health === "needs-sign-in") {
           item.description = COPY.needsSignInDescription;
@@ -17201,21 +18144,21 @@ var AccountTree = class {
         return item;
       }
       case "devices": {
-        const item = new vscode13.TreeItem(COPY.manageDevices);
-        item.iconPath = new vscode13.ThemeIcon("link-external");
+        const item = new vscode14.TreeItem(COPY.manageDevices);
+        item.iconPath = new vscode14.ThemeIcon("link-external");
         item.tooltip = COPY.manageDevicesBrowserNote(cleanLabel(node.email));
         item.command = { command: "hq.manageDevices", title: COPY.manageDevices };
         return item;
       }
       case "addAccount": {
-        const item = new vscode13.TreeItem(COPY.addAnotherAccount);
-        item.iconPath = new vscode13.ThemeIcon("add");
+        const item = new vscode14.TreeItem(COPY.addAnotherAccount);
+        item.iconPath = new vscode14.ThemeIcon("add");
         item.command = { command: "hq.addAccount", title: COPY.addAnotherAccount };
         return item;
       }
       case "host": {
-        const item = new vscode13.TreeItem(COPY.accountHost(this.accounts.host() ?? ""));
-        item.iconPath = new vscode13.ThemeIcon("globe");
+        const item = new vscode14.TreeItem(COPY.accountHost(this.accounts.host() ?? ""));
+        item.iconPath = new vscode14.ThemeIcon("globe");
         return item;
       }
     }
@@ -17226,7 +18169,7 @@ var AccountTree = class {
 };
 
 // src/tree/teams-tree.ts
-var vscode14 = __toESM(require("vscode"), 1);
+var vscode15 = __toESM(require("vscode"), 1);
 function tagOfNode(node) {
   return accountTag(node.account.host, node.account.userId);
 }
@@ -17238,7 +18181,7 @@ var TeamsTree = class {
     accounts.onAccountRemoved(() => this.sessions.clear());
   }
   accounts;
-  changed = new vscode14.EventEmitter();
+  changed = new vscode15.EventEmitter();
   onDidChangeTreeData = this.changed.event;
   sessions = /* @__PURE__ */ new Map();
   /** Teams a wake is in flight for (the row shows a spinner). */
@@ -17302,34 +18245,34 @@ var TeamsTree = class {
   getTreeItem(node) {
     switch (node.kind) {
       case "org": {
-        const item = new vscode14.TreeItem(
+        const item = new vscode15.TreeItem(
           cleanLabel(node.org.name) || node.org.slug,
-          vscode14.TreeItemCollapsibleState.Expanded
+          vscode15.TreeItemCollapsibleState.Expanded
         );
         item.contextValue = "org";
-        item.iconPath = new vscode14.ThemeIcon("organization");
+        item.iconPath = new vscode15.ThemeIcon("organization");
         return item;
       }
       case "team": {
         const t = node.team;
-        const item = new vscode14.TreeItem(
+        const item = new vscode15.TreeItem(
           cleanLabel(t.workspace.name) || t.alias,
-          vscode14.TreeItemCollapsibleState.Collapsed
+          vscode15.TreeItemCollapsibleState.Collapsed
         );
         item.id = `${tagOfNode(node)}:team:${t.workspace.id}`;
         item.description = teamDescription(t);
         item.contextValue = teamContextValue(t);
         const state = this.waking.has(t.workspace.id) ? "starting" : teamState(t.workspace);
-        item.iconPath = state === "running" ? new vscode14.ThemeIcon("circle-filled", new vscode14.ThemeColor("testing.iconPassed")) : state === "starting" ? new vscode14.ThemeIcon("sync~spin") : new vscode14.ThemeIcon("circle-outline");
+        item.iconPath = state === "running" ? new vscode15.ThemeIcon("circle-filled", new vscode15.ThemeColor("testing.iconPassed")) : state === "starting" ? new vscode15.ThemeIcon("sync~spin") : new vscode15.ThemeIcon("circle-outline");
         item.tooltip = needsUpdate(t) ? COPY.updateNeededLong(cleanLabel(t.workspace.name)) : state === "off" ? COPY.teamOffTooltip(cleanLabel(t.workspace.name)) : cleanLabel(t.workspace.name);
         return item;
       }
       case "session": {
-        const item = new vscode14.TreeItem(sessionLabel(node.session));
+        const item = new vscode15.TreeItem(sessionLabel(node.session));
         item.id = `${tagOfNode(node)}:session:${node.session.id}`;
         item.description = sessionDescription(node.session);
         item.contextValue = sessionContextValue(node.session);
-        item.iconPath = new vscode14.ThemeIcon(node.session.canType ? "terminal" : "eye");
+        item.iconPath = new vscode15.ThemeIcon(node.session.canType ? "terminal" : "eye");
         item.command = {
           command: "hq.attachSession",
           title: "Attach",
@@ -17338,7 +18281,7 @@ var TeamsTree = class {
         return item;
       }
       case "message": {
-        const item = new vscode14.TreeItem(node.text);
+        const item = new vscode15.TreeItem(node.text);
         item.contextValue = "message";
         return item;
       }
@@ -17350,7 +18293,7 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.2.1".length > 0 ? "0.2.1" : "0.0.0-dev";
+var EXTENSION_VERSION = "0.2.2".length > 0 ? "0.2.2" : "0.0.0-dev";
 
 // src/extension.ts
 function vscodeUi() {
@@ -17360,9 +18303,9 @@ function vscodeUi() {
     showDeviceCode: (code, onCancel) => {
       let close = () => void 0;
       const ended = new Promise((r) => close = r);
-      void vscode15.window.withProgress(
+      void vscode16.window.withProgress(
         {
-          location: vscode15.ProgressLocation.Notification,
+          location: vscode16.ProgressLocation.Notification,
           title: notificationText(COPY.deviceCode(code)),
           cancellable: true
         },
@@ -17373,17 +18316,17 @@ function vscodeUi() {
       );
       return { close };
     },
-    openExternal: async (url) => vscode15.env.openExternal(vscode15.Uri.parse(url)),
-    copyToClipboard: async (text) => vscode15.env.clipboard.writeText(text),
-    info: (message) => void vscode15.window.showInformationMessage(message),
-    askToSignIn: async (_ref, message, modal) => await (modal ? vscode15.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode15.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
-    modal: (message) => void vscode15.window.showErrorMessage(message, { modal: true }),
-    offerSignInHere: async (message) => await vscode15.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction,
-    confirm: async (message, action) => await vscode15.window.showWarningMessage(message, { modal: true }, action) === action
+    openExternal: async (url) => vscode16.env.openExternal(vscode16.Uri.parse(url)),
+    copyToClipboard: async (text) => vscode16.env.clipboard.writeText(text),
+    info: (message) => void vscode16.window.showInformationMessage(message),
+    askToSignIn: async (_ref, message, modal) => await (modal ? vscode16.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode16.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
+    modal: (message) => void vscode16.window.showErrorMessage(message, { modal: true }),
+    offerSignInHere: async (message) => await vscode16.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction,
+    confirm: async (message, action) => await vscode16.window.showWarningMessage(message, { modal: true }, action) === action
   };
 }
 function hostSetting() {
-  const config = vscode15.workspace.getConfiguration("hq");
+  const config = vscode16.workspace.getConfiguration("hq");
   const host = config.inspect("host");
   const allowed = config.inspect("allowedHosts");
   return resolveHqHost(host?.globalValue ?? host?.defaultValue, allowed?.globalValue ?? []);
@@ -17402,7 +18345,7 @@ async function pickTeam(b, node, filter = () => true) {
     teams = b.service.teams().filter(filter);
   }
   if (teams.length === 1) return teams[0];
-  const picked = await vscode15.window.showQuickPick(
+  const picked = await vscode16.window.showQuickPick(
     teams.map((t) => ({
       label: cleanLabel(t.workspace.name) || t.alias,
       description: `${cleanLabel(t.org.name)} \xB7 ${teamState(t.workspace) === "running" ? COPY.stateRunning : teamState(t.workspace) === "starting" ? COPY.stateStarting : COPY.stateOff}`,
@@ -17416,18 +18359,18 @@ async function showWakeNotice(n, node) {
   const labels = n.actions.map(
     (a) => a === "newSession" ? COPY.startSessionAction : COPY.openInHqAction
   );
-  const choice = n.level === "info" ? await vscode15.window.showInformationMessage(n.message, ...labels) : n.level === "warning" ? await vscode15.window.showWarningMessage(n.message, ...labels) : await vscode15.window.showErrorMessage(n.message, ...labels);
+  const choice = n.level === "info" ? await vscode16.window.showInformationMessage(n.message, ...labels) : n.level === "warning" ? await vscode16.window.showWarningMessage(n.message, ...labels) : await vscode16.window.showErrorMessage(n.message, ...labels);
   if (choice === COPY.startSessionAction) {
-    await vscode15.commands.executeCommand("hq.newSessionTerminal", node);
+    await vscode16.commands.executeCommand("hq.newSessionTerminal", node);
   } else if (choice === COPY.openInHqAction) {
-    await vscode15.commands.executeCommand("hq.openInHqWeb", node);
+    await vscode16.commands.executeCommand("hq.openInHqWeb", node);
   }
 }
 function activate(context) {
-  const channel = vscode15.window.createOutputChannel("AI Workforce One HQ", { log: true });
+  const channel = vscode16.window.createOutputChannel("AI Workforce One HQ", { log: true });
   context.subscriptions.push(channel);
   const log = redactingLog(channel);
-  log.info(`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode15.env.appName}`);
+  log.info(`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode16.env.appName}`);
   const store = new SessionStore(context.secrets, context.globalState);
   const ui = vscodeUi();
   const teamIssues = new HqTeamIssues({ host: () => accounts.host() });
@@ -17436,7 +18379,7 @@ function activate(context) {
   const fsHooks = (b) => ({
     onRefused: (org) => {
       const name = b.service.teams().find((t) => t.org.slug === org)?.org.name ?? org;
-      void vscode15.window.showWarningMessage(COPY.fsEventsRefused(cleanLabel(name) || org));
+      void vscode16.window.showWarningMessage(COPY.fsEventsRefused(cleanLabel(name) || org));
     },
     ui: {
       // Its Wake Team link runs as the folder's OWN account, whichever is active (MA-S19).
@@ -17446,13 +18389,28 @@ function activate(context) {
         cleanLabel(team.workspace.name) || team.alias,
         action
       ),
-      masked: (team, path5) => {
+      masked: (team, path5, names) => {
         const k = `${b.tag}:${team.workspace.id}:${path5}`;
         if (maskedSaid.has(k)) return;
         maskedSaid.add(k);
-        void vscode15.window.showInformationMessage(COPY.fsMasked);
+        const file = cleanLabel(path5.split("/").pop() ?? path5) || path5;
+        void vscode16.window.showInformationMessage(notificationText(COPY.fsMaskedFile(file, names)));
       },
-      teamIssue: (team, issue) => teamIssues.onIssue(b.tag, (t) => rootsFor(b, t, accounts.isLegacyUser(b)), team, issue)
+      teamIssue: (team, issue) => teamIssues.onIssue(b.tag, (t) => rootsFor(b, t, accounts.isLegacyUser(b)), team, issue),
+      // 0.2.2 review S2: only files open in an editor are re-read when the team's secrets change.
+      openState: (team, path5) => {
+        const doc = vscode16.workspace.textDocuments.find((d) => {
+          if (d.uri.scheme !== HQ_SCHEME || d.uri.path !== `/${team.alias}/${path5}`) return false;
+          const r = accounts.resolveAuthority(d.uri.authority);
+          return r.kind === "ok" && r.bundle.tag === b.tag && r.orgSlug === team.org.slug;
+        });
+        if (!doc) return "closed";
+        return doc.isDirty ? "dirty" : "open";
+      },
+      maskedWhileDirty: (_team, path5) => {
+        const file = cleanLabel(path5.split("/").pop() ?? path5) || path5;
+        void vscode16.window.showWarningMessage(notificationText(COPY.fsMaskedWhileEditing(file)));
+      }
     }
   });
   const accounts = new HqAccounts({
@@ -17460,11 +18418,11 @@ function activate(context) {
     ui,
     host: hostSetting,
     extensionVersion: EXTENSION_VERSION,
-    appName: vscode15.env.appName,
+    appName: vscode16.env.appName,
     windowState: context.workspaceState,
     log,
-    windowFocused: () => vscode15.window.state.focused,
-    firstFolderAuthority: () => (vscode15.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === HQ_SCHEME)?.uri.authority,
+    windowFocused: () => vscode16.window.state.focused,
+    firstFolderAuthority: () => (vscode16.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === HQ_SCHEME)?.uri.authority,
     fsHooks
   });
   const c = { accounts, onAccountMissing: (ref) => accountMissing(ref) };
@@ -17476,7 +18434,7 @@ function activate(context) {
     sayUnavailable({ key: tag, email: t?.email ?? null, tag, userId: ref.userId });
   };
   const teamsTree = new TeamsTree(accounts);
-  const teamsView = vscode15.window.createTreeView("hq.teams", { treeDataProvider: teamsTree });
+  const teamsView = vscode16.window.createTreeView("hq.teams", { treeDataProvider: teamsTree });
   const accountTree = new AccountTree(accounts);
   const ports = new Ports({
     accounts,
@@ -17488,8 +18446,24 @@ function activate(context) {
     offerPorts: (account, team, p) => ports.offer(account, team, p),
     // A terminal of the team attached: if the team refused files, ask it again (it may still boot).
     onAttached: (account, team) => accounts.get(account)?.core.expectUp(team, { force: true }),
-    onAccountMissing: accountMissing
+    onAccountMissing: accountMissing,
+    // hq-vscode-image-paste: a dropped image file (or a file of the team's own folder) is typed as
+    // its path on the team's machine.
+    rewriteInput: rewriteInputFor(accounts),
+    // 0.2.2 live FAIL 2: this window's HQ tabs, so a restarted extension host can replace them.
+    memento: context.workspaceState
   });
+  terminals.adoptOrphans(vscode16.window.terminals);
+  context.subscriptions.push(
+    registerTerminalPaste({
+      accounts,
+      terminals,
+      // The extension runs on the local UI host (extensionKind "ui"); were it ever in a remote
+      // extension host, the clipboard it can read would not be this computer's.
+      remoteHost: () => vscode16.env.remoteName !== void 0 && context.extension.extensionKind === vscode16.ExtensionKind.Workspace,
+      log
+    })
+  );
   const status = new StatusBar(accounts, terminals, ports);
   const auth = new HqAuthenticationProvider(accounts);
   const fsProvider = new HqFileSystemProvider({ accounts, onUnavailable: sayUnavailable });
@@ -17521,20 +18495,20 @@ function activate(context) {
     );
   };
   void warnIfKeyringMissing({
-    missing: () => keyringMissingHere(vscode15.env.appName),
+    missing: () => keyringMissingHere(vscode16.env.appName),
     memento: context.globalState,
-    warn: (message) => void vscode15.window.showWarningMessage(message)
+    warn: (message) => void vscode16.window.showWarningMessage(message)
   });
   const setContext = () => {
     const active = accounts.active();
     teamsView.description = active ? cleanLabel(active.email) : "";
-    void vscode15.commands.executeCommand("setContext", "hq.signedIn", active !== null);
-    void vscode15.commands.executeCommand(
+    void vscode16.commands.executeCommand("setContext", "hq.signedIn", active !== null);
+    void vscode16.commands.executeCommand(
       "setContext",
       "hq.hasOrgs",
       (active?.service.teams().length ?? 0) > 0
     );
-    void vscode15.commands.executeCommand("setContext", "hq.accountCount", accounts.count());
+    void vscode16.commands.executeCommand("setContext", "hq.accountCount", accounts.count());
   };
   setContext();
   const labelMode = () => accounts.list().map((b) => accounts.shortLabel(b.ref) ?? "").join("|");
@@ -17560,18 +18534,18 @@ function activate(context) {
     accountTree,
     fsProvider,
     teamIssues,
-    vscode15.authentication.registerAuthenticationProvider(
+    vscode16.authentication.registerAuthenticationProvider(
       AUTH_PROVIDER_ID,
       AUTH_PROVIDER_LABEL,
       auth,
       { supportsMultipleAccounts: true }
     ),
-    vscode15.window.registerTreeDataProvider("hq.ports", ports),
-    vscode15.window.registerTreeDataProvider("hq.account", accountTree),
-    vscode15.window.registerTreeDataProvider("hq.search", searchView),
-    vscode15.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
-    vscode15.window.registerFileDecorationProvider(teamIssues),
-    vscode15.window.registerFileDecorationProvider(
+    vscode16.window.registerTreeDataProvider("hq.ports", ports),
+    vscode16.window.registerTreeDataProvider("hq.account", accountTree),
+    vscode16.window.registerTreeDataProvider("hq.search", searchView),
+    vscode16.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
+    vscode16.window.registerFileDecorationProvider(teamIssues),
+    vscode16.window.registerFileDecorationProvider(
       new UnopenableNames((authority) => {
         const r = accounts.resolveAuthority(authority);
         return r.kind === "ok" ? { core: r.bundle.core, orgSlug: r.orgSlug } : null;
@@ -17605,71 +18579,71 @@ function activate(context) {
     accounts.onAccountRenewed((ref) => accounts.get(ref)?.events.reconnectAll()),
     { dispose: () => renameTimer && clearTimeout(renameTimer) },
     // Decision 23: another window may have added, signed out or renewed an account.
-    vscode15.window.onDidChangeWindowState((s) => {
+    vscode16.window.onDidChangeWindowState((s) => {
       if (s.focused) accounts.rederive("focus");
     }),
-    vscode15.workspace.onDidChangeConfiguration((e) => {
+    vscode16.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("hq.host") || e.affectsConfiguration("hq.allowedHosts")) {
         accounts.rederive("host");
         setContext();
         const verdict = hostSetting();
-        if (!verdict.ok) void vscode15.window.showErrorMessage(COPY.hostNotAllowed(verdict.host));
+        if (!verdict.ok) void vscode16.window.showErrorMessage(COPY.hostNotAllowed(verdict.host));
         else if (accounts.count() === 0)
-          void vscode15.window.showInformationMessage(COPY.hostChanged);
+          void vscode16.window.showInformationMessage(COPY.hostChanged);
       }
     }),
     store,
     { dispose: () => accounts.dispose() },
     // ── accounts ───────────────────────────────────────────────────────────────────────────────
-    vscode15.commands.registerCommand("hq.signIn", async () => {
+    vscode16.commands.registerCommand("hq.signIn", async () => {
       if (accounts.count() === 0) return (await accounts.signIn({ kind: "first" })).outcome;
       await switchAccount(c);
       return "busy";
     }),
-    vscode15.commands.registerCommand("hq.signOut", async () => {
+    vscode16.commands.registerCommand("hq.signOut", async () => {
       const active = accounts.active();
       if (active) await accounts.signOut(active.ref, { confirm: true });
       else await signOutAccount(c);
     }),
-    vscode15.commands.registerCommand(
+    vscode16.commands.registerCommand(
       "hq.addAccount",
       async () => accounts.count() === 0 ? (await accounts.signIn({ kind: "first" })).outcome : (await accounts.signIn({ kind: "add" })).outcome
     ),
-    vscode15.commands.registerCommand(
+    vscode16.commands.registerCommand(
       "hq.switchAccount",
       (ref) => switchAccount(c, ref && "userId" in ref ? ref : void 0)
     ),
-    vscode15.commands.registerCommand(
+    vscode16.commands.registerCommand(
       "hq.signOutAccount",
       (arg) => signOutAccount(c, arg && "ref" in arg ? arg.ref : arg)
     ),
     // The notice's "Sign in as <email>" link (account-notices.ts). Renews a listed account.
-    vscode15.commands.registerCommand("hq.signInAs", async (tag, userId) => {
+    vscode16.commands.registerCommand("hq.signInAs", async (tag, userId) => {
       if (typeof tag === "string" && typeof userId === "string") {
         await accounts.signInAs(tag, userId);
       }
     }),
-    vscode15.commands.registerCommand("hq.renewAccount", async (ref) => {
+    vscode16.commands.registerCommand("hq.renewAccount", async (ref) => {
       if (ref) await accounts.signIn({ kind: "renew", ref });
     }),
-    vscode15.commands.registerCommand("hq.accounts.primaryAction", () => primaryAction(c)),
+    vscode16.commands.registerCommand("hq.accounts.primaryAction", () => primaryAction(c)),
     // ── teams ──────────────────────────────────────────────────────────────────────────────────
-    vscode15.commands.registerCommand("hq.refresh", async () => {
+    vscode16.commands.registerCommand("hq.refresh", async () => {
       teamsTree.refresh();
       const b = await requireAccount(c);
       await b?.service.refreshOrgs().catch(() => void 0);
     }),
-    vscode15.commands.registerCommand("hq.manageDevices", () => {
+    vscode16.commands.registerCommand("hq.manageDevices", () => {
       const host = accounts.host();
-      if (host) void vscode15.env.openExternal(vscode15.Uri.parse(`${host}/account/devices`));
+      if (host) void vscode16.env.openExternal(vscode16.Uri.parse(`${host}/account/devices`));
     }),
-    vscode15.commands.registerCommand("hq.openInHqWeb", (node) => {
+    vscode16.commands.registerCommand("hq.openInHqWeb", (node) => {
       const host = accounts.host();
       if (!host || !node || node.kind === "org") return;
       const url = node.kind === "session" ? webUrl(host, { workspaceId: node.team.workspace.id, sessionId: node.session.id }) : webUrl(host, { workspaceId: node.team.workspace.id });
-      void vscode15.env.openExternal(vscode15.Uri.parse(url));
+      void vscode16.env.openExternal(vscode16.Uri.parse(url));
     }),
-    vscode15.commands.registerCommand("hq.wakeTeam", async (node) => {
+    vscode16.commands.registerCommand("hq.wakeTeam", async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => teamState(t.workspace) !== "running");
@@ -17678,16 +18652,16 @@ function activate(context) {
       teamsTree.setWaking(team.workspace.id, true);
       b.core.expectUp(team, { force: true });
       try {
-        const outcome = await vscode15.window.withProgress(
+        const outcome = await vscode16.window.withProgress(
           {
-            location: vscode15.ProgressLocation.Notification,
+            location: vscode16.ProgressLocation.Notification,
             title: notificationText(COPY.waking(name))
           },
-          (progress) => b.service.call(
+          (progress2) => b.service.call(
             (client) => wakeTeam(client, team, {
               now: Date.now,
               sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-              report: (message) => progress.report({
+              report: (message) => progress2.report({
                 message: message === COPY.waking(name) ? "" : notificationText(message)
               })
             })
@@ -17706,14 +18680,14 @@ function activate(context) {
       }
     }),
     // The off notice's "Wake Team" link (team-off-notices.ts): [tag, workspaceId], validated.
-    vscode15.commands.registerCommand(
+    vscode16.commands.registerCommand(
       "hq.wakeTeamOf",
       async (tag, workspaceId) => {
         if (!isTag(tag) || typeof workspaceId !== "string") return;
         const b = accounts.byTag(tag);
         const team = b?.service.teams().find((t) => t.workspace.id === workspaceId);
         if (b && team) {
-          await vscode15.commands.executeCommand("hq.wakeTeam", {
+          await vscode16.commands.executeCommand("hq.wakeTeam", {
             kind: "team",
             account: b.ref,
             team
@@ -17721,7 +18695,7 @@ function activate(context) {
         }
       }
     ),
-    vscode15.commands.registerCommand("hq.attachSession", async (node) => {
+    vscode16.commands.registerCommand("hq.attachSession", async (node) => {
       if (node?.kind === "session") {
         terminals.attach({ account: node.account, team: node.team, session: node.session });
         return;
@@ -17732,7 +18706,7 @@ function activate(context) {
       if (!team) return;
       teamsTree.refresh();
       const sessions = await teamsTree.getChildren({ kind: "team", account: b.ref, team }) ?? [];
-      const picked = await vscode15.window.showQuickPick(
+      const picked = await vscode16.window.showQuickPick(
         sessions.filter((n) => n.kind === "session").map((n) => ({
           label: cleanLabel(n.session.name),
           description: cleanLabel(n.session.ownerName),
@@ -17748,7 +18722,7 @@ function activate(context) {
         });
       }
     }),
-    vscode15.commands.registerCommand("hq.newSessionTerminal", async (node) => {
+    vscode16.commands.registerCommand("hq.newSessionTerminal", async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
@@ -17757,7 +18731,7 @@ function activate(context) {
       teamsTree.refresh();
     }),
     // ── ports ──────────────────────────────────────────────────────────────────────────────────
-    vscode15.commands.registerCommand("hq.forwardPort", async (node) => {
+    vscode16.commands.registerCommand("hq.forwardPort", async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
@@ -17765,46 +18739,46 @@ function activate(context) {
       const chosen = await askForPorts();
       if (chosen) await ports.start(b.ref, team, chosen.remote, chosen.local);
     }),
-    vscode15.commands.registerCommand("hq.ports.open", (entry) => {
+    vscode16.commands.registerCommand("hq.ports.open", (entry) => {
       const url = ports.localUrl(entry);
-      if (url) void vscode15.env.openExternal(vscode15.Uri.parse(url));
+      if (url) void vscode16.env.openExternal(vscode16.Uri.parse(url));
     }),
-    vscode15.commands.registerCommand("hq.ports.copy", async (entry) => {
+    vscode16.commands.registerCommand("hq.ports.copy", async (entry) => {
       const url = ports.localUrl(entry);
       if (!url) return;
-      await vscode15.env.clipboard.writeText(url);
-      void vscode15.window.setStatusBarMessage(COPY.addressCopied(url), 3e3);
+      await vscode16.env.clipboard.writeText(url);
+      void vscode16.window.setStatusBarMessage(COPY.addressCopied(url), 3e3);
     }),
-    vscode15.commands.registerCommand("hq.ports.stop", (entry) => ports.stop(entry)),
-    vscode15.commands.registerCommand("hq.ports.resume", (entry) => ports.resume(entry)),
-    vscode15.commands.registerCommand("hq.ports.forwardDetected", async (entry) => {
+    vscode16.commands.registerCommand("hq.ports.stop", (entry) => ports.stop(entry)),
+    vscode16.commands.registerCommand("hq.ports.resume", (entry) => ports.resume(entry)),
+    vscode16.commands.registerCommand("hq.ports.forwardDetected", async (entry) => {
       if (entry.kind === "detected") {
         await ports.start(entry.account, entry.team, entry.port, entry.port);
       }
     }),
-    vscode15.commands.registerCommand(
+    vscode16.commands.registerCommand(
       "hq.ports.dismissDetected",
       (entry) => ports.dismiss(entry)
     ),
     // ── team files ─────────────────────────────────────────────────────────────────────────────
-    vscode15.commands.registerCommand("hq.openTeamFiles", async (node) => {
+    vscode16.commands.registerCommand("hq.openTeamFiles", async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.files?.read === true);
       if (!team) return;
       const open = openFolderOf(b, team, accounts.isLegacyUser(b));
       if (open) {
-        void vscode15.commands.executeCommand("revealInExplorer", open.uri);
+        void vscode16.commands.executeCommand("revealInExplorer", open.uri);
         return;
       }
-      const folders = vscode15.workspace.workspaceFolders ?? [];
-      vscode15.workspace.updateWorkspaceFolders(folders.length, 0, {
+      const folders = vscode16.workspace.workspaceFolders ?? [];
+      vscode16.workspace.updateWorkspaceFolders(folders.length, 0, {
         uri: teamRootUri(b.ref, team),
         name: teamFolderName(team, accounts.shortLabel(b.ref))
       });
     }),
-    vscode15.commands.registerCommand("hq.searchTeamFiles", async (node) => {
-      const active = vscode15.window.activeTextEditor?.document.uri;
+    vscode16.commands.registerCommand("hq.searchTeamFiles", async (node) => {
+      const active = vscode16.window.activeTextEditor?.document.uri;
       let b = null;
       let team;
       if (!node && active?.scheme === HQ_SCHEME) {
@@ -17822,10 +18796,10 @@ function activate(context) {
       }
       if (!team) return;
       const bundle = b;
-      const query = await vscode15.window.showInputBox({ prompt: COPY.searchPrompt });
+      const query = await vscode16.window.showInputBox({ prompt: COPY.searchPrompt });
       if (!query) return;
       const canRegex = team.workspace.rights.files?.write === true;
-      const options = await vscode15.window.showQuickPick(
+      const options = await vscode16.window.showQuickPick(
         [...canRegex ? [COPY.searchRegex] : [], COPY.searchCase, COPY.searchWord].map(
           (label) => ({ label })
         ),
@@ -17833,8 +18807,8 @@ function activate(context) {
       );
       if (options === void 0) return;
       const picked = new Set(options.map((o) => o.label));
-      const include = parseGlobs(await vscode15.window.showInputBox({ prompt: COPY.searchInclude }));
-      const exclude = parseGlobs(await vscode15.window.showInputBox({ prompt: COPY.searchExclude }));
+      const include = parseGlobs(await vscode16.window.showInputBox({ prompt: COPY.searchInclude }));
+      const exclude = parseGlobs(await vscode16.window.showInputBox({ prompt: COPY.searchExclude }));
       const req = {
         query,
         isRegex: picked.has(COPY.searchRegex),
@@ -17845,8 +18819,8 @@ function activate(context) {
       };
       const searchTeam = team;
       try {
-        const res = await vscode15.window.withProgress(
-          { location: vscode15.ProgressLocation.Notification, title: COPY.searchTitle },
+        const res = await vscode16.window.withProgress(
+          { location: vscode16.ProgressLocation.Notification, title: COPY.searchTitle },
           () => bundle.fsApi.search(searchTeam, req)
         );
         searchView.show(
@@ -17855,15 +18829,15 @@ function activate(context) {
             (t, p) => bundle.core.shownPath(t, p)
           )
         );
-        void vscode15.commands.executeCommand("setContext", "hq.hasSearch", true);
-        void vscode15.commands.executeCommand("hq.search.focus");
+        void vscode16.commands.executeCommand("setContext", "hq.hasSearch", true);
+        void vscode16.commands.executeCommand("hq.search.focus");
       } catch (err) {
         void bundle.service.handleError(err);
         const detail = err instanceof FsApiError || err instanceof Error ? err.message : COPY.unreachable;
-        void vscode15.window.showErrorMessage(COPY.searchFailed(detail));
+        void vscode16.window.showErrorMessage(COPY.searchFailed(detail));
       }
     }),
-    vscode15.commands.registerCommand("hq.search.open", (node) => {
+    vscode16.commands.registerCommand("hq.search.open", (node) => {
       const b = node.kind === "summary" ? null : accounts.get(node.account);
       if (node.kind !== "summary" && !b) accountMissing(node.account);
       return openMatch(

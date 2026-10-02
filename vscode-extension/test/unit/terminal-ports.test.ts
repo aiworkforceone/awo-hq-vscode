@@ -22,7 +22,7 @@ import { withTeamAliases } from '@hq/client/teams.js';
 import type { HqAccounts } from '../../src/hq/accounts.js';
 import type { HqService } from '../../src/hq/hq-service.js';
 import { HqPty } from '../../src/terminal/hq-pty.js';
-import { teamIsRunning } from '../../src/terminal/terminals.js';
+import { teamIsRunning, Terminals } from '../../src/terminal/terminals.js';
 import { forwardError, Ports } from '../../src/ports/ports.js';
 import { COPY } from '../../src/copy.js';
 import { HqApiError } from '@hq/client/api.js';
@@ -61,6 +61,8 @@ interface FakeHq {
   tunnels: number;
   /** The grant was revoked in HQ: the remote routes answer 401 (the unsigned check too). */
   revoked: boolean;
+  /** `GET …/sessions` answers these (0.2.2: the rights an ownership change is re-read from). */
+  sessions: Array<Record<string, unknown>>;
   close: () => Promise<void>;
 }
 
@@ -71,6 +73,7 @@ async function startHq(): Promise<FakeHq> {
     terminal: () => undefined,
     tunnels: 0,
     revoked: false,
+    sessions: [],
     close: async () => undefined,
   };
   let n = 0;
@@ -90,6 +93,7 @@ async function startHq(): Promise<FakeHq> {
       if (fake.revoked) return send(401, { error: 'unauthorized', code: 'REMOTE_TOKEN_INVALID' });
       if (p === '/api/remote/nonce') return send(200, { nonce: `n${(n += 1)}`, expiresIn: 60 });
       if (p === '/api/remote/orgs') return send(200, orgs());
+      if (p.endsWith('/sessions') && method === 'GET') return send(200, fake.sessions);
       if (p.endsWith('/connections') && method === 'POST') {
         return send(201, {
           id: '9d9d9d9d-0000-4000-8000-000000000001',
@@ -240,6 +244,319 @@ describe('HqPty (D4, D5)', () => {
 
     pty.close();
     await waitFor(() => frames.some((f) => f.type === 'detach'));
+  });
+});
+
+describe('0.2.2: a terminal that ended or lost its connection comes back', () => {
+  const target = () => ({
+    account: svc.ref,
+    team: withTeamAliases(orgs())[0]!,
+    session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running' as const, canType: true },
+  });
+  const deps = () => ({
+    service: svc,
+    localEchoMode: () => 'off' as const,
+    vsCodeTypeaheadOn: () => false,
+    windowActive: () => true,
+    offerPorts: () => undefined,
+  });
+
+  it('(a) an ended tab says "Press any key to reconnect"; a key reconnects IN PLACE, and that key is not sent', async () => {
+    let sockets = 0;
+    const inputs: unknown[] = [];
+    fake.terminal = (ws) => {
+      sockets += 1;
+      const n = sockets;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') {
+          ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+          if (n === 1) setTimeout(() => ws.close(1000), 20); // HQ ended it (the restart case)
+        }
+        if (f.type === 'input') inputs.push(f.data);
+      });
+    };
+    const pty = new HqPty(deps(), target());
+    let out = '';
+    pty.onDidWrite((d) => (out += d));
+    pty.open({ columns: 80, rows: 24 });
+    await waitFor(() => out.includes(COPY.pressKeyToReconnect));
+    pty.handleInput('x');
+    await waitFor(() => sockets === 2);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(inputs).toEqual([]); // the key was the reconnect, not input
+    pty.handleInput('ls');
+    await waitFor(() => inputs.length === 1);
+    expect(inputs).toEqual(['ls']);
+    pty.close();
+  });
+
+  it("(b) ownership-changed: the pty re-reads the session's rights and applies them (the tab says view only)", async () => {
+    let sock: WebSocket | null = null;
+    fake.terminal = (ws) => {
+      sock = ws;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+      });
+    };
+    fake.sessions = [{ id: 's-1', name: 'x', ownerName: 'Ana', status: 'running', canType: false }];
+    const pty = new HqPty(deps(), target());
+    const names: string[] = [];
+    pty.onDidChangeName((n) => names.push(n));
+    pty.open({ columns: 80, rows: 24 });
+    await waitFor(() => sock !== null);
+    await new Promise((r) => setTimeout(r, 50));
+    sock!.send(JSON.stringify({ type: 'ownership-changed', sessionId: 's-1' }));
+    await waitFor(() => names.some((n) => n.endsWith(COPY.terminalSuffixViewOnly)));
+    expect(fake.requests.some((r) => r.method === 'GET' && r.path.endsWith('/sessions'))).toBe(
+      true,
+    );
+    pty.close();
+  });
+
+  it('(b) a status frame is said in the extension\'s words (never "hq:")', async () => {
+    let sock: WebSocket | null = null;
+    fake.terminal = (ws) => {
+      sock = ws;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+      });
+    };
+    const pty = new HqPty(deps(), target());
+    let out = '';
+    pty.onDidWrite((d) => (out += d));
+    pty.open({ columns: 80, rows: 24 });
+    await waitFor(() => sock !== null);
+    await new Promise((r) => setTimeout(r, 50));
+    sock!.send(JSON.stringify({ type: 'status', sessionId: 's-1', status: 'stopped' }));
+    await waitFor(() => out.includes(COPY.sessionStoppedTerminal));
+    expect(out).not.toContain('hq: ');
+    pty.close();
+  });
+
+  it('review MUST 1: a 4401 end with a key pressed DURING the grant check: exactly one new upgrade, and the next key is sent', async () => {
+    let sockets = 0;
+    const inputs: unknown[] = [];
+    fake.terminal = (ws) => {
+      sockets += 1;
+      const n = sockets;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') {
+          if (n === 1) {
+            ws.close(4401, 'unauthorized'); // the OLD grant (renewed in another window)
+            return;
+          }
+          ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+        }
+        if (f.type === 'input') inputs.push(f.data);
+      });
+    };
+    // The service as the pty sees it: the grant check is slow, and the slot is renewed meanwhile.
+    let checking = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let renewed = false;
+    const service = Object.create(svc) as typeof svc;
+    service.refreshOrgs = async () => {
+      checking = true;
+      await gate;
+      return [];
+    };
+    service.currentGrant = () => (renewed ? 'g-renewed' : svc.currentGrant());
+    const pty = new HqPty({ ...deps(), service }, target());
+    let out = '';
+    pty.onDidWrite((d) => (out += d));
+    pty.open({ columns: 80, rows: 24 });
+    await waitFor(() => checking);
+    pty.handleInput('a'); // a key while HQ is being asked: neither a reconnect nor input
+    renewed = true;
+    release();
+    await waitFor(() => sockets === 2);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sockets).toBe(2);
+    // The renew re-attached by itself: nobody was told to press a key.
+    expect(out).not.toContain(COPY.pressKeyToReconnect);
+    pty.handleInput('b');
+    await waitFor(() => inputs.length === 1);
+    expect(inputs).toEqual(['b']);
+    pty.close();
+  });
+
+  it('review MUST 1: run() while an attach is live is a no-op (one socket)', async () => {
+    let sockets = 0;
+    fake.terminal = (ws) => {
+      sockets += 1;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+      });
+    };
+    const pty = new HqPty(deps(), target());
+    pty.open({ columns: 80, rows: 24 });
+    await waitFor(() => sockets === 1);
+    void (pty as unknown as { run(): Promise<void> }).run();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sockets).toBe(1);
+    pty.close();
+  });
+
+  it('(a) attaching a session whose tab ENDED opens a fresh terminal (the dead tab is closed), not the dead one', async () => {
+    fake.terminal = (ws) => {
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') {
+          ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+          setTimeout(() => ws.close(1000), 20);
+        }
+      });
+    };
+    const terminals = new Terminals({ accounts, offerPorts: () => undefined });
+    terminals.attach(target());
+    await waitFor(() => stub.terminals.length === 1);
+    await waitFor(() => terminals.stateOf(target()) === 'ended');
+    terminals.attach(target());
+    expect(stub.terminals).toHaveLength(2);
+    expect(stub.terminals[0]!.disposed).toBe(true);
+    // A live one is only shown, never doubled.
+    fake.terminal = (ws) => {
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+      });
+    };
+    terminals.closeAll();
+    terminals.attach(target());
+    await waitFor(() => terminals.stateOf(target()) === 'attached');
+    const before = stub.terminals.length;
+    terminals.attach(target());
+    expect(stub.terminals).toHaveLength(before);
+    terminals.dispose();
+  });
+});
+
+describe('0.2.2 live FAIL 2: after an extension-host restart, the dead HQ tab is replaced', () => {
+  const target = () => ({
+    account: svc.ref,
+    team: withTeamAliases(orgs())[0]!,
+    session: {
+      id: 's-1',
+      name: 'build',
+      ownerName: 'Jean',
+      status: 'running' as const,
+      canType: true,
+    },
+  });
+  const answering = () => {
+    let sockets = 0;
+    fake.terminal = (ws) => {
+      sockets += 1;
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type === 'attach') ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+      });
+    };
+    return () => sockets;
+  };
+  /** A tab VS Code kept from the old extension host: a name, and nothing behind it. */
+  const deadTab = (name: string) => {
+    const t = { name, disposed: false, dispose: () => void (t.disposed = true) };
+    return t;
+  };
+
+  it('the old host recorded the tab; the new host closes the dead one and attaches the session in a fresh terminal', async () => {
+    const sockets = answering();
+    const state = memento();
+    const before = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    before.attach(target());
+    await waitFor(() => sockets() === 1);
+    const name = stub.terminals[0]!.name;
+    // The extension host restarts: a new Terminals, the same window state, the old tab left over.
+    const after = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    const dead = deadTab(name);
+    const unrelated = deadTab('zsh');
+    after.adoptOrphans([dead, unrelated] as never);
+    expect(dead.disposed).toBe(true);
+    expect(unrelated.disposed).toBe(false); // not ours: never touched
+    expect(stub.terminals).toHaveLength(2);
+    expect(stub.terminals[1]!.name).toBe(name);
+    await waitFor(() => sockets() === 2);
+    // HQ: Attach on the same session now shows that terminal; no second tab.
+    after.attach(target());
+    expect(stub.terminals).toHaveLength(2);
+    after.dispose();
+  });
+
+  it('review nits: two recorded sessions with the SAME tab name each claim their own dead tab; adopted tabs do not take focus', () => {
+    answering();
+    const state = memento();
+    const before = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    const one = target();
+    const two = { ...target(), session: { ...target().session, id: 's-2' } }; // same name 'build'
+    before.attach(one);
+    before.attach(two);
+    const name = stub.terminals[0]!.name;
+    expect(stub.terminals[1]!.name).toBe(name);
+    const after = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    const deadA = deadTab(name);
+    const deadB = deadTab(name);
+    after.adoptOrphans([deadA, deadB] as never);
+    expect([deadA.disposed, deadB.disposed]).toEqual([true, true]);
+    const adopted = stub.terminals.slice(2);
+    expect(adopted).toHaveLength(2);
+    for (const t of adopted) expect(t.shown).toEqual([true]); // preserveFocus
+    after.dispose();
+  });
+
+  it('a tab that changed its suffix (waking, view only, stopped) is still recognised', () => {
+    answering();
+    const state = memento();
+    const before = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    before.attach(target());
+    const name = stub.terminals[0]!.name;
+    const after = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    const dead = deadTab(`${name}${COPY.terminalSuffixStopped}`);
+    after.adoptOrphans([dead] as never);
+    expect(dead.disposed).toBe(true);
+    after.dispose();
+  });
+
+  it('an account that is gone: the dead tab is closed, nothing is attached, and the record goes', () => {
+    answering();
+    const state = memento();
+    const before = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    before.attach(target());
+    const name = stub.terminals[0]!.name;
+    const gone = { ...accounts, get: () => undefined } as unknown as typeof accounts;
+    const after = new Terminals({ accounts: gone, offerPorts: () => undefined, memento: state });
+    const dead = deadTab(name);
+    after.adoptOrphans([dead] as never);
+    expect(dead.disposed).toBe(true);
+    expect(stub.terminals).toHaveLength(1);
+    // A later activation finds nothing left to adopt.
+    const again = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    const other = deadTab(name);
+    again.adoptOrphans([other] as never);
+    expect(other.disposed).toBe(false);
+  });
+
+  it('a tab the person closed is forgotten (a window reload leaves no stale record either)', () => {
+    answering();
+    const state = memento();
+    const before = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    before.attach(target());
+    const name = stub.terminals[0]!.name;
+    before.closeAccount(svc.ref);
+    const after = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    const dead = deadTab(name);
+    after.adoptOrphans([dead] as never);
+    expect(dead.disposed).toBe(false);
+    // No tab at all after a reload: the records are pruned.
+    const fresh = new Terminals({ accounts, offerPorts: () => undefined, memento: state });
+    fresh.adoptOrphans([]);
+    expect(state.keys().filter((k) => k.startsWith('hq.terminals'))).toEqual([]);
   });
 });
 

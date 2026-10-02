@@ -87,6 +87,18 @@ export interface FsSearchTextResponse {
 /** Request header / response header names of the file routes. */
 export const HQ_HEADER_MASKED = 'x-hq-masked';
 /**
+ * 0.2.2: the team's secret SET as a masked read saw it (a hash of secret ids and IVs, never a value).
+ * Sent on every text read; a client sends it back with `If-None-Match`, and the server answers 304
+ * only when the file AND this version are unchanged, so a secret added, changed or removed re-masks
+ * an open file. A client that sends none gets the file-etag 304 it always had.
+ */
+export const HQ_HEADER_MASK_VERSION = 'x-hq-mask-version';
+/**
+ * 0.2.2: on a masked read, the NAMES of the secrets the text matched (comma-separated environment
+ * variable names, never a value), for a caller who may type in the team's terminal. Absent otherwise.
+ */
+export const HQ_HEADER_MASKED_NAMES = 'x-hq-masked-names';
+/**
  * fix/restore-no-auto-stop: a file-API call the extension makes ON ITS OWN (the periodic relist, a
  * stream-driven relist, its own-echo check, a resync) carries `X-HQ-Activity: background`, so the
  * server does not count it as a person working and an idle window never keeps a machine awake.
@@ -119,6 +131,12 @@ export type EventsServerFrame =
   | { type: 'workspace-state'; workspaceId: string; state: RemoteWorkspaceLiveState }
   | { type: 'listen-ports'; workspaceId: string; ports: number[] }
   | { type: 'resync'; workspaceId: string }
+  /**
+   * 0.2.2: the team's effective secrets changed (a team or org secret added, changed, removed or
+   * shared differently): masked reads may differ now. Content-free; a client drops what it holds
+   * masked for the team and reads again. An older client drops the frame as unknown.
+   */
+  | { type: 'secrets-changed'; workspaceId: string }
   | { type: 'subscribed'; workspaceId: string; state: RemoteWorkspaceLiveState; watch: boolean }
   | { type: 'unsubscribed'; workspaceId: string }
   | { type: 'error'; code: EventsErrorCode; workspaceId?: string };

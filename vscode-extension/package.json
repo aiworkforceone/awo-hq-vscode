@@ -2,7 +2,7 @@
   "name": "awo-hq",
   "displayName": "AI Workforce One HQ",
   "description": "Your AI Workforce One HQ teams inside VS Code: join their session terminals and forward their ports, without SSH.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "aiworkforceone",
   "license": "SEE LICENSE IN LICENSE.txt",
   "private": true,
@@ -140,6 +140,11 @@
         "category": "HQ"
       },
       {
+        "command": "hq.terminalPaste",
+        "title": "Paste (images too)",
+        "category": "HQ"
+      },
+      {
         "command": "hq.renewAccount",
         "title": "Sign In Again",
         "category": "HQ"
@@ -244,6 +249,26 @@
         "category": "HQ"
       }
     ],
+    "keybindings": [
+      {
+        "command": "hq.terminalPaste",
+        "key": "ctrl+v",
+        "mac": "cmd+v",
+        "linux": "ctrl+shift+v",
+        "args": {
+          "fallback": "paste"
+        },
+        "when": "terminalFocus && hq.activeTerminal"
+      },
+      {
+        "command": "hq.terminalPaste",
+        "key": "ctrl+v",
+        "args": {
+          "fallback": "ctrlV"
+        },
+        "when": "isLinux && terminalFocus && hq.activeTerminal"
+      }
+    ],
     "menus": {
       "commandPalette": [
         {
@@ -264,6 +289,10 @@
         },
         {
           "command": "hq.signInAs",
+          "when": "false"
+        },
+        {
+          "command": "hq.terminalPaste",
           "when": "false"
         },
         {

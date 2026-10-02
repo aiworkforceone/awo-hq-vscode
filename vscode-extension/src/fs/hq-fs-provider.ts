@@ -25,6 +25,11 @@ import { cleanLabel } from '../util/text.js';
 import { FsCoreError, type FsChangeOut } from './fs-core.js';
 
 export const HQ_SCHEME = 'hq';
+/**
+ * 0.2.2 live: how long an fs call waits for the accounts to load at activation before an authority
+ * that does not resolve is answered as gone (with its notice).
+ */
+export const ACCOUNTS_READY_MS = 5_000;
 /** Review N3: a refused URI is reopened at most this often per usable/reachable episode. */
 export const MAX_REOPENS = 2;
 
@@ -344,11 +349,27 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
     }, 100);
   }
 
-  /** The account and team a URI names, or Unavailable (zero requests, one notice). */
-  private resolve(uri: vscode.Uri): { bundle: AccountBundle; team: Team; path: string } {
-    const r = this.deps.accounts.resolveAuthority(uri.authority);
+  /**
+   * The account and team a URI names, or Unavailable (zero requests, one notice). 0.2.2 live: during
+   * activation a call waits (bounded) for the accounts to load instead of answering gone, and once
+   * they closed (the extension host is shutting down) it is refused with no notice.
+   */
+  private async resolve(
+    uri: vscode.Uri,
+  ): Promise<{ bundle: AccountBundle; team: Team; path: string }> {
+    const accounts = this.deps.accounts;
+    let r = accounts.resolveAuthority(uri.authority);
+    if (r.kind === 'gone' && !accounts.isReady() && !accounts.isDisposed()) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        accounts.whenReady(),
+        new Promise<void>((done) => (timer = setTimeout(done, ACCOUNTS_READY_MS))),
+      ]);
+      clearTimeout(timer);
+      r = accounts.resolveAuthority(uri.authority);
+    }
     if (r.kind === 'gone') {
-      this.deps.onUnavailable(r);
+      if (!accounts.isDisposed()) this.deps.onUnavailable(r);
       throw vscode.FileSystemError.Unavailable(
         r.email ? COPY.fsAccountGone(r.email) : COPY.fsAccountUnknown,
       );
@@ -411,7 +432,7 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
 
   async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
     try {
-      const { bundle, team, path } = this.resolve(uri);
+      const { bundle, team, path } = await this.resolve(uri);
       const s = await bundle.core.stat(team, path);
       return {
         type: toType(s.type),
@@ -427,7 +448,7 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
 
   async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
     try {
-      const { bundle, team, path } = this.resolve(uri);
+      const { bundle, team, path } = await this.resolve(uri);
       const entries = (await bundle.core.readDirectory(team, path)).map(
         ([n, t]): [string, vscode.FileType] => [n, toType(t)],
       );
@@ -440,7 +461,7 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
 
   async readFile(uri: vscode.Uri): Promise<Uint8Array> {
     try {
-      const { bundle, team, path } = this.resolve(uri);
+      const { bundle, team, path } = await this.resolve(uri);
       const bytes = await bundle.core.readFile(team, path);
       this.served(uri);
       return bytes;
@@ -455,7 +476,7 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
     options: { readonly create: boolean; readonly overwrite: boolean },
   ): Promise<void> {
     try {
-      const { bundle, team, path } = this.resolve(uri);
+      const { bundle, team, path } = await this.resolve(uri);
       await bundle.core.writeFile(team, path, content, options);
     } catch (err) {
       throw this.refuse(toVsError(err, uri), uri);
@@ -464,7 +485,7 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
 
   async createDirectory(uri: vscode.Uri): Promise<void> {
     try {
-      const { bundle, team, path } = this.resolve(uri);
+      const { bundle, team, path } = await this.resolve(uri);
       await bundle.core.createDirectory(team, path);
     } catch (err) {
       throw this.refuse(toVsError(err, uri), uri);
@@ -473,7 +494,7 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
 
   async delete(uri: vscode.Uri, options: { readonly recursive: boolean }): Promise<void> {
     try {
-      const { bundle, team, path } = this.resolve(uri);
+      const { bundle, team, path } = await this.resolve(uri);
       await bundle.core.delete(team, path, options.recursive);
     } catch (err) {
       throw this.refuse(toVsError(err, uri), uri);
@@ -486,8 +507,8 @@ export class HqFileSystemProvider implements vscode.FileSystemProvider {
     options: { readonly overwrite: boolean },
   ): Promise<void> {
     try {
-      const from = this.resolve(oldUri);
-      const to = this.resolve(newUri);
+      const from = await this.resolve(oldUri);
+      const to = await this.resolve(newUri);
       // Same account AND same team: VS Code falls back to copy + delete otherwise, each half under
       // its own account (decision 11).
       if (from.bundle !== to.bundle || from.team.workspace.id !== to.team.workspace.id) {

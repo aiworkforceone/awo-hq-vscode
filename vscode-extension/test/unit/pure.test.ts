@@ -318,3 +318,21 @@ describe('keyring warning on Linux (security notes, branch review SHOULD)', () =
     expect(argvJsonDir('Something Else')).toBeNull();
   });
 });
+
+describe('0.2.2: the masked-file notice says why, and what to do', () => {
+  it('one secret named: its name, and $NAME as the way to read it', () => {
+    expect(COPY.fsMaskedFile('.env', ['STRIPE_KEY'])).toBe(
+      ".env contains the value of a secret (STRIPE_KEY), so it's shown masked and read-only. Edit it in the terminal, or read the secret from $STRIPE_KEY instead of keeping its value in the file.",
+    );
+  });
+  it('several: all of their names', () => {
+    expect(COPY.fsMaskedFile('a.yml', ['A_KEY', 'B_KEY'])).toBe(
+      "a.yml contains the values of secrets (A_KEY, B_KEY), so it's shown masked and read-only. Edit it in the terminal, or read the secrets from $A_KEY and $B_KEY instead of keeping their values in the file.",
+    );
+  });
+  it('no names from HQ: "a secret"', () => {
+    expect(COPY.fsMaskedFile('cfg.txt', [])).toBe(
+      "cfg.txt contains the value of a secret, so it's shown masked and read-only. Edit it in the terminal, or read the secret from its environment variable instead of keeping its value in the file.",
+    );
+  });
+});

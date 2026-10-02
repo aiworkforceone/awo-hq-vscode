@@ -34,6 +34,8 @@ import type { AccountRef } from '../hq/account-ref.js';
 import type { HqService } from '../hq/hq-service.js';
 import { AccountGoneError, NeedsSignInError, SecretsBusyError } from '../hq/session-store.js';
 import { cleanLabel } from '../util/text.js';
+import { teamPath } from '../hq/wake.js';
+import { OrderedInput } from './ordered-input.js';
 
 export interface PtyDeps {
   /** The service of the account that opened this terminal (never the window's active one). */
@@ -60,6 +62,11 @@ export interface PtyDeps {
    * `EchoOrgOffNotice`), so a person can tell why nothing is echoed ahead. Nothing in the terminal.
    */
   onEchoOrgOff?: (team: Team) => void;
+  /**
+   * hq-vscode-image-paste: a dropped image path becomes its uploaded path (null: not a candidate).
+   * Input typed while one is pending waits behind it (`OrderedInput`).
+   */
+  rewriteInput?: (chunk: string) => Promise<string | null> | null;
 }
 
 export interface SessionTarget {
@@ -119,6 +126,11 @@ export class HqPty implements vscode.Pseudoterminal {
   private attachedGrant: string | undefined;
   /** The name the tab was given last (relabels that change nothing are not sent). */
   private lastName: string;
+  private readonly input: OrderedInput;
+  /** 0.2.2: the attach ended or was lost: the next key reconnects in place (it is not sent). */
+  private awaitingReconnect = false;
+  /** Review MUST 1: an attach (or its re-attach loop) is running; `run` is then a no-op. */
+  private running = false;
 
   constructor(
     private readonly deps: PtyDeps,
@@ -126,6 +138,10 @@ export class HqPty implements vscode.Pseudoterminal {
   ) {
     this.canType = target.session.canType;
     this.lastName = terminalName(target, { canType: this.canType }, deps.accountLabel?.());
+    this.input = new OrderedInput(
+      (data) => this.inputHandler?.(Buffer.from(data, 'utf8')),
+      (chunk) => deps.rewriteInput?.(chunk) ?? null,
+    );
   }
 
   open(initial: vscode.TerminalDimensions | undefined): void {
@@ -134,7 +150,41 @@ export class HqPty implements vscode.Pseudoterminal {
   }
 
   handleInput(data: string): void {
-    this.inputHandler?.(Buffer.from(data, 'utf8'));
+    if (this.awaitingReconnect) {
+      this.awaitingReconnect = false;
+      this.stopped = false;
+      this.rename();
+      this.say(COPY.reconnecting);
+      void this.run();
+      return;
+    }
+    this.input.push(data);
+  }
+
+  /** 0.2.2: the tab stays and says how to come back (an extension-host restart, a lost link). */
+  private offerReconnect(): void {
+    if (this.closedByUser) return;
+    this.awaitingReconnect = true;
+    this.say(COPY.pressKeyToReconnect);
+  }
+
+  /** 0.2.2: who may type changed (`ownership-changed`): re-read this session's rights, as the web does. */
+  private async refreshRights(attach: AttachSession): Promise<void> {
+    const { team, session } = this.target;
+    try {
+      const list = await this.deps.service.call(
+        async (c) =>
+          (
+            await c.request<RemoteSessionSummary[]>('GET', `${teamPath(team)}/sessions`, {
+              org: team.org.slug,
+            })
+          ).body,
+      );
+      const now = Array.isArray(list) ? list.find((s) => s.id === session.id) : undefined;
+      if (now && this.session === attach) attach.setCanType(now.canType === true);
+    } catch {
+      /* the next keystroke's FORBIDDEN (or the server's heartbeat) settles it */
+    }
   }
 
   setDimensions(d: vscode.TerminalDimensions): void {
@@ -212,7 +262,25 @@ export class HqPty implements vscode.Pseudoterminal {
     });
   }
 
+  /**
+   * Attach, and attach again while an attach ends asking for it (a renew, `reattach`). Review MUST 1:
+   * ONE at a time: a second call while one runs (a key, a renew) is a no-op, so no tab ever holds
+   * two sessions at once.
+   */
   private async run(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      while (await this.attachOnce()) {
+        /* attach again in this tab */
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** One attach, to its end. True: attach again now (a renew, or `reattach` asked). */
+  private async attachOnce(): Promise<boolean> {
     // A run that starts is the re-attach (or a first attach): no detach from before may end it.
     this.reattaching = false;
     let client;
@@ -226,7 +294,7 @@ export class HqPty implements vscode.Pseudoterminal {
         err instanceof SecretsBusyError;
       this.say(ours ? err.message : COPY.signedOutWelcome);
       this.closed.fire(1);
-      return;
+      return false;
     }
     this.attachedGrant = this.deps.service.grantOfClient(client);
     const { team, session } = this.target;
@@ -293,7 +361,10 @@ export class HqPty implements vscode.Pseudoterminal {
           accessEnded: COPY.sessionAccessEnded,
           detached: COPY.detached,
           nowViewOnly: COPY.nowViewOnly,
+          sessionStopped: COPY.sessionStoppedTerminal,
+          sessionError: COPY.sessionErrorTerminal,
         },
+        onOwnershipChanged: () => void this.refreshRights(attach),
       },
     );
     this.session = attach;
@@ -301,45 +372,51 @@ export class HqPty implements vscode.Pseudoterminal {
     try {
       end = await attach.run();
     } catch (err) {
-      if (this.again()) return;
+      if (this.again()) return true;
       await this.deps.service.handleError(err);
       this.say(err instanceof Error ? err.message : COPY.unreachable);
       this.deps.onState?.('ended');
-      return;
+      this.offerReconnect();
+      return false;
     } finally {
       this.echo?.close();
     }
-    if (this.again()) return;
+    if (this.again()) return true;
     this.deps.onState?.('ended');
-    if (this.closedByUser) return;
+    if (this.closedByUser) return false;
     if (end.kind === 'refused') {
       if (end.status === 426) this.deps.service.showTooOld();
       if (end.status === 401) {
         // The upgrade's token was refused: ask HQ once over HTTP, which knows whether the grant is
         // really gone (and wipes and says so if it is).
         await this.deps.service.refreshOrgs().catch(() => undefined);
-        if (this.renewedUnder()) return;
+        if (this.renewedUnder()) return true;
       }
       this.say(COPY.terminalRefused(end.status));
       this.end();
-      return;
+      if (end.status !== 426) this.offerReconnect(); // too old: a reconnect would be refused again
+      return false;
     }
     if (end.kind === 'lost') {
       this.say(COPY.connectionLost);
       this.end();
-      return;
+      this.offerReconnect();
+      return false;
     }
     if (end.message) this.say(end.message);
     this.end();
     // U28: HQ closed the terminal 4401. Ask HQ once over HTTP now: a confirmed revocation wipes the
     // account, shows the modal, and closes its terminals and forwards (`onAccountRemoved`). The
     // OLD grant's 4401 after a renew in another window is not that: attach again (decision 26).
+    // Review MUST 1: asked FIRST; "press any key" only when no renew re-attaches by itself.
     if (end.unauthorized) {
       await this.deps.service.refreshOrgs().catch(() => undefined);
-      this.renewedUnder();
+      if (this.renewedUnder()) return true;
     }
     // The session ended on the server's side (it stopped, access ended): the tab stays, so the
-    // person can read why; closing it is theirs.
+    // person can read why, and the next key reconnects.
+    this.offerReconnect();
+    return false;
   }
 
   /**
@@ -349,21 +426,21 @@ export class HqPty implements vscode.Pseudoterminal {
   private renewedUnder(): boolean {
     const now = this.deps.service.currentGrant();
     if (this.closedByUser || now === null || now === this.attachedGrant) return false;
+    this.awaitingReconnect = false;
     this.stopped = false;
     this.rename();
     this.say(COPY.reconnecting);
-    void this.run();
-    return true;
+    return true; // `run` attaches again
   }
 
   /** The attach ended because `reattach` asked: say so and attach again with the new grant. */
   private again(): boolean {
     if (!this.reattaching || this.closedByUser) return false;
     this.reattaching = false;
+    this.awaitingReconnect = false;
     this.session = null;
     this.say(COPY.reconnecting);
-    void this.run();
-    return true;
+    return true; // `run` attaches again
   }
 
   dispose(): void {

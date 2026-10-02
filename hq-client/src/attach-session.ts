@@ -42,7 +42,7 @@
 import type { RemoteSessionSummary } from '@kpa/shared/remote.types';
 import { createTerminalQueryFilter } from '@kpa/shared/terminal-queries';
 import WebSocket from 'ws';
-import type { HqClient } from './api.js';
+import { HqApiError, NotLoggedInError, RefreshNeedsRenewingError, type HqClient } from './api.js';
 import { WAKE_TIMEOUT_MS, wakeTimeoutMessage } from './connect.js';
 import type { LocalEchoSession } from './local-echo/engine-adapter.js';
 import type { Team } from './teams.js';
@@ -120,6 +120,9 @@ export interface AttachCopy {
   detached: string;
   /** hq-vscode: a `FORBIDDEN` on a view-only attach (the extension keeps the terminal open). */
   nowViewOnly: string;
+  /** 0.2.2: the session's `status` frame said it stopped / exited with an error. */
+  sessionStopped: string;
+  sessionError: string;
 }
 
 export const CLI_ATTACH_COPY: AttachCopy = {
@@ -130,7 +133,36 @@ export const CLI_ATTACH_COPY: AttachCopy = {
   accessEnded: 'hq: your access to this session ended.',
   detached: 'hq: detached.',
   nowViewOnly: 'hq: you can watch this session but not type in it.',
+  sessionStopped: 'hq: the session stopped.',
+  sessionError: 'hq: the session exited with an error.',
 };
+
+/** The extension's account errors (by `name`), never transient. */
+const ACCOUNT_ERROR_NAMES: ReadonlySet<string> = new Set([
+  'NeedsSignInError',
+  'AccountGoneError',
+  'SlotRenewedError',
+]);
+
+/** An admitted attach that lived at least this long resets the reconnect budget (review nit). */
+export const ADMIT_STABLE_MS = 5_000;
+
+/**
+ * 0.2.2 (c): may a failure to BUILD an upgrade (the access token, the nonce) be retried? A network
+ * failure, a timeout, a busy or unanswered refresh, or HQ's 5xx/429/408 are transient; a 4xx answer,
+ * no sign-in, or a sign-in that needs renewing are not (the caller decides, as before).
+ */
+export function isTransientUpgradeError(err: unknown): boolean {
+  if (err instanceof NotLoggedInError || err instanceof RefreshNeedsRenewingError) return false;
+  // Review MUST 2: the extension's ACCOUNT errors (its token store throws them) are the caller's to
+  // settle (a renew prompt, an account that went), never retried. By name: hq-client cannot import
+  // the extension's classes. Its SecretsBusyError (the keychain answered slowly) stays transient.
+  if (err instanceof Error && ACCOUNT_ERROR_NAMES.has(err.name)) return false;
+  if (err instanceof HqApiError) {
+    return err.status >= 500 || err.status === 429 || err.status === 408;
+  }
+  return true;
+}
 
 export interface AttachSessionOptions {
   wsFactory?: WsFactory;
@@ -175,7 +207,14 @@ export interface AttachSessionOptions {
   wakeStillMs?: number;
   wakeTimeoutMs?: number;
   reconnectBaseMs?: number;
+  /** How long an admitted attach must stay up to reset the reconnect budget (`ADMIT_STABLE_MS`). */
+  admitStableMs?: number;
   errorRetryMs?: number;
+  /**
+   * 0.2.2: who may type in the session changed (`ownership-changed`, which carries no facts). The
+   * web refetches the session; the caller does the same and applies it with `setCanType`.
+   */
+  onOwnershipChanged?: () => void;
   /**
    * The first attach's intent. `open` (default) is the person's gesture and wakes a sleeping
    * machine; the extension passes `reconnect` for a team it knows is off, so the server answers
@@ -210,6 +249,8 @@ export interface AttachSession {
   detach(): void;
   /** Whether keystrokes are sent. */
   canType(): boolean;
+  /** 0.2.2: apply typing rights the caller re-read (after `onOwnershipChanged`). */
+  setCanType(can: boolean): void;
 }
 
 /**
@@ -228,7 +269,7 @@ interface WakeState {
 
 type ServerFrame =
   | { type: 'output' | 'history'; sessionId: string; data: string }
-  | { type: 'reset'; sessionId: string }
+  | { type: 'reset'; sessionId: string; reattach?: boolean }
   | { type: 'status'; sessionId: string; status?: string }
   | { type: 'error'; sessionId: string | null; message: string; code: string }
   | { type: 'notice'; sessionId: string; text: string; code?: string }
@@ -278,10 +319,28 @@ export function createAttachSession(
     let announced = false;
     let intent: 'open' | 'reconnect' = opts.initialIntent ?? 'open';
     let reconnects = 0;
+    /** When the current socket's attach was admitted (null: not yet). */
+    let admittedAt: number | null = null;
     for (;;) {
       if (detachRequested) return { kind: 'ended', exitCode: 0, message: `\r\n${copy.detached}` };
       // A FRESH signed upgrade every time: a nonce is single-use and the token may have rotated.
-      const headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+      let headers: Record<string, string>;
+      try {
+        headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+      } catch (err) {
+        // 0.2.2 (c): a transient failure (a hung or refused nonce, a network blip) is a failed
+        // dial, never the end: the same backoff as an upgrade HQ did not answer. The first dial
+        // keeps S4 (said at once). Anything else is the caller's, as before.
+        if (!isTransientUpgradeError(err)) throw err;
+        if ((reconnects > 0 || announced) && reconnects < MAX_RECONNECTS) {
+          await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+          reconnects += 1;
+          intent = 'reconnect';
+          continue;
+        }
+        if (reconnects >= MAX_RECONNECTS) return { kind: 'lost' };
+        return { kind: 'refused', status: 0 };
+      }
       const ws = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), headers);
       current = ws;
       const opened = await new Promise<number | null>((resolve) => {
@@ -317,13 +376,22 @@ export function createAttachSession(
       const end = await runSocket(
         ws,
         () => {
-          // Review N5: the budget is MAX_RECONNECTS drops IN A ROW. An admitted attach ends the
-          // row, so a day of hourly LB cuts never adds up to a give-up.
-          reconnects = 0;
+          // Review N5: the budget is MAX_RECONNECTS drops IN A ROW. An admitted attach that LIVES
+          // ends the row (checked at the drop below), so a day of hourly LB cuts never adds up to a
+          // give-up, while an admit-then-drop loop still runs out.
+          admittedAt = Date.now();
         },
         intent,
         headers,
       );
+      // Review nit: only an attach that stayed up ADMIT_STABLE_MS ends the row of failures.
+      if (
+        admittedAt !== null &&
+        Date.now() - admittedAt >= (opts.admitStableMs ?? ADMIT_STABLE_MS)
+      ) {
+        reconnects = 0;
+      }
+      admittedAt = null;
       if (end.kind === 'dropped' && reconnects < MAX_RECONNECTS) {
         sink.say(`\r\n${copy.reconnecting}`);
         await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
@@ -373,7 +441,13 @@ export function createAttachSession(
       send({ type: 'attach', sessionId: session.id, ...size(), intent: i });
     };
     attachFrame(intent);
-    const filter = (opts.createFilter ?? createTerminalQueryFilter)();
+    let filter = (opts.createFilter ?? createTerminalQueryFilter)();
+    /** A reset+reattach arrived while an attach was out: re-attach when that one answers. */
+    let reattachPending = false;
+    /** The pty was replaced: send this terminal's size when the re-attach is admitted. */
+    let resizeOnAdmit = false;
+    /** 0.2.2: the last `status` said (each change is said once). */
+    let statusSaid: string | null = null;
 
     return new Promise<SocketEnd>((resolve) => {
       let exitCode = 0;
@@ -601,11 +675,55 @@ export function createAttachSession(
           // NOT the end of a wake: a suspending machine repaints its screen with the wake code.
         } else if (frame.type === 'reset') {
           repaintedAt = Date.now();
+          if ('reattach' in frame && frame.reattach === true) {
+            // 0.2.2 (b): the RUNNER replaced the pty (the web's "solid restart"): this socket's
+            // subscription is bound to the dead one. Everything about the old screen goes (the echo's
+            // predictions, the filter's held bytes, every terminal mode via a hard reset), then a
+            // `reconnect` re-attach (DEF-110: the runner did this, not the person) binds the new pty.
+            echo?.lifecycleReset();
+            filter = (opts.createFilter ?? createTerminalQueryFilter)();
+            // 0.2.2 live: ESC c, then an explicit home + clear screen + clear scrollback, so nothing
+            // of the old process stays visible whatever the terminal makes of RIS.
+            const wipe = '\x1bc\x1b[H\x1b[2J\x1b[3J';
+            if (echo) echo.repaint(wipe);
+            else sink.write(wipe);
+            // The new pty has never been sized, and a `reconnect` attach does not size it (the server
+            // sizes only `open`, so tabs never fight over it): this terminal's size goes once the
+            // re-attach is admitted (live: the new session wrapped at the wrong width until a key).
+            resizeOnAdmit = true;
+            // Never two attaches out at once. One already out may bind the OLD pty (it was sent
+            // before the reset), so the re-attach waits for its answer (re-review).
+            if (attachOutstanding) reattachPending = true;
+            else attachFrame('reconnect');
+            return;
+          }
           if (echo) echo.repaint('\x1b[H\x1b[2J\x1b[3J');
           else sink.write('\x1b[H\x1b[2J\x1b[3J');
+        } else if (frame.type === 'status' && 'status' in frame) {
+          // 0.2.2 (b), the web's rule (DEF-133): while the machine is asleep or waking, an "error"
+          // is about the SOCKET, not the session, and is not said. Each change is said once.
+          const st = typeof frame.status === 'string' ? frame.status : '';
+          if (st === 'error' && (wake.since !== null || wake.asleep)) return;
+          if (st === statusSaid) return;
+          statusSaid = st;
+          if (st === 'stopped') say(`\r\n${copy.sessionStopped}`);
+          else if (st === 'error') say(`\r\n${copy.sessionError}`);
+        } else if (frame.type === 'ownership-changed') {
+          // 0.2.2 (b): the frame carries no facts on purpose; the caller re-reads the rights.
+          opts.onOwnershipChanged?.();
         } else if (frame.type === 'attached') {
           attachOutstanding = false;
           onAdmitted();
+          if (reattachPending) {
+            // A reset+reattach came while this attach was out: bind the NEW pty now (once).
+            reattachPending = false;
+            attachFrame('reconnect');
+            return;
+          }
+          if (resizeOnAdmit) {
+            resizeOnAdmit = false;
+            send({ type: 'resize', sessionId: session.id, ...size() });
+          }
           if (!answerWaking && !answerAsleep) {
             errorRetries = 0;
             errorSaid = null;
@@ -743,5 +861,6 @@ export function createAttachSession(
       }
     },
     canType: () => canType,
+    setCanType: (can: boolean) => setCanType(can),
   };
 }

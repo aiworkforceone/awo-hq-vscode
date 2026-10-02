@@ -109,6 +109,7 @@ export function parseEventsFrame(v: unknown): EventsServerFrame | null {
         : null;
     case 'resync':
     case 'unsubscribed':
+    case 'secrets-changed': // 0.2.2: the team's secrets changed (content-free)
       return hasWs ? (v as unknown as EventsServerFrame) : null;
     case 'subscribed':
       return hasWs && state(v.state) && typeof v.watch === 'boolean'

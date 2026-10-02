@@ -50,6 +50,7 @@ const FILES = {
   'README.md': 'hello, team!\n',
   'notes.md': 'notes\n',
   'z.md': 'zed\n',
+  'secret.env': 'TOKEN=live-secret-value\n',
   'y.md': 'why\n',
 };
 
@@ -64,6 +65,18 @@ const fake = {
   off: false,
   /** After a wake: HQ already says running, but files are refused until then (the boot). */
   bootUntil: 0,
+  /** 0.2.2: the team secret whose value secret.env holds exists (the file is served masked). */
+  secretSet: true,
+  /** 0.2.2: the events socket is served (from step 6 on; before, upgrades are refused). */
+  eventsOn: false,
+  /** Open events sockets and the teams each subscribed. */
+  subscribers: [],
+  /** HQ's push after a secret change (content-free), to every socket subscribed to the team. */
+  pushSecretsChanged() {
+    for (const s of fake.subscribers) {
+      s.ws.send(JSON.stringify({ type: 'secrets-changed', workspaceId: WS_ID }));
+    }
+  },
   revoke(userId) {
     for (const g of fake.grants.values()) if (g.user.id === userId) g.revoked = true;
   },
@@ -159,11 +172,17 @@ function startFakeHq() {
       }
       if (p === `${base}/fs/file` && req.method === 'GET') {
         if (FILES[path] === undefined) return send(404, { error: 'not found', code: 'NOT_FOUND' });
+        // A team secret's value is in secret.env: served masked while the secret exists (the file,
+        // its etag and its lstat stay exactly the same either way, as on a real machine).
+        const masked = fake.secretSet && path === 'secret.env';
         res.writeHead(200, {
           'content-type': 'application/octet-stream',
           etag: `e-${path}-${FILES[path].length}`,
+          'x-hq-masked': masked ? '1' : '0',
         });
-        return res.end(FILES[path]);
+        return res.end(
+          masked ? FILES[path].replace('live-secret-value', '[REDACTED]') : FILES[path],
+        );
       }
       if (p === `${base}/fs/file` && req.method === 'PUT') {
         FILES[path] = Buffer.concat(chunks).toString('utf8');
@@ -174,8 +193,28 @@ function startFakeHq() {
       return send(404, { error: 'not found' });
     });
   });
-  // No events socket here: the file system falls back to its own refresh, as when one is refused.
-  server.on('upgrade', (_req, socket) => socket.destroy());
+  // The events socket: refused until step 6 (the file system then falls back to its own refresh, as
+  // when one is refused); from then on a minimal one that subscribes and pushes `secrets-changed`.
+  const { WebSocketServer } = require('ws');
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    if (!fake.eventsOn || !(req.url || '').startsWith('/ws/remote/events')) return socket.destroy();
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString());
+        if (f.type !== 'subscribe') return;
+        fake.subscribers.push({ ws, workspaceId: f.workspaceId });
+        ws.send(
+          JSON.stringify({
+            type: 'subscribed',
+            workspaceId: f.workspaceId,
+            state: 'running',
+            watch: true,
+          }),
+        );
+      });
+    });
+  });
   // Longer than the device flow's 5 s poll: Node's default (5 s) races the client's reuse of the
   // kept-alive socket, which is a flake of this fake, not of HQ.
   server.keepAliveTimeout = 60_000;
@@ -345,6 +384,35 @@ async function run() {
     const fsAfterWake = seen.slice(wakeMark).filter((s) => s.includes('/fs/'));
     console.log(
       `  ok  a tab refused while its team was off fills by itself once the team serves, after a boot that refused it again (live #2; ${Math.round((Date.now() - wakeAt) / 1000)} s, ${fsAfterWake.length} file requests)`,
+    );
+
+    // ── 6. 0.2.2 live FAIL 1: an open masked file follows the team's secrets, with no Revert. The
+    // file itself does not change (same etag, same size, same mtime): only its masking does.
+    fake.eventsOn = true;
+    const sec = vscode.Uri.joinPath(folder.uri, 'secret.env');
+    await open(sec);
+    await until(
+      () => docOf(sec) && docOf(sec).getText().includes('[REDACTED]'),
+      15_000,
+      'secret.env opens masked',
+    );
+    await until(() => fake.subscribers.length > 0, 45_000, 'the events socket subscribed the team');
+    fake.secretSet = false; // the secret is deleted in HQ
+    fake.pushSecretsChanged();
+    await until(
+      () => docOf(sec) && docOf(sec).getText().includes('live-secret-value'),
+      15_000,
+      'the open editor unmasks by itself after the secret is deleted',
+    );
+    fake.secretSet = true; // and added again
+    fake.pushSecretsChanged();
+    await until(
+      () => docOf(sec) && docOf(sec).getText().includes('[REDACTED]'),
+      15_000,
+      'the open editor re-masks by itself after the secret is added',
+    );
+    console.log(
+      '  ok  an open masked file unmasks and re-masks by itself when the secret changes (0.2.2 live FAIL 1)',
     );
   } catch (err) {
     console.log(`  FAIL U23/live #2: ${err && err.message}`);

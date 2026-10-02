@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.2
+
+- **Paste or drop images into session terminals.** Press Cmd+V (macOS) or Ctrl+V (Windows, Linux)
+  with an image copied, or drag image files onto the terminal: the image is added to the team's
+  `.uploads` folder and its path typed at the prompt, as in HQ in the browser. Dragging an image
+  from the team's own folder types its path with no upload. Files from your computer are uploaded
+  only after you agree. PNG, JPEG, GIF and WebP, up to 10 MB. Text on the clipboard always pastes as
+  text, exactly as before.
+- A file shown masked because it holds a secret's value now updates by itself when that secret is
+  removed or changed in HQ (within about 15 seconds), and a file that becomes masked when a secret is
+  added does too. Opening a masked file says which secret, when you can use the team's terminals.
+- Session terminals recover by themselves: a terminal that ended or lost its connection (for example
+  after VS Code restarted its extensions) reconnects in place on the next key, and opening its
+  session again gives a fresh terminal instead of the ended one. A session whose process restarts on
+  the team machine clears and shows the new one, a temporary failure to reach HQ while reconnecting
+  is retried instead of ending the terminal, and the terminal says when the session stops.
+- After VS Code restarts its extensions, the HQ terminals that were open come back by themselves in
+  fresh tabs (the old ones, which nothing answered any more, are closed). A restarted session is
+  shown at the terminal's own width at once.
+
 ## 0.2.1
 
 - The first published release of the 0.2 line. It contains everything listed under 0.2.0 below;

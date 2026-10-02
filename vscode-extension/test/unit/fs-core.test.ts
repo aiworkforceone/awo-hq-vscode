@@ -49,7 +49,14 @@ class FakeApi {
   calls: string[] = [];
   /** Calls sent with the background marker (`X-HQ-Activity: background`): not a person's action. */
   bg: string[] = [];
-  files = new Map<string, { bytes: Uint8Array; etag: string; masked?: boolean }>();
+  files = new Map<
+    string,
+    { bytes: Uint8Array; etag: string; masked?: boolean; names?: string[] }
+  >();
+  /** 0.2.2: the team's mask version now (a 304 needs the client's to match). */
+  maskVersion = 'v1';
+  /** A read waits for this (a read in flight while something else happens). */
+  readGate: Promise<void> | null = null;
   off = false;
   /** Every call fails with this (a typed 409 the machine's state answers with). */
   err: FsApiError | null = null;
@@ -88,14 +95,34 @@ class FakeApi {
     if (!f) throw new FsApiError(404, 'NOT_FOUND', 'Not found', undefined);
     return stat(path, f.etag);
   }
-  async read(_t: Team, path: string, ifNoneMatch?: string): Promise<FsRead> {
-    this.calls.push(`read:${path}${ifNoneMatch ? `:${ifNoneMatch}` : ''}`);
+  async read(
+    _t: Team,
+    path: string,
+    ifNoneMatch?: string,
+    maskVersion?: string,
+    opts?: { background?: boolean },
+  ): Promise<FsRead> {
+    this.calls.push(
+      `read:${path}${ifNoneMatch ? `:${ifNoneMatch}` : ''}${maskVersion ? `:${maskVersion}` : ''}`,
+    );
+    if (opts?.background) this.bg.push(`read:${path}`);
+    if (this.readGate) await this.readGate;
     if (this.err) throw this.err;
     if (this.off) throw this.offErr();
     const f = this.files.get(path);
     if (!f) throw new FsApiError(404, 'NOT_FOUND', 'Not found', undefined);
-    if (ifNoneMatch === f.etag) return { kind: 'not-modified', etag: f.etag };
-    return { kind: 'bytes', bytes: f.bytes, etag: f.etag, masked: f.masked === true };
+    const sameMask = maskVersion === undefined || maskVersion === this.maskVersion;
+    if (ifNoneMatch === f.etag && sameMask) {
+      return { kind: 'not-modified', etag: f.etag, maskVersion: this.maskVersion };
+    }
+    return {
+      kind: 'bytes',
+      bytes: f.bytes,
+      etag: f.etag,
+      masked: f.masked === true,
+      maskVersion: this.maskVersion,
+      ...(f.names ? { maskedNames: f.names } : {}),
+    };
   }
   async write(
     _t: Team,
@@ -159,6 +186,12 @@ let core: HqFsCore;
 let changes: FsChangeOut[];
 let off: string[];
 let masked: string[];
+/** 0.2.2 review: what the editor has open ('open' | 'dirty'); anything else is closed. */
+let editors: Map<string, 'open' | 'dirty'>;
+/** Files that became masked while their editor held unsaved edits. */
+let maskedWhileDirty: string[];
+/** The names each masked notice carried. */
+let maskedNames: string[][];
 let issues: Array<FsTeamIssue | null>;
 let sleeps: number[];
 /** Added to the core's clock (listing TTLs, the negative cache). */
@@ -172,6 +205,9 @@ function make(write = true): void {
   events = new FakeEvents();
   off = [];
   masked = [];
+  maskedNames = [];
+  editors = new Map();
+  maskedWhileDirty = [];
   issues = [];
   sleeps = [];
   skew = 0;
@@ -186,8 +222,13 @@ function make(write = true): void {
     events: events as unknown as EventsHub,
     ui: {
       teamOff: (_team, action) => void off.push(action),
-      masked: (_team, path) => void masked.push(path),
+      masked: (_team, path, names) => {
+        masked.push(path);
+        maskedNames.push(names);
+      },
       teamIssue: (_team, issue) => void issues.push(issue),
+      openState: (_team, path) => editors.get(path) ?? 'closed',
+      maskedWhileDirty: (_team, path) => void maskedWhileDirty.push(path),
     },
   });
   core.onDidChange((c) => void changes.push(...c));
@@ -252,7 +293,7 @@ describe('reads', () => {
     expect(api.calls).toEqual([]);
     events.live = false;
     await core.readFile(t, 'a.txt');
-    expect(api.calls).toEqual(['read:a.txt:"1"']);
+    expect(api.calls).toEqual(['read:a.txt:"1":v1']); // 0.2.2: with the mask version it saw
   });
 
   it('masked on FIRST open: the cached stat turns read-only and `changed` fires for the uri', async () => {
@@ -266,6 +307,175 @@ describe('reads', () => {
     await expect(
       core.writeFile(t, '.env', bytes('A=x'), { create: false, overwrite: true }),
     ).rejects.toMatchObject({ kind: 'no-permissions', message: COPY.fsMasked });
+  });
+
+  it('0.2.2: the secret is REMOVED and the team is told (`secrets-changed`): the file is re-read at once, unmasked, writable, and its stat MOVES (live FAIL 1)', async () => {
+    api.files.set('.env', { bytes: bytes('A=[REDACTED]'), etag: '"m"', masked: true });
+    events.live = true;
+    await core.readDirectory(t, '');
+    await core.readFile(t, '.env');
+    editors.set('.env', 'open');
+    const before = await core.stat(t, '.env');
+    expect(before.readonly).toBe(true);
+    // HQ: the secret is gone. The file did not change (same etag, size, mtime); its masking did.
+    api.maskVersion = 'v2';
+    api.files.set('.env', { bytes: bytes('A=plain-value'), etag: '"m"' });
+    changes = [];
+    api.calls = [];
+    await core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    expect(api.calls.filter((c) => c.startsWith('read:'))).toEqual(['read:.env']); // re-read now
+    expect(changes).toContainEqual({ team: t, path: '.env', type: 'changed' });
+    const after = await core.stat(t, '.env');
+    expect(after.readonly).toBe(false);
+    // VS Code reloads an open editor only when the stat moved: it did.
+    expect(after.mtimeMs).not.toBe(before.mtimeMs);
+    api.calls = [];
+    expect(new TextDecoder().decode(await core.readFile(t, '.env'))).toBe('A=plain-value');
+    expect(api.calls).toEqual([]); // the re-read is what VS Code gets
+    await core.writeFile(t, '.env', bytes('A=edited'), { create: false, overwrite: true });
+  });
+
+  it('0.2.2 (live FAIL 1): a held file that reads the SAME after a secret change keeps its stat and gets no `changed` (no false conflict)', async () => {
+    api.files.set('a.txt', { bytes: bytes('plain text'), etag: '"a"' });
+    events.live = true;
+    await core.readDirectory(t, '');
+    await core.readFile(t, 'a.txt');
+    const before = await core.stat(t, 'a.txt');
+    changes = [];
+    await core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    expect(changes).toEqual([]);
+    expect((await core.stat(t, 'a.txt')).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it('0.2.2: with no stream, the revalidation carries the mask version: a changed masking is no 304', async () => {
+    api.files.set('.env', { bytes: bytes('A=[REDACTED]'), etag: '"m"', masked: true });
+    await core.readFile(t, '.env');
+    api.calls = [];
+    await core.readFile(t, '.env'); // same file, same masking: 304
+    expect(api.calls).toEqual(['read:.env:"m":v1']);
+    api.maskVersion = 'v2';
+    api.files.set('.env', { bytes: bytes('A=plain-value'), etag: '"m"' });
+    changes = [];
+    expect(new TextDecoder().decode(await core.readFile(t, '.env'))).toBe('A=plain-value');
+    // The read said "not masked" for a file held masked: stat flips back, and VS Code is told.
+    expect(changes).toContainEqual({ team: t, path: '.env', type: 'changed' });
+    events.live = true;
+    expect((await core.stat(t, '.env')).readonly).toBe(false);
+  });
+
+  it('0.2.2: a file that BECOMES masked when a secret is added is re-read masked', async () => {
+    api.files.set('cfg.txt', { bytes: bytes('KEY=abc'), etag: '"c"' });
+    await core.readFile(t, 'cfg.txt');
+    api.maskVersion = 'v2';
+    api.files.set('cfg.txt', { bytes: bytes('KEY=[REDACTED]'), etag: '"c"', masked: true });
+    expect(new TextDecoder().decode(await core.readFile(t, 'cfg.txt'))).toBe('KEY=[REDACTED]');
+    expect(masked).toEqual(['cfg.txt']);
+  });
+
+  it('review CODE 1: a read in flight when `secrets-changed` lands returns its bytes but caches nothing', async () => {
+    api.files.set('.env', { bytes: bytes('A=[REDACTED]'), etag: '"m"', masked: true });
+    events.live = true;
+    await core.readDirectory(t, '');
+    let release!: () => void;
+    api.readGate = new Promise((r) => (release = r));
+    const inFlight = core.readFile(t, '.env');
+    await new Promise((r) => setTimeout(r, 5));
+    const handled = core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    release();
+    api.readGate = null;
+    await handled;
+    expect(new TextDecoder().decode(await inFlight)).toBe('A=[REDACTED]');
+    // Nothing from that read was kept: the next read goes to HQ, with no stale mask version.
+    api.calls = [];
+    await core.readFile(t, '.env');
+    expect(api.calls).toEqual(['read:.env']);
+    expect((await core.stat(t, '.env')).readonly).toBe(true); // this fresh read marked it again
+  });
+
+  it('review CODE 2: `secrets-changed` keeps the file etags (a save still sends If-Match, with no extra stat)', async () => {
+    api.files.set('a.txt', { bytes: bytes('abc'), etag: '"1"' });
+    await core.readFile(t, 'a.txt');
+    await core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    api.calls = [];
+    await core.writeFile(t, 'a.txt', bytes('abcd'), { create: false, overwrite: true });
+    expect(api.calls).toEqual(['write:a.txt']); // the loaded etag was kept: no stat first
+  });
+
+  it('review S1: a secrets change while the team is OFF: open editors keep their copy (U23); only a masked one is nudged', async () => {
+    api.files.set('a.txt', { bytes: bytes('plain text'), etag: '"a"' });
+    api.files.set('.env', { bytes: bytes('A=[REDACTED]'), etag: '"m"', masked: true });
+    events.live = true;
+    await core.readDirectory(t, '');
+    await core.readFile(t, 'a.txt');
+    await core.readFile(t, '.env');
+    editors.set('a.txt', 'open');
+    editors.set('.env', 'open');
+    const aBefore = await core.stat(t, 'a.txt');
+    api.off = true;
+    changes = [];
+    await core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    // a.txt could not be re-read: left exactly as it was (no nudge, no `changed`).
+    expect(changes.map((c) => c.path)).toEqual(['.env']);
+    expect((await core.stat(t, 'a.txt')).mtimeMs).toBe(aBefore.mtimeMs);
+    // Both still read from the copy held (the off machine answers nothing).
+    expect(new TextDecoder().decode(await core.readFile(t, 'a.txt'))).toBe('plain text');
+    expect(new TextDecoder().decode(await core.readFile(t, '.env'))).toBe('A=[REDACTED]');
+  });
+
+  it('review S2 + S3: only files OPEN in an editor are re-read, in the background; the rest just lose their cache', async () => {
+    api.files.set('open.txt', { bytes: bytes('one'), etag: '"o"' });
+    api.files.set('closed.txt', { bytes: bytes('two'), etag: '"c"' });
+    events.live = true;
+    await core.readDirectory(t, '');
+    await core.readFile(t, 'open.txt');
+    await core.readFile(t, 'closed.txt');
+    editors.set('open.txt', 'open');
+    api.calls = [];
+    api.bg = [];
+    await core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    expect(api.calls.filter((c) => c.startsWith('read:'))).toEqual(['read:open.txt']);
+    expect(api.bg).toEqual(['read:open.txt']); // no presence stamp: not a person reading
+    api.calls = [];
+    await core.readFile(t, 'closed.txt'); // its cache went: read from HQ when next opened
+    expect(api.calls).toEqual(['read:closed.txt']);
+  });
+
+  it('review: a DIRTY editor whose file became masked is told why it cannot be saved', async () => {
+    api.files.set('cfg.txt', { bytes: bytes('KEY=abc'), etag: '"c"' });
+    events.live = true;
+    await core.readDirectory(t, '');
+    await core.readFile(t, 'cfg.txt');
+    editors.set('cfg.txt', 'dirty');
+    api.files.set('cfg.txt', { bytes: bytes('KEY=[REDACTED]'), etag: '"c"', masked: true });
+    await core.onEvent({ type: 'secrets-changed', workspaceId: t.workspace.id });
+    expect(maskedWhileDirty).toEqual(['cfg.txt']);
+  });
+
+  it("0.2.2: another team's `secrets-changed` changes nothing here", async () => {
+    api.files.set('.env', { bytes: bytes('A=[REDACTED]'), etag: '"m"', masked: true });
+    events.live = true;
+    await core.readDirectory(t, '');
+    await core.readFile(t, '.env');
+    changes = [];
+    await core.onEvent({
+      type: 'secrets-changed',
+      workspaceId: '99999999-9999-4999-8999-999999999999',
+    });
+    expect(changes).toEqual([]);
+    expect((await core.stat(t, '.env')).readonly).toBe(true);
+  });
+
+  it('0.2.2: the masked notice gets the secret names HQ gave (names only), or none', async () => {
+    api.files.set('.env', {
+      bytes: bytes('A=[REDACTED]'),
+      etag: '"m"',
+      masked: true,
+      names: ['STRIPE_KEY'],
+    });
+    api.files.set('b.env', { bytes: bytes('B=[REDACTED]'), etag: '"b"', masked: true });
+    await core.readFile(t, '.env');
+    await core.readFile(t, 'b.env');
+    expect(maskedNames).toEqual([['STRIPE_KEY'], []]);
   });
 
   it('a team that is off: cached listings and contents stay readable; uncached says off; nothing retries', async () => {

@@ -212,7 +212,9 @@ export interface StubTerminal {
   name: string;
   disposed: boolean;
   pty: { onDidChangeName?: (l: (n: string) => void) => unknown };
-  show(): void;
+  /** Every `show(preserveFocus?)` call's argument. */
+  shown: Array<boolean | undefined>;
+  show(preserveFocus?: boolean): void;
   dispose(): void;
 }
 
@@ -340,7 +342,8 @@ export const window = {
       name: opts.name,
       disposed: false,
       pty: opts.pty,
-      show: () => undefined,
+      shown: [],
+      show: (preserveFocus?: boolean) => void t.shown.push(preserveFocus),
       dispose: () => {
         t.disposed = true;
       },

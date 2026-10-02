@@ -90,8 +90,18 @@ export type FsTeamIssue =
 export interface FsCoreUi {
   /** The team is off: one notification with Wake Team (the UI throttles repeats). */
   teamOff(team: Team, action: 'open' | 'save'): void;
-  /** A file just opened masked: say why it is read-only (once per file). */
-  masked(team: Team, path: string): void;
+  /**
+   * A file just opened masked: say why it is read-only (once per file). `names`: the secrets it
+   * matched, by name, when HQ gave them (0.2.2); empty otherwise.
+   */
+  masked(team: Team, path: string, names: string[]): void;
+  /**
+   * 0.2.2 review S2: is this file (shown path) open in an editor, and does it hold unsaved edits?
+   * Absent: every held file counts as open.
+   */
+  openState?(team: Team, path: string): 'closed' | 'open' | 'dirty';
+  /** 0.2.2 review: a file with unsaved edits in an editor just became masked (it cannot be saved). */
+  maskedWhileDirty?(team: Team, path: string): void;
   /**
    * The team's issue CHANGED (null = it serves files again). Called once per change, never per
    * request, so the UI can notify and decorate without its own de-duplication.
@@ -588,7 +598,7 @@ export class HqFsCore {
     return {
       type: s.type,
       size: s.size,
-      mtimeMs: s.mtimeMs,
+      mtimeMs: s.mtimeMs + (this.statNudge.get(this.key(team, s.path)) ?? 0),
       readonly:
         this.rootReadOnly(team) ||
         s.readonly !== undefined ||
@@ -946,9 +956,15 @@ export class HqFsCore {
     const last = this.contents.last(key);
     if (!last && (await this.knownAbsent(team, path))) throw new FsCoreError('not-found', path);
     const lastEtag = last ? this.contentEtag(key) : undefined;
+    // Review CODE 1: the team's secrets generation as this read starts.
+    const secretsGen = this.secretsGen.get(team.workspace.id) ?? 0;
+    // 0.2.2: the masking the cached copy was read with, so a changed secret set is no 304.
+    const lastMask = lastEtag !== undefined ? this.maskVersions.get(key) : undefined;
     let r;
     try {
-      r = await this.call(team, () => this.deps.api.read(team, path, lastEtag), { read: true });
+      r = await this.call(team, () => this.deps.api.read(team, path, lastEtag, lastMask), {
+        read: true,
+      });
     } catch (err) {
       if (err instanceof FsApiError && err.status === 404) this.noteAbsent(team, path);
       if (this.isOff(err) && last) {
@@ -962,11 +978,117 @@ export class HqFsCore {
     if (generation !== this.generation) throw new SignedOutError();
     if (this.servedFrom.size >= 5_000) this.servedFrom.clear();
     this.servedFrom.set(this.key(team, shown), path);
-    if (r.kind === 'not-modified') return last ?? new Uint8Array();
+    // Review CODE 1: `secrets-changed` landed while this read was out: its answer predates the new
+    // masking. The bytes are returned (the editor asked), but nothing about them is kept.
+    if ((this.secretsGen.get(team.workspace.id) ?? 0) !== secretsGen) {
+      return r.kind === 'not-modified' ? (last ?? new Uint8Array()) : r.bytes;
+    }
+    if (r.kind === 'not-modified') {
+      if (r.maskVersion) this.maskVersions.set(key, r.maskVersion);
+      return last ?? new Uint8Array();
+    }
     this.contents.put(key, r.etag, r.bytes);
     this.etags.set(key, r.etag);
-    if (r.masked) await this.markMasked(team, path, r.etag);
+    if (r.maskVersion) this.maskVersions.set(key, r.maskVersion);
+    else this.maskVersions.delete(key);
+    if (r.masked) await this.markMasked(team, path, r.etag, r.maskedNames ?? []);
+    else if (this.listings.stat(team.workspace.id, path)?.masked === true) {
+      // 0.2.2: held masked, served plain now (its secret went): writable again, and VS Code is told.
+      this.listings.unmarkMasked(team.workspace.id, path);
+      this.fire([{ team, path, type: 'changed' }]);
+    }
     return r.bytes;
+  }
+
+  /** 0.2.2: the mask version each cached copy was read with (`key` → version). */
+  private readonly maskVersions = new Map<string, string>();
+  /** Review CODE 1: bumped per team by `secrets-changed`; a read that spans a bump caches nothing. */
+  private readonly secretsGen = new Map<string, number>();
+  /**
+   * 0.2.2 live FAIL 1: milliseconds added to a file's reported mtime each time its served bytes
+   * changed with the team's secrets (`key` → nudge), so VS Code's stat check sees a change.
+   */
+  private readonly statNudge = new Map<string, number>();
+
+  /**
+   * 0.2.2: the team's effective secrets changed (`secrets-changed`): nothing held for it is trusted
+   * any more. Its cached bytes and masked marks go, and VS Code re-reads every file it holds, so an
+   * open editor shows the new masking and its read-only state follows.
+   */
+  private async secretsChanged(team: Team): Promise<void> {
+    const id = team.workspace.id;
+    const prefix = `${id}:`;
+    this.secretsGen.set(id, (this.secretsGen.get(id) ?? 0) + 1);
+    const wasMasked = new Set<string>(this.listings.maskedPaths(id));
+    /** What each held file showed before, kept aside until it is read again (review S1). */
+    const held = new Map<string, Uint8Array>();
+    for (const k of this.contents.keys()) {
+      if (!k.startsWith(prefix)) continue;
+      const bytes = this.contents.last(k);
+      if (bytes) held.set(k.slice(prefix.length), bytes);
+      // Review CODE 2: the bytes and their masking go; the FILE etag stays (a save's If-Match is
+      // the version the editor loaded, and the file itself did not change).
+      this.contents.drop(k);
+      this.maskVersions.delete(k);
+    }
+    for (const p of wasMasked) this.listings.unmarkMasked(id, p);
+    // 0.2.2 live FAIL 1: VS Code re-reads an open, clean editor on `changed` ONLY when the file's
+    // stat moved (mtime, size), and a secret change moves neither. So each file OPEN in an editor
+    // (review S2: the others just lose their cache) is read again now, in the background (S3: it is
+    // not a person reading), and one whose bytes differ gets its reported mtime nudged and a
+    // `changed`. A file that reads the same keeps its stat (no false conflict in a dirty editor).
+    // One that cannot be read (S1: the team is off) keeps the copy it had, read-only as before
+    // (U23); only a masked one is nudged.
+    const paths = new Set<string>([...held.keys(), ...wasMasked]);
+    const moved: string[] = [];
+    await Promise.all(
+      [...paths].map(async (path) => {
+        const shown = this.toShown(team, path);
+        const state = this.deps.ui.openState ? this.deps.ui.openState(team, shown) : 'open';
+        if (state === 'closed') return;
+        const key = this.key(team, path);
+        const before = held.get(path);
+        const now = await this.refetch(team, path);
+        if (now === null) {
+          const etag = this.etags.get(key);
+          if (before && etag !== undefined) this.contents.put(key, etag, before);
+          if (!wasMasked.has(path)) return;
+          if (etag !== undefined) this.listings.markMasked(id, path, etag);
+        } else {
+          if (before && sameBytes(before, now)) return;
+          const nowMasked = this.listings.stat(id, path)?.masked === true;
+          if (state === 'dirty' && nowMasked && !wasMasked.has(path)) {
+            this.deps.ui.maskedWhileDirty?.(team, shown);
+          }
+        }
+        this.statNudge.set(key, (this.statNudge.get(key) ?? 0) + 1);
+        moved.push(path);
+      }),
+    );
+    this.fire(moved.map((path) => ({ team, path, type: 'changed' as const })));
+  }
+
+  /** 0.2.2: a file's bytes as HQ serves them now (cached, its masking marked); null if unreadable. */
+  private async refetch(team: Team, path: string): Promise<Uint8Array | null> {
+    const id = team.workspace.id;
+    const key = this.key(team, path);
+    const gen = this.secretsGen.get(id) ?? 0;
+    try {
+      const r = await this.call(
+        team,
+        () => this.deps.api.read(team, path, undefined, undefined, { background: true }),
+        { read: true },
+      );
+      if (r.kind !== 'bytes') return null;
+      if ((this.secretsGen.get(id) ?? 0) !== gen) return r.bytes; // another change meanwhile
+      this.contents.put(key, r.etag, r.bytes);
+      this.etags.set(key, r.etag);
+      if (r.maskVersion) this.maskVersions.set(key, r.maskVersion);
+      if (r.masked) await this.markMasked(team, path, r.etag, r.maskedNames ?? []);
+      return r.bytes;
+    } catch {
+      return null;
+    }
   }
 
   /** The etag of what the content cache holds for `key` (kept beside it). */
@@ -975,7 +1097,7 @@ export class HqFsCore {
     return this.etags.get(key);
   }
 
-  private async markMasked(team: Team, path: string, etag: string): Promise<void> {
+  private async markMasked(team: Team, path: string, etag: string, names: string[]): Promise<void> {
     let s = this.listings.stat(team.workspace.id, path);
     if (!s || s.etag !== etag) {
       try {
@@ -985,7 +1107,7 @@ export class HqFsCore {
       }
     }
     this.listings.markMasked(team.workspace.id, path, etag);
-    this.deps.ui.masked(team, path);
+    this.deps.ui.masked(team, path, names);
     // VS Code reads permissions from stat(), which ran before this read: make it ask again.
     this.fire([{ team, path, type: 'changed' }]);
   }
@@ -1291,6 +1413,11 @@ export class HqFsCore {
       if (team) await this.resync(team);
       return;
     }
+    if (frame.type === 'secrets-changed') {
+      const team = this.teamById(frame.workspaceId);
+      if (team) await this.secretsChanged(team);
+      return;
+    }
     // HQ says the machine runs: a team that refused is asked again (it may still be booting).
     if (
       (frame.type === 'workspace-state' || frame.type === 'subscribed') &&
@@ -1355,6 +1482,8 @@ export class HqFsCore {
     this.contents.clear();
     this.ownWrites.clear();
     this.etags.clear();
+    this.maskVersions.clear();
+    this.statNudge.clear();
   }
 }
 
@@ -1398,4 +1527,11 @@ function dedupe(changes: FsChangeOut[]): FsChangeOut[] {
     seen.add(k);
     return true;
   });
+}
+
+/** Two byte arrays hold the same bytes. */
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
