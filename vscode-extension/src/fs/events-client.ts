@@ -4,6 +4,13 @@
  * token rotated in band, and a `resync` handed to the file system after every gap (a reconnect, the
  * hourly cut, a pin move), because changes during the gap were not seen.
  *
+ * 0.2.3, MAKE-BEFORE-BREAK: the load balancer cuts every WebSocket at 3600 s. Before that (the
+ * terminal's `HANDOVER_AFTER_MS`, minus jitter) a standby socket subscribes every team `reconnect`;
+ * once each is acked it becomes THE socket and the old one closes 1000, so there is no gap, no
+ * resync and `isLive` never drops. Change frames on either socket during the overlap are passed on
+ * (a duplicate is a harmless re-read; a gap is not). A standby that is refused (a 429: other windows
+ * hold this sign-in's slots) or fails is given up quietly and tried again; the cut is the backstop.
+ *
  * `isLive(team)` is what lets `stat()` answer from the cache (FEATURE C1): only while this socket is
  * open AND the server said the team's watcher runs (`subscribed` with `watch: true`, and no later
  * state other than running). Frames of the wrong shape are dropped, never emitted. No `vscode`
@@ -11,6 +18,13 @@
  */
 import { WebSocket } from 'ws';
 import { HqApiError, type HqClient } from '@hq/client/api.js';
+import {
+  HANDOVER_ADMIT_MS,
+  HANDOVER_AFTER_MS,
+  HANDOVER_JITTER_MS,
+  HANDOVER_LAST_START_MS,
+  HANDOVER_RETRY_MS,
+} from '@hq/client/attach-session.js';
 import { wsUrl } from '@hq/client/tunnel-client.js';
 import type { Team } from '@hq/client/teams.js';
 import {
@@ -54,6 +68,23 @@ export interface EventsHubDeps {
    */
   grantOf?(client: HqClient): string | undefined;
   currentGrant?(): string | null;
+  /** 0.2.3 make-before-break (the terminal's `HANDOVER_*` defaults); 0 turns it off. */
+  handoverAfterMs?: number;
+  handoverJitterMs?: number;
+  handoverRetryMs?: number;
+}
+
+/** 0.2.3: the socket that will take over, while its subscriptions are acked. */
+interface Standby {
+  ws: WebSocket;
+  client: HqClient;
+  token: string | null;
+  openedAt: number;
+  /** The teams subscribed on it, and those it answered. */
+  sent: Set<string>;
+  answered: Set<string>;
+  acked: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 type Listener = (frame: EventsServerFrame) => void;
@@ -155,6 +186,8 @@ class OrgSocket {
   private redial = false;
   /** Teams already subscribed once on this org's socket (any of its dials). */
   private readonly announced = new Set<string>();
+  private handoverTimer: ReturnType<typeof setTimeout> | null = null;
+  private standby: Standby | null = null;
 
   constructor(
     private readonly org: string,
@@ -219,8 +252,43 @@ class OrgSocket {
       this.startTokenRotation(client);
       // After a gap the subscriptions are re-made; the `subscribed` answers carry the resync.
       if (gap) this.gapPending = new Set(this.subs.keys());
+      this.armHandover(Date.now());
     });
+    this.wire(ws, client);
+    ws.on('unexpected-response', (_req, res) => {
+      res.resume();
+      const status = res.statusCode ?? 0;
+      if (status === 404 || status === 401 || status === 403) {
+        // Not available here (404), or not allowed: retry slowly, never in a loop.
+        this.backoff = this.deps.maxBackoffMs ?? 30_000;
+      }
+      // L2b: the upgrade itself refused the token (a cached nonce skipped the nonce fetch).
+      if (status === 401) this.unauthorized();
+      if (status === 429) {
+        // Too many sockets for this sign-in (other windows hold them) or dialling too fast: wait
+        // long, and say so once. The 60 s root refresh keeps the Explorer moving meanwhile.
+        this.backoff = Math.max(
+          this.deps.refusedBackoffMs ?? 300_000,
+          this.deps.minBackoffMs ?? 1_000,
+        );
+        if (!this.refusalSaid) {
+          this.refusalSaid = true;
+          try {
+            this.deps.onRefused?.(this.org, status);
+          } catch {
+            /* a notice must never break the socket's own bookkeeping */
+          }
+        }
+      }
+      ws.terminate();
+    });
+  }
+
+  /** THE socket's frames and close (a dialled one, or a standby that took over). */
+  private wire(ws: WebSocket, client: HqClient): void {
     ws.on('message', (data) => {
+      // A socket this one replaced (0.2.3: the old one of a handover, closing): not ours any more.
+      if (this.ws !== ws) return;
       let raw: unknown;
       try {
         raw = JSON.parse(data.toString());
@@ -251,6 +319,7 @@ class OrgSocket {
       this.ws = null;
       this.acked.clear();
       this.stopTokenRotation();
+      this.stopHandover();
       if (this.subs.size > 0) this.scheduleReconnect();
     };
     ws.on('close', (code) => {
@@ -272,33 +341,148 @@ class OrgSocket {
       down();
     });
     ws.on('error', () => undefined);
-    ws.on('unexpected-response', (_req, res) => {
+  }
+
+  // ── 0.2.3: make-before-break ─────────────────────────────────────────────────────────────────
+
+  private armHandover(openedAt: number): void {
+    this.stopHandover();
+    const after = this.deps.handoverAfterMs ?? HANDOVER_AFTER_MS;
+    if (after <= 0) return;
+    const jitter = Math.random() * (this.deps.handoverJitterMs ?? HANDOVER_JITTER_MS);
+    this.scheduleHandover(openedAt, after - jitter - (Date.now() - openedAt));
+  }
+
+  private scheduleHandover(openedAt: number, delay: number): void {
+    if (this.handoverTimer !== null || this.standby !== null) return;
+    const after = this.deps.handoverAfterMs ?? HANDOVER_AFTER_MS;
+    // The cut is near: it, and the ordinary reconnect, are next.
+    if (Date.now() + delay - openedAt > Math.max(HANDOVER_LAST_START_MS, after)) return;
+    this.handoverTimer = setTimeout(
+      () => {
+        this.handoverTimer = null;
+        void this.beginHandover(openedAt);
+      },
+      Math.max(0, delay),
+    );
+    (this.handoverTimer as { unref?: () => void }).unref?.();
+  }
+
+  /** No handover pending or in flight (the socket went, closed, or was replaced). */
+  private stopHandover(): void {
+    if (this.handoverTimer !== null) clearTimeout(this.handoverTimer);
+    this.handoverTimer = null;
+    this.dropStandby();
+  }
+
+  private dropStandby(): void {
+    const sb = this.standby;
+    this.standby = null;
+    if (!sb) return;
+    if (sb.timer !== null) clearTimeout(sb.timer);
+    if (sb.ws.readyState === WebSocket.OPEN) sb.ws.close(1000, 'handover');
+    else sb.ws.terminate();
+  }
+
+  private async beginHandover(openedAt: number): Promise<void> {
+    const old = this.ws;
+    const usable = () =>
+      this.ws === old && this.isOpen() && !this.closedForGood && this.subs.size > 0;
+    if (!usable() || this.standby !== null) return;
+    const retry = () => {
+      if (usable()) this.scheduleHandover(openedAt, this.deps.handoverRetryMs ?? HANDOVER_RETRY_MS);
+    };
+    let client: HqClient | null;
+    let headers: Record<string, string>;
+    try {
+      client = await this.deps.client();
+      if (!client) return retry();
+      headers = await client.upgradeHeaders(REMOTE_EVENTS_WS_PATH, this.org);
+    } catch {
+      return retry();
+    }
+    if (!usable() || this.standby !== null) return;
+    const next = (this.deps.ws ?? defaultWs)(wsUrl(client.host, REMOTE_EVENTS_WS_PATH), headers);
+    const sb: Standby = {
+      ws: next,
+      client,
+      token: /^Bearer (.+)$/.exec(headers.Authorization ?? '')?.[1] ?? null,
+      openedAt: Date.now(),
+      sent: new Set(),
+      answered: new Set(),
+      acked: new Set(),
+      timer: null,
+    };
+    this.standby = sb;
+    // Refused, failed, closed, or never acked: quiet (the live socket carries on), tried again.
+    const giveUp = () => {
+      if (this.standby !== sb) return;
+      this.dropStandby();
+      retry();
+    };
+    sb.timer = setTimeout(giveUp, HANDOVER_ADMIT_MS);
+    (sb.timer as { unref?: () => void }).unref?.();
+    next.on('error', () => undefined);
+    next.on('unexpected-response', (_req, res) => {
       res.resume();
-      const status = res.statusCode ?? 0;
-      if (status === 404 || status === 401 || status === 403) {
-        // Not available here (404), or not allowed: retry slowly, never in a loop.
-        this.backoff = this.deps.maxBackoffMs ?? 30_000;
-      }
-      // L2b: the upgrade itself refused the token (a cached nonce skipped the nonce fetch).
-      if (status === 401) this.unauthorized();
-      if (status === 429) {
-        // Too many sockets for this sign-in (other windows hold them) or dialling too fast: wait
-        // long, and say so once. The 60 s root refresh keeps the Explorer moving meanwhile.
-        this.backoff = Math.max(
-          this.deps.refusedBackoffMs ?? 300_000,
-          this.deps.minBackoffMs ?? 1_000,
-        );
-        if (!this.refusalSaid) {
-          this.refusalSaid = true;
-          try {
-            this.deps.onRefused?.(this.org, status);
-          } catch {
-            /* a notice must never break the socket's own bookkeeping */
-          }
-        }
-      }
-      ws.terminate();
+      giveUp();
     });
+    next.on('close', giveUp);
+    next.on('open', () => {
+      if (this.standby !== sb) return;
+      sb.openedAt = Date.now();
+      for (const id of this.subs.keys()) {
+        sb.sent.add(id);
+        next.send(JSON.stringify({ type: 'subscribe', workspaceId: id, intent: 'reconnect' }));
+      }
+    });
+    next.on('message', (data) => {
+      if (this.standby !== sb) return;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      const frame = parseEventsFrame(raw);
+      if (frame === null) return;
+      if (frame.type === 'subscribed') {
+        sb.answered.add(frame.workspaceId);
+        if (frame.watch && frame.state === 'running') sb.acked.add(frame.workspaceId);
+        else sb.acked.delete(frame.workspaceId);
+        if ([...sb.sent].every((id) => sb.answered.has(id))) this.takeOver(sb);
+        return;
+      }
+      if (frame.type === 'error' || frame.type === 'unsubscribed') {
+        giveUp();
+        return;
+      }
+      if (frame.type === 'workspace-state' && frame.state !== 'running') {
+        sb.acked.delete(frame.workspaceId);
+      }
+      // Both sockets carry the team's changes during the overlap: pass them on.
+      this.emit(frame);
+    });
+  }
+
+  private takeOver(sb: Standby): void {
+    if (sb.timer !== null) clearTimeout(sb.timer);
+    this.standby = null;
+    const old = this.ws;
+    for (const event of ['message', 'close', 'open', 'unexpected-response'] as const) {
+      sb.ws.removeAllListeners(event);
+    }
+    this.ws = sb.ws;
+    this.acked.clear();
+    for (const id of sb.acked) if (this.subs.has(id)) this.acked.add(id);
+    this.wire(sb.ws, sb.client);
+    this.lastToken = sb.token;
+    this.startTokenRotation(sb.client);
+    // Folders closed or opened while the standby was being acked: settled on the new socket.
+    for (const id of sb.sent) if (!this.subs.has(id)) this.sendUnsubscribe(id);
+    for (const id of this.subs.keys()) if (!sb.sent.has(id)) this.sendSubscribe(id);
+    this.armHandover(sb.openedAt);
+    old?.close(1000, 'handover');
   }
 
   /**
@@ -335,6 +519,7 @@ class OrgSocket {
     if (old !== null && old !== ws) {
       this.acked.clear();
       this.stopTokenRotation();
+      this.stopHandover();
       old.terminate();
     }
   }
@@ -417,6 +602,7 @@ class OrgSocket {
     this.ws = null;
     this.acked.clear();
     this.stopTokenRotation();
+    this.stopHandover();
     ws?.terminate();
     this.everConnected = this.everConnected || ws !== null;
     this.backoff = this.deps.minBackoffMs ?? 1_000;
@@ -428,6 +614,7 @@ class OrgSocket {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.stopTokenRotation();
+    this.stopHandover();
     const ws = this.ws;
     this.ws = null;
     this.acked.clear();

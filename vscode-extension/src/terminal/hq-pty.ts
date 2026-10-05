@@ -14,6 +14,13 @@
  * `open()` waits for the first `setDimensions` (250 ms) when VS Code did not pass one, so the attach
  * never paints at 80x24 and then reflows (DEF-192).
  *
+ * SHARED GEOMETRY (terminal-shared-geometry): while another window (the web tab, another VS Code
+ * window) has the session's pty, this terminal draws at the pty's size through
+ * `onDidOverrideDimensions` and repaints once; the override is cleared (`undefined`) the moment it is
+ * the owner again. VS Code applies an override only where it is SMALLER than the panel, so a panel
+ * narrower than the pty draws at the panel's size and its snapshot is rendered for that. `claim`
+ * (the terminal became active, or its window gained focus) takes the size back.
+ *
  * A terminal belongs to the ACCOUNT that opened it (hq-vscode-multi-account §6): its service is that
  * account's, its tab name carries the account's short label while 2 or more accounts are signed in,
  * and when another window renews the account the terminal re-attaches in the same tab (decision 26).
@@ -47,6 +54,11 @@ export interface PtyDeps {
   vsCodeTypeaheadOn: () => boolean;
   /** Is this window focused or active (presence is sent only then, decision 17)? */
   windowActive: () => boolean;
+  /**
+   * terminal-shared-geometry: is THIS terminal in front (the window focused and it the active
+   * terminal)? A focus claim still waiting out its debounce is dropped when it is not. Absent: yes.
+   */
+  inFront?: () => boolean;
   /** The machine reported listening ports: offer them in HQ Ports. */
   offerPorts: (team: Team, ports: number[]) => void;
   /** The terminal's state for the status bar. */
@@ -107,11 +119,16 @@ export class HqPty implements vscode.Pseudoterminal {
   private readonly out = new vscode.EventEmitter<string>();
   private readonly closed = new vscode.EventEmitter<number | void>();
   private readonly name = new vscode.EventEmitter<string>();
+  private readonly overrideDims = new vscode.EventEmitter<vscode.TerminalDimensions | undefined>();
   readonly onDidWrite = this.out.event;
   readonly onDidClose = this.closed.event;
   readonly onDidChangeName = this.name.event;
+  readonly onDidOverrideDimensions = this.overrideDims.event;
 
+  /** The PANEL's size: what this terminal claims with. Never an override echoed back (review C1). */
   private dims = { cols: 80, rows: 24 };
+  /** The override this terminal has set (terminal-shared-geometry), or null. */
+  private override: { cols: number; rows: number } | null = null;
   private session: AttachSession | null = null;
   private echo: LocalEchoSession | null = null;
   private inputHandler: ((chunk: Buffer) => void) | null = null;
@@ -187,8 +204,28 @@ export class HqPty implements vscode.Pseudoterminal {
     }
   }
 
+  /**
+   * terminal-shared-geometry: this terminal came to the front. If another window has the pty's size
+   * and this one may type, it takes it back (debounced in the attach; nothing while view-only).
+   */
+  claim(): void {
+    this.session?.claim();
+  }
+
+  /**
+   * VS Code's API says this keeps reporting the PANEL's size while an override is set. Review C1: a
+   * host that reports min(override, panel) instead would make the override look like the panel —
+   * this terminal would then think the pty is its own size, clear the override, see the panel
+   * again and claim from a window nobody is looking at, ping-ponging with the other viewer. So a
+   * report EQUAL to the active override is not taken as the panel's size; the panel size stays
+   * what it was. (A report smaller than the override is the panel really being smaller.)
+   */
   setDimensions(d: vscode.TerminalDimensions): void {
-    this.dims = { cols: d.columns, rows: d.rows };
+    const next = { cols: d.columns, rows: d.rows };
+    const o = this.override;
+    if (o && next.cols === o.cols && next.rows === o.rows) return;
+    if (next.cols === this.dims.cols && next.rows === this.dims.rows) return;
+    this.dims = next;
     this.resizeHandler?.();
   }
 
@@ -322,6 +359,17 @@ export class HqPty implements vscode.Pseudoterminal {
             if (this.resizeHandler === fn) this.resizeHandler = null;
           };
         },
+        matchGeometry: (d) => {
+          if (d === null) {
+            this.override = null;
+            this.overrideDims.fire(undefined);
+            return this.dims;
+          }
+          this.override = { cols: d.cols, rows: d.rows };
+          this.overrideDims.fire({ columns: d.cols, rows: d.rows });
+          // VS Code draws an override only where it is smaller than the panel.
+          return { cols: Math.min(d.cols, this.dims.cols), rows: Math.min(d.rows, this.dims.rows) };
+        },
       },
       {
         echo: this.echo,
@@ -329,6 +377,7 @@ export class HqPty implements vscode.Pseudoterminal {
         onForbidden: 'view-only',
         initialIntent: running ? 'open' : 'reconnect',
         presenceWhen: this.deps.windowActive,
+        ...(this.deps.inFront ? { inFront: this.deps.inFront } : {}),
         livenessPingMs: 30_000,
         livenessTimeoutMs: 10_000,
         onFirstOpen: () => {
@@ -447,5 +496,6 @@ export class HqPty implements vscode.Pseudoterminal {
     this.out.dispose();
     this.closed.dispose();
     this.name.dispose();
+    this.overrideDims.dispose();
   }
 }

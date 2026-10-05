@@ -269,7 +269,14 @@ export const stub = {
   opened: [] as string[],
   /** Documents shown (`window.showTextDocument`), by uri string. */
   shownDocs: [] as string[],
+  /** terminal-shared-geometry: fire `window.onDidChangeActiveTerminal` / `onDidChangeWindowState`. */
+  activeTerminalChanged: new EventEmitter<StubTerminal | undefined>(),
+  windowStateChanged: new EventEmitter<{ focused: boolean }>(),
   reset(): void {
+    this.activeTerminalChanged = new EventEmitter<StubTerminal | undefined>();
+    this.windowStateChanged = new EventEmitter<{ focused: boolean }>();
+    window.state.focused = true;
+    window.activeTerminal = undefined;
     this.tabGroups = [];
     this.progress = [];
     this.textDocuments = [];
@@ -315,8 +322,10 @@ export const window = {
   state: { focused: true },
   activeTerminal: undefined as StubTerminal | undefined,
   onDidCloseTerminal: () => ({ dispose: () => undefined }),
-  onDidChangeActiveTerminal: () => ({ dispose: () => undefined }),
-  onDidChangeWindowState: () => ({ dispose: () => undefined }),
+  onDidChangeActiveTerminal: (l: (t: StubTerminal | undefined) => void) =>
+    stub.activeTerminalChanged.event(l),
+  onDidChangeWindowState: (l: (s: { focused: boolean }) => void) =>
+    stub.windowStateChanged.event(l),
   createQuickPick: <T extends { label: string }>() => new StubQuickPick<T>(),
   /** Progress notifications: each one shown, until its task settles (`open` false after). */
   withProgress: <R>(

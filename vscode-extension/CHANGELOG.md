@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3
+
+- A session open in more than one place (HQ in the browser and a VS Code terminal, or two VS Code
+  windows) no longer garbles in the one that is not in front. The terminal in front sets the
+  session's size (switching to it, focusing its window, or typing); the others draw at that size and
+  redraw their screen once.
+
+- Session terminals no longer say "Connection lost, reconnecting..." once an hour. HQ renews every
+  connection hourly; the terminal now moves to a fresh connection a few minutes before, with nothing
+  on screen and no keystroke lost or repeated. If a connection still drops, the terminal reconnects
+  quietly and says so only when reconnecting takes more than a few seconds or it drops again.
+- The live file updates in the Explorer move to a fresh connection the same way, so they no longer
+  pause for a moment once an hour.
+
 ## 0.2.2
 
 - **Paste or drop images into session terminals.** Press Cmd+V (macOS) or Ctrl+V (Windows, Linux)

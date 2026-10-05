@@ -28,7 +28,7 @@ import { COPY } from '../../src/copy.js';
 import { HqApiError } from '@hq/client/api.js';
 import { ConnectRefusedError } from '@hq/client/connect.js';
 import { legacySignedIn, memento } from './harness.js';
-import { stub } from './vscode-stub.js';
+import { stub, window as stubWindow } from './vscode-stub.js';
 
 const WS_ID = '3f9a1c2e-1111-4222-8333-444455556666';
 
@@ -850,5 +850,215 @@ describe('Ports (D11)', () => {
     await ports.dismiss(offers[0]!);
     ports.offer(svc.ref, team, [8000]);
     expect(ports.getChildren()).toEqual([]);
+  });
+});
+
+describe('terminal-shared-geometry: the VS Code terminal and the pty size', () => {
+  const target = () => ({
+    account: svc.ref,
+    team: withTeamAliases(orgs())[0]!,
+    session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running' as const, canType: true },
+  });
+  const deps = () => ({
+    service: svc,
+    localEchoMode: () => 'off' as const,
+    vsCodeTypeaheadOn: () => false,
+    windowActive: () => true,
+    offerPorts: () => undefined,
+  });
+  /** A terminal endpoint that announces `pty()` after every `attached`, recording every frame. */
+  function announcing(pty: () => { cols: number; rows: number }): Array<Record<string, unknown>> {
+    const frames: Array<Record<string, unknown>> = [];
+    fake.terminal = (ws) => {
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        frames.push(f);
+        if (f.type !== 'attach') return;
+        ws.send(JSON.stringify({ type: 'history', sessionId: 's-1', data: 'screen' }));
+        ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+        ws.send(JSON.stringify({ type: 'geometry', sessionId: 's-1', ...pty() }));
+      });
+    };
+    return frames;
+  }
+  const attachesOf = (frames: Array<Record<string, unknown>>) =>
+    frames.filter((f) => f.type === 'attach');
+
+  it('another window has the pty: the override goes to its size, ONE repaint at it, and owner again clears it', async () => {
+    let pty = { cols: 100, rows: 30 };
+    const frames = announcing(() => pty);
+    const pty0 = new HqPty(deps(), target());
+    const overrides: Array<{ columns: number; rows: number } | undefined> = [];
+    pty0.onDidOverrideDimensions((d) => overrides.push(d));
+    pty0.open({ columns: 132, rows: 40 });
+
+    await waitFor(() => attachesOf(frames).length === 2);
+    expect(overrides).toEqual([{ columns: 100, rows: 30 }]);
+    expect(attachesOf(frames)[1]).toMatchObject({ cols: 100, rows: 30, intent: 'reconnect' });
+    expect(frames.some((f) => f.type === 'resize')).toBe(false); // matching is not claiming
+
+    // The web tab closed and this terminal's size is the pty's again (DEF-192 hand-back).
+    pty = { cols: 132, rows: 40 };
+    pty0.handleInput('x'); // a key from a non-owner claims first
+    await waitFor(() => frames.some((f) => f.type === 'input'));
+    const order = frames.filter((f) => f.type === 'resize' || f.type === 'input');
+    expect(order.map((f) => f.type)).toEqual(['resize', 'input']);
+    expect(order[0]).toMatchObject({ cols: 132, rows: 40 });
+    expect(overrides.at(-1)).toBeUndefined();
+    pty0.close();
+  });
+
+  it('the HQ terminal coming to the front (active terminal, focused window) claims the size', async () => {
+    const frames = announcing(() => ({ cols: 70, rows: 20 }));
+    const terminals = new Terminals({ accounts, offerPorts: () => undefined });
+    terminals.attach(target());
+    await waitFor(() => attachesOf(frames).length === 2); // the stub opens it at 80x24
+    const tab = stub.terminals[0]!;
+    const overrides: Array<{ columns: number; rows: number } | undefined> = [];
+    (tab.pty as unknown as HqPty).onDidOverrideDimensions((d) => overrides.push(d));
+
+    // Another terminal is active: no claim.
+    stub.activeTerminalChanged.fire(undefined);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(frames.some((f) => f.type === 'resize')).toBe(false);
+
+    stubWindow.activeTerminal = tab;
+    stub.activeTerminalChanged.fire(tab);
+    stub.windowStateChanged.fire({ focused: true }); // the burst: one claim
+    await waitFor(() => frames.some((f) => f.type === 'resize'));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(frames.filter((f) => f.type === 'resize')).toEqual([
+      { type: 'resize', sessionId: 's-1', cols: 80, rows: 24 },
+    ]);
+    expect(overrides).toEqual([undefined]);
+    terminals.dispose();
+  });
+
+  it('a window that is not focused does not claim when its HQ terminal becomes active', async () => {
+    const frames = announcing(() => ({ cols: 70, rows: 20 }));
+    const terminals = new Terminals({ accounts, offerPorts: () => undefined });
+    terminals.attach(target());
+    await waitFor(() => attachesOf(frames).length === 2);
+    const tab = stub.terminals[0]!;
+    stubWindow.state.focused = false;
+    stubWindow.activeTerminal = tab;
+    stub.activeTerminalChanged.fire(tab);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(frames.some((f) => f.type === 'resize')).toBe(false);
+    terminals.dispose();
+  });
+});
+
+describe('review C1: a host that echoes min(override, panel) to setDimensions', () => {
+  const target = () => ({
+    account: svc.ref,
+    team: withTeamAliases(orgs())[0]!,
+    session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running' as const, canType: true },
+  });
+  /** The session is also open elsewhere (2 viewers) at 100x30; every frame recorded. */
+  function elsewhereAt(pty: { cols: number; rows: number }): Array<Record<string, unknown>> {
+    const frames: Array<Record<string, unknown>> = [];
+    fake.terminal = (ws) => {
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        frames.push(f);
+        if (f.type === 'resize') {
+          ws.send(
+            JSON.stringify({
+              type: 'geometry',
+              sessionId: 's-1',
+              cols: f.cols,
+              rows: f.rows,
+              viewers: 2,
+            }),
+          );
+        }
+        if (f.type !== 'attach') return;
+        ws.send(JSON.stringify({ type: 'history', sessionId: 's-1', data: 'screen' }));
+        ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+        ws.send(JSON.stringify({ type: 'geometry', sessionId: 's-1', ...pty, viewers: 2 }));
+      });
+    };
+    return frames;
+  }
+  /** The suspected host: an override is reported back as min(override, panel). */
+  function hostEchoing(pty0: HqPty, panel: { columns: number; rows: number }) {
+    const overrides: Array<{ columns: number; rows: number } | undefined> = [];
+    pty0.onDidOverrideDimensions((d) => {
+      overrides.push(d);
+      setTimeout(
+        () =>
+          pty0.setDimensions(
+            d
+              ? { columns: Math.min(d.columns, panel.columns), rows: Math.min(d.rows, panel.rows) }
+              : panel,
+          ),
+        5,
+      );
+    });
+    pty0.open(panel);
+    return overrides;
+  }
+  const deps = (inFront: () => boolean) => ({
+    service: svc,
+    localEchoMode: () => 'off' as const,
+    vsCodeTypeaheadOn: () => false,
+    windowActive: () => true,
+    offerPorts: () => undefined,
+    inFront,
+  });
+
+  it('an unfocused window: the override stays, nothing is claimed, no ping-pong', async () => {
+    const frames = elsewhereAt({ cols: 100, rows: 30 });
+    const pty0 = new HqPty(
+      deps(() => false),
+      target(),
+    );
+    const overrides = hostEchoing(pty0, { columns: 132, rows: 40 });
+    await waitFor(() => frames.filter((f) => f.type === 'attach').length === 2);
+    await new Promise((r) => setTimeout(r, 800));
+    expect(frames.filter((f) => f.type === 'resize')).toEqual([]);
+    expect(overrides).toEqual([{ columns: 100, rows: 30 }]); // never cleared, never re-set
+    expect(frames.filter((f) => f.type === 'attach')).toHaveLength(2); // the one repaint
+    pty0.close();
+  });
+
+  it('the same window brought to the front claims ONCE at its panel size, and settles', async () => {
+    const frames = elsewhereAt({ cols: 100, rows: 30 });
+    const pty0 = new HqPty(
+      deps(() => true),
+      target(),
+    );
+    const overrides = hostEchoing(pty0, { columns: 132, rows: 40 });
+    await waitFor(() => frames.filter((f) => f.type === 'attach').length === 2);
+    pty0.claim();
+    await waitFor(() => frames.some((f) => f.type === 'resize'));
+    await new Promise((r) => setTimeout(r, 800));
+    expect(frames.filter((f) => f.type === 'resize')).toEqual([
+      { type: 'resize', sessionId: 's-1', cols: 132, rows: 40 },
+    ]);
+    expect(overrides).toEqual([{ columns: 100, rows: 30 }, undefined]);
+    pty0.close();
+  });
+
+  it('an unfocused OWNER whose panel changes does not send its size; it matches the pty instead', async () => {
+    const frames = elsewhereAt({ cols: 132, rows: 40 }); // this terminal owns the size
+    const pty0 = new HqPty(
+      deps(() => false),
+      target(),
+    );
+    const overrides = hostEchoing(pty0, { columns: 132, rows: 40 });
+    await waitFor(() => frames.filter((f) => f.type === 'attach').length === 1);
+    await new Promise((r) => setTimeout(r, 100));
+    pty0.setDimensions({ columns: 150, rows: 45 }); // the window is resized in the background
+    await new Promise((r) => setTimeout(r, 600));
+    expect(frames.filter((f) => f.type === 'resize')).toEqual([]);
+    expect(overrides).toEqual([{ columns: 132, rows: 40 }]);
+    expect(frames.filter((f) => f.type === 'attach').at(-1)).toMatchObject({
+      cols: 132,
+      rows: 40,
+      intent: 'reconnect',
+    });
+    pty0.close();
   });
 });

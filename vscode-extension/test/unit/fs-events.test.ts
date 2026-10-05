@@ -672,3 +672,156 @@ describe('0.2.2: `secrets-changed` is a frame the client takes', () => {
     expect(parseEventsFrame({ type: 'secrets-changed' })).toBeNull();
   });
 });
+
+describe('0.2.3: make-before-break before the hourly LB cut', () => {
+  /** A fake HQ whose nth upgrade may be refused with `refuse(n)` (an HTTP status) or accepted. */
+  async function hqWith(
+    refuse: (n: number) => number | null,
+    onConnect: (ws: WebSocket, n: number) => void,
+  ): Promise<{ host: string; closes: Map<number, number> }> {
+    server = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const closes = new Map<number, number>();
+    let n = 0;
+    server.on('upgrade', (req, socket, head) => {
+      n += 1;
+      const k = n;
+      const status = refuse(k);
+      if (status !== null) {
+        socket.write(`HTTP/1.1 ${status} Refused\r\nConnection: close\r\n\r\n`);
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.on('close', (code) => closes.set(k, code));
+        onConnect(ws, k);
+      });
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    return { host: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, closes };
+  }
+
+  const ack = (ws: WebSocket, id: string) =>
+    ws.send(JSON.stringify({ type: 'subscribed', workspaceId: id, state: 'running', watch: true }));
+
+  it('a new socket subscribes every team `reconnect`; once all are acked it takes over and the old closes 1000: no resync, live throughout', async () => {
+    const seen: string[] = [];
+    const sockets = new Map<number, WebSocket>();
+    const { host, closes } = await hqWith(
+      () => null,
+      (ws, n) => {
+        sockets.set(n, ws);
+        ws.on('message', (d) => {
+          const f = JSON.parse(d.toString()) as {
+            type: string;
+            workspaceId: string;
+            intent: string;
+          };
+          seen.push(`${n}:${f.type}:${f.intent ?? ''}`);
+          if (f.type === 'subscribe') ack(ws, f.workspaceId);
+        });
+      },
+    );
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 20,
+      maxBackoffMs: 40,
+      handoverAfterMs: 150,
+      handoverJitterMs: 0,
+    });
+    hubs.push(hub);
+    const frames: EventsServerFrame[] = [];
+    hub.onFrame((f) => void frames.push(f));
+    const sub = hub.subscribe(team);
+    await until(() => hub.isLive(team));
+    let notLive = 0;
+    const sampler = setInterval(() => {
+      if (!hub.isLive(team)) notLive += 1;
+    }, 2);
+    try {
+      await until(() => closes.get(1) !== undefined, 2_000);
+      expect(closes.get(1)).toBe(1000);
+      expect(seen.slice(0, 2)).toEqual(['1:subscribe:open', '2:subscribe:reconnect']);
+      expect(frames.some((f) => f.type === 'resync')).toBe(false);
+      expect(notLive).toBe(0);
+      // The new socket is THE socket now: its frames come through.
+      sockets.get(2)!.send(
+        JSON.stringify({
+          type: 'fs-changed',
+          workspaceId: WS_ID,
+          seq: 1,
+          changes: [{ path: 'a.txt' }],
+        }),
+      );
+      await until(() => frames.some((f) => f.type === 'fs-changed'));
+    } finally {
+      clearInterval(sampler);
+      sub.dispose();
+    }
+  });
+
+  it('a team opened while the new socket was being acked is subscribed on it after the switch', async () => {
+    const B = '3f9a1c2e-2222-4222-8333-444455556666';
+    const teamB = { ...team, alias: 'hq-b', workspace: { id: B } } as unknown as Team;
+    const seen: string[] = [];
+    const { host, closes } = await hqWith(
+      () => null,
+      (ws, n) => {
+        ws.on('message', (d) => {
+          const f = JSON.parse(d.toString()) as { type: string; workspaceId: string };
+          if (f.type !== 'subscribe') return;
+          seen.push(`${n}:${f.workspaceId === WS_ID ? 'A' : 'B'}`);
+          // The new socket's ack is slow: a folder opens meanwhile.
+          if (n === 2 && f.workspaceId === WS_ID) setTimeout(() => ack(ws, f.workspaceId), 120);
+          else ack(ws, f.workspaceId);
+        });
+      },
+    );
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 20,
+      maxBackoffMs: 40,
+      handoverAfterMs: 100,
+      handoverJitterMs: 0,
+    });
+    hubs.push(hub);
+    hub.subscribe(team);
+    await until(() => seen.includes('2:A'), 2_000);
+    hub.subscribe(teamB); // on the old socket, before the switch
+    await until(() => closes.get(1) === 1000, 2_000);
+    await until(() => seen.includes('2:B'));
+    await until(() => hub.isLive(teamB));
+    expect(seen.filter((s) => s.startsWith('1:'))).toEqual(['1:A', '1:B']);
+  });
+
+  it('a refused new socket (429: other windows hold the slots) is quiet: the old one stays, and it is tried again', async () => {
+    const refusals: number[] = [];
+    const { host, closes } = await hqWith(
+      (n) => (n === 2 ? 429 : null),
+      (ws) => {
+        ws.on('message', (d) => {
+          const f = JSON.parse(d.toString()) as { type: string; workspaceId: string };
+          if (f.type === 'subscribe') ack(ws, f.workspaceId);
+        });
+      },
+    );
+    const hub = new EventsHub({
+      client: async () => client(host),
+      minBackoffMs: 20,
+      maxBackoffMs: 40,
+      handoverAfterMs: 80,
+      handoverJitterMs: 0,
+      handoverRetryMs: 100,
+      onRefused: (_org, status) => void refusals.push(status),
+    });
+    hubs.push(hub);
+    const frames: EventsServerFrame[] = [];
+    hub.onFrame((f) => void frames.push(f));
+    hub.subscribe(team);
+    await until(() => hub.isLive(team));
+    await until(() => closes.get(1) === 1000, 2_000); // the third dial took over
+    expect(refusals).toEqual([]);
+    expect(frames.some((f) => f.type === 'resync')).toBe(false);
+    expect(hub.isLive(team)).toBe(true);
+  });
+});

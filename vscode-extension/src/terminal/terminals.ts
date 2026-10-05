@@ -122,7 +122,15 @@ export class Terminals {
           }
         }
       }),
-      vscode.window.onDidChangeActiveTerminal(() => this.changed.fire()),
+      vscode.window.onDidChangeActiveTerminal((t) => {
+        this.changed.fire();
+        // terminal-shared-geometry: an HQ terminal brought to the front claims the pty's size.
+        if (t && vscode.window.state.focused) this.claimFor(t);
+      }),
+      vscode.window.onDidChangeWindowState((state) => {
+        const t = vscode.window.activeTerminal;
+        if (state.focused && t) this.claimFor(t);
+      }),
       deps.accounts.onAccountRemoved((ref) => this.closeAccount(ref)),
       deps.accounts.onAccountRenewed((ref) => {
         for (const o of this.open.values()) {
@@ -134,6 +142,11 @@ export class Terminals {
         for (const o of this.open.values()) o.pty.relabel();
       }),
     );
+  }
+
+  /** terminal-shared-geometry: the HQ terminal `t` came to the front (debounced in the attach). */
+  private claimFor(t: vscode.Terminal): void {
+    for (const o of this.open.values()) if (o.terminal === t) o.pty.claim();
   }
 
   private static key(target: Pick<SessionTarget, 'account' | 'session'>): string {
@@ -206,6 +219,8 @@ export class Terminals {
         windowActive: () =>
           vscode.window.state.focused ||
           (vscode.window.state as { active?: boolean }).active === true,
+        inFront: () =>
+          vscode.window.state.focused && vscode.window.activeTerminal === entry.terminal,
         offerPorts: (team, ports) => this.deps.offerPorts(target.account, team, ports),
         // The team's live state (F11), else the last listing: an off team attaches passively.
         teamRunning: async (team) => {

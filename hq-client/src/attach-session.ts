@@ -19,6 +19,17 @@
  *   - a dropped socket (1006, or 1001 from a draining replica / the hourly LB cut) reconnects with
  *     backoff and a freshly signed upgrade, re-attaching with intent `reconnect`.
  *
+ * 0.2.3, THE HOURLY LB CUT: the load balancer closes every WebSocket at 3600 s (the backend config's
+ * `timeoutSec`). So, as the web app does, (1) a drop of a socket that was admitted and STAYED UP
+ * reconnects quietly: "connection lost" is said only when the re-attach is not admitted within
+ * `QUIET_RECONNECT_NOTICE_MS`, or on a second drop in a row; and (2) MAKE-BEFORE-BREAK: before the
+ * cut (`HANDOVER_AFTER_MS`, minus jitter) a standby socket attaches `reconnect`. Once it is admitted
+ * and the terminal has been quiet for `HANDOVER_SETTLE_MS` on both sockets, it takes over in one
+ * step: the old one closes 1000, and keys typed meanwhile wait until it has closed, then go out on the
+ * new one, in order. Output carries no sequence number, so a terminal with output in flight is never
+ * spliced: the standby is closed and the handover tried again `HANDOVER_RETRY_MS` later (and if it
+ * never finds a quiet moment, the cut lands and (1) takes it).
+ *
  * FAIL 4 (nonprod 2026-09-28): ONCE A WAKE IS OVER, THE PERSON'S ATTACH IS SAID AGAIN, AS `open`.
  * A machine that idle-slept drops the api tier's relay socket, and every session it served is left
  * `reconnecting` there; only an attach by someone who may write re-attaches one (DEF-147's
@@ -32,6 +43,15 @@
  * are predicted by the SAME engine the browser runs and drawn with ANSI bytes (`./local-echo/`), and
  * output goes through that session's ordered queue instead of straight to the sink.
  *
+ * SHARED GEOMETRY (terminal-shared-geometry, prod 2026-10-02): one session in the web tab AND here.
+ * The pty follows whoever claimed it last, and a terminal at another size garbles under Claude
+ * Code's relative redraws. The server announces the pty's size (`geometry`); a terminal at another
+ * size is a NON-OWNER: it draws at the pty's size where the sink can (`matchGeometry`, VS Code's
+ * dimension override) and repaints once from a snapshot at the size it really draws (a `reconnect`
+ * attach). The CLI cannot size the person's terminal, so its snapshot is at its own size. A focus
+ * claim (`claim`, the extension) and a key from a non-owner send this terminal's own size first;
+ * a view-only attach never claims.
+ *
  * ⛔ "BACK" IS ONE SIGNAL ONLY: an `attached` whose answer carried NO wake code and NO asleep notice
  *    (review 2026-09-28). Bytes are not it: a SUSPENDING machine still has its relay socket, so it
  *    answers the wake code AND a readable screen, and ending the wake on those bytes re-sent `open`
@@ -41,6 +61,7 @@
  */
 import type { RemoteSessionSummary } from '@kpa/shared/remote.types';
 import { createTerminalQueryFilter } from '@kpa/shared/terminal-queries';
+import { isPassiveTerminalInput, mayClaimSize } from '@kpa/shared/terminal-input';
 import WebSocket from 'ws';
 import { HqApiError, NotLoggedInError, RefreshNeedsRenewingError, type HqClient } from './api.js';
 import { WAKE_TIMEOUT_MS, wakeTimeoutMessage } from './connect.js';
@@ -67,6 +88,22 @@ const WORKSPACE_ASLEEP_NOTICE = 'workspace_asleep';
 export const RECONNECT_BASE_MS = 1_000;
 export const RECONNECT_MAX_MS = 10_000;
 export const MAX_RECONNECTS = 8;
+/** 0.2.3: a stable socket's drop says "connection lost" only if not re-admitted within this. */
+export const QUIET_RECONNECT_NOTICE_MS = 3_000;
+/** 0.2.3 make-before-break: the socket age a handover starts at (the LB cuts at 3600 s)... */
+export const HANDOVER_AFTER_MS = 55 * 60_000;
+/** ...minus a random part of this, so a window's terminals do not all hand over at once... */
+export const HANDOVER_JITTER_MS = 3 * 60_000;
+/** ...again this long after a handover that found the terminal busy... */
+export const HANDOVER_RETRY_MS = 60_000;
+/** ...and none started past this age (the cut, and the quiet reconnect, are next). */
+export const HANDOVER_LAST_START_MS = 59 * 60_000;
+/** Output-free time on both sockets before the switch. */
+export const HANDOVER_SETTLE_MS = 300;
+/** A standby not admitted within this is given up. */
+export const HANDOVER_ADMIT_MS = 15_000;
+/** Keys typed during the switch wait for the old socket's close at most this long. */
+export const HANDOVER_INPUT_HOLD_MS = 2_000;
 
 /**
  * local-echo RTT (Decision 15): WebSocket PROTOCOL pings, answered by the `ws` library at the other
@@ -86,6 +123,25 @@ const TERMINAL_ERROR_CODES = new Set(['NOT_FOUND', 'SESSION_STOPPED', 'FORBIDDEN
 /** A retryable error's re-attach: 2 s doubling to 10 s, for as long as the attach lives. */
 export const ERROR_RETRY_MS = 2_000;
 export const ERROR_RETRY_MAX_MS = 10_000;
+
+/**
+ * Focus events arrive in bursts (window focus + active terminal), and a person flicking between
+ * windows fires them repeatedly: one claim, after the burst, by the terminal still in front.
+ */
+export const CLAIM_DEBOUNCE_MS = 300;
+/**
+ * The smallest terminal that may claim the pty (the browser's rule, `client/src/lib/shared-geometry.ts`):
+ * below it, it keeps drawing at the pty's size and its keys go in at that size, so a tiny terminal
+ * cannot shrink the session to something unusable. DEF-192's 100 x 24 read-only floor stays as is.
+ */
+export { MIN_CLAIM_COLS, MIN_CLAIM_ROWS } from '@kpa/shared/terminal-input';
+/** A burst of pty size changes costs one snapshot, at the newest size. */
+export const REPAINT_DEBOUNCE_MS = 150;
+/**
+ * How long this terminal's OWN resize is trusted over a different size the server announces (a
+ * size broadcast before ours landed). Past it, the last size heard decides.
+ */
+export const OWN_RESIZE_ECHO_MS = 1_500;
 
 /** The RETRYABLE codes the server sends while a machine starts or wakes (never a failure). */
 const WAKE_CODES = new Set([
@@ -107,6 +163,12 @@ export interface TerminalSink {
   onInput(fn: (chunk: Buffer) => void): () => void;
   /** Geometry changes; the returned function unsubscribes. */
   onResize(fn: () => void): () => void;
+  /**
+   * terminal-shared-geometry: draw at exactly `dims` (the pty's size) instead of the terminal's own,
+   * or go back to its own with `null`. Returns the size it will really draw at (VS Code applies an
+   * override only where it is smaller than the panel). Absent (the CLI): it cannot be sized.
+   */
+  matchGeometry?(dims: { cols: number; rows: number } | null): { cols: number; rows: number };
 }
 
 /** The sentences an attach says on its own. The CLI's are the defaults. */
@@ -209,12 +271,25 @@ export interface AttachSessionOptions {
   reconnectBaseMs?: number;
   /** How long an admitted attach must stay up to reset the reconnect budget (`ADMIT_STABLE_MS`). */
   admitStableMs?: number;
+  /** 0.2.3 (`QUIET_RECONNECT_NOTICE_MS`). */
+  quietReconnectNoticeMs?: number;
+  /** 0.2.3 make-before-break (`HANDOVER_AFTER_MS`); 0 turns it off. */
+  handoverAfterMs?: number;
+  handoverJitterMs?: number;
+  handoverRetryMs?: number;
+  handoverSettleMs?: number;
   errorRetryMs?: number;
   /**
    * 0.2.2: who may type in the session changed (`ownership-changed`, which carries no facts). The
    * web refetches the session; the caller does the same and applies it with `setCanType`.
    */
   onOwnershipChanged?: () => void;
+  /**
+   * terminal-shared-geometry: is this terminal in front right now? A focus `claim` that is still
+   * waiting out its debounce is dropped when this says no (two windows fighting for focus settle on
+   * the one that ends in front). Default: always.
+   */
+  inFront?: () => boolean;
   /**
    * The first attach's intent. `open` (default) is the person's gesture and wakes a sleeping
    * machine; the extension passes `reconnect` for a team it knows is off, so the server answers
@@ -251,6 +326,12 @@ export interface AttachSession {
   canType(): boolean;
   /** 0.2.2: apply typing rights the caller re-read (after `onOwnershipChanged`). */
   setCanType(can: boolean): void;
+  /**
+   * terminal-shared-geometry: this terminal came to the front (the extension: it became the active
+   * terminal, or its window gained focus). Claims the pty's size after a short debounce if this
+   * terminal is not the owner, may type, and is still in front then.
+   */
+  claim(): void;
 }
 
 /**
@@ -269,6 +350,7 @@ interface WakeState {
 
 type ServerFrame =
   | { type: 'output' | 'history'; sessionId: string; data: string }
+  | { type: 'geometry'; sessionId: string; cols?: unknown; rows?: unknown; viewers?: unknown }
   | { type: 'reset'; sessionId: string; reattach?: boolean }
   | { type: 'status'; sessionId: string; status?: string }
   | { type: 'error'; sessionId: string | null; message: string; code: string }
@@ -276,9 +358,20 @@ type ServerFrame =
   | { type: 'runner-metrics'; sessionId: string; listenPorts?: unknown }
   | { type: string; sessionId?: string };
 
+/** A standby socket that took over (0.2.3): admitted, quiet, and the old one is closing. */
+interface Handover {
+  ws: WebSocket;
+  headers: Record<string, string>;
+  openedAt: number;
+  filter: { push(chunk: string): string; flush(): string };
+  /** The old socket has closed (or the hold ran out): held keys may go. */
+  oldClosed: Promise<void>;
+}
+
 /** How one socket ended. `dropped` is a transport loss worth a reconnect. */
 type SocketEnd =
   | { kind: 'dropped' }
+  | ({ kind: 'handover' } & Handover)
   | { kind: 'ended'; exitCode: number; message: string | null; unauthorized?: true };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -308,6 +401,18 @@ export function createAttachSession(
   let current: WebSocket | null = null;
   let detachRequested = false;
   const detachHooks = new Set<() => void>();
+  // terminal-shared-geometry, held across sockets: what the server last said the pty is, and the
+  // size this terminal draws at while it is not the owner (null: it is the owner).
+  const geometry: {
+    pty: Dims | null;
+    drawn: Dims | null;
+    /** The pty size the current match was made for (a repeat of it is not news). */
+    matchedTo: Dims | null;
+    ownResize: { dims: Dims; at: number } | null;
+  } = { pty: null, drawn: null, matchedTo: null, ownResize: null };
+  /** The live socket's claim, or null between sockets. */
+  let claimNow: (() => void) | null = null;
+  let claimTimer: NodeJS.Timeout | null = null;
 
   const setCanType = (next: boolean) => {
     if (next === canType) return;
@@ -321,88 +426,151 @@ export function createAttachSession(
     let reconnects = 0;
     /** When the current socket's attach was admitted (null: not yet). */
     let admittedAt: number | null = null;
-    for (;;) {
-      if (detachRequested) return { kind: 'ended', exitCode: 0, message: `\r\n${copy.detached}` };
-      // A FRESH signed upgrade every time: a nonce is single-use and the token may have rotated.
-      let headers: Record<string, string>;
-      try {
-        headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
-      } catch (err) {
-        // 0.2.2 (c): a transient failure (a hung or refused nonce, a network blip) is a failed
-        // dial, never the end: the same backoff as an upgrade HQ did not answer. The first dial
-        // keeps S4 (said at once). Anything else is the caller's, as before.
-        if (!isTransientUpgradeError(err)) throw err;
-        if ((reconnects > 0 || announced) && reconnects < MAX_RECONNECTS) {
+    /** 0.2.3: a quiet drop's "connection lost", said only if no re-attach is admitted in time. */
+    let lostNotice: NodeJS.Timeout | null = null;
+    const cancelLostNotice = () => {
+      if (lostNotice) clearTimeout(lostNotice);
+      lostNotice = null;
+    };
+    /** 0.2.3: a standby that took over: the next socket is already open and admitted. */
+    let next: Handover | null = null;
+    try {
+      return await runLoop();
+    } finally {
+      cancelLostNotice();
+    }
+
+    async function runLoop(): Promise<AttachEnd> {
+      for (;;) {
+        if (detachRequested) return { kind: 'ended', exitCode: 0, message: `\r\n${copy.detached}` };
+        const adopt = next;
+        next = null;
+        // A FRESH signed upgrade every time: a nonce is single-use and the token may have rotated.
+        let headers: Record<string, string>;
+        let ws: WebSocket;
+        if (adopt) {
+          headers = adopt.headers;
+          ws = adopt.ws;
+          current = ws;
+        } else {
+          try {
+            headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+          } catch (err) {
+            // 0.2.2 (c): a transient failure (a hung or refused nonce, a network blip) is a failed
+            // dial, never the end: the same backoff as an upgrade HQ did not answer. The first dial
+            // keeps S4 (said at once). Anything else is the caller's, as before.
+            if (!isTransientUpgradeError(err)) throw err;
+            if ((reconnects > 0 || announced) && reconnects < MAX_RECONNECTS) {
+              await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+              reconnects += 1;
+              intent = 'reconnect';
+              continue;
+            }
+            if (reconnects >= MAX_RECONNECTS) return { kind: 'lost' };
+            return { kind: 'refused', status: 0 };
+          }
+          ws = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), headers);
+          current = ws;
+          const opened = await new Promise<number | null>((resolve) => {
+            ws.once('open', () => resolve(null));
+            ws.once('unexpected-response', (_req, res) => {
+              const status = res.statusCode ?? 0;
+              res.resume();
+              ws.terminate();
+              resolve(status);
+            });
+            ws.once('error', () => resolve(0));
+          });
+          if (opened !== null) {
+            // A reconnect that meets a restarting HQ (or no network yet) keeps trying, bounded. Never
+            // the FIRST dial (S4): an attach that starts `reconnect` (a team that is off) shows HQ's
+            // refusal at once instead of retrying silently.
+            if (
+              (reconnects > 0 || announced) &&
+              intent === 'reconnect' &&
+              (opened === 0 || opened === 503) &&
+              reconnects < MAX_RECONNECTS
+            ) {
+              await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+              reconnects += 1;
+              continue;
+            }
+            return { kind: 'refused', status: opened };
+          }
+          if (!announced) {
+            announced = true;
+            opts.onFirstOpen?.();
+          }
+        }
+        const end = await runSocket(
+          ws,
+          () => {
+            // Review N5: the budget is MAX_RECONNECTS drops IN A ROW. An admitted attach that LIVES
+            // ends the row (checked at the drop below), so a day of hourly LB cuts never adds up to a
+            // give-up, while an admit-then-drop loop still runs out.
+            admittedAt = Date.now();
+            cancelLostNotice(); // 0.2.3: back within the bound: nothing to say
+          },
+          intent,
+          headers,
+          adopt,
+        );
+        if (end.kind === 'handover') {
+          next = end;
+          continue;
+        }
+        // Review nit: only an attach that stayed up ADMIT_STABLE_MS ends the row of failures.
+        const stable =
+          admittedAt !== null && Date.now() - admittedAt >= (opts.admitStableMs ?? ADMIT_STABLE_MS);
+        if (stable) reconnects = 0;
+        admittedAt = null;
+        if (end.kind === 'dropped' && reconnects < MAX_RECONNECTS) {
+          if (stable) {
+            // 0.2.3: a socket that stayed up and dropped is most likely the LB's hourly cut: reconnect
+            // quietly, and say it only if the re-attach is not admitted in time.
+            lostNotice = setTimeout(() => {
+              lostNotice = null;
+              sink.say(`\r\n${copy.reconnecting}`);
+            }, opts.quietReconnectNoticeMs ?? QUIET_RECONNECT_NOTICE_MS);
+          } else {
+            // A second drop in a row, or one that never settled: a real outage, said at once.
+            cancelLostNotice();
+            sink.say(`\r\n${copy.reconnecting}`);
+          }
           await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
           reconnects += 1;
           intent = 'reconnect';
           continue;
         }
-        if (reconnects >= MAX_RECONNECTS) return { kind: 'lost' };
-        return { kind: 'refused', status: 0 };
+        if (end.kind === 'dropped') return { kind: 'lost' };
+        return end;
       }
-      const ws = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), headers);
-      current = ws;
-      const opened = await new Promise<number | null>((resolve) => {
-        ws.once('open', () => resolve(null));
-        ws.once('unexpected-response', (_req, res) => {
-          const status = res.statusCode ?? 0;
-          res.resume();
-          ws.terminate();
-          resolve(status);
-        });
-        ws.once('error', () => resolve(0));
-      });
-      if (opened !== null) {
-        // A reconnect that meets a restarting HQ (or no network yet) keeps trying, bounded. Never
-        // the FIRST dial (S4): an attach that starts `reconnect` (a team that is off) shows HQ's
-        // refusal at once instead of retrying silently.
-        if (
-          (reconnects > 0 || announced) &&
-          intent === 'reconnect' &&
-          (opened === 0 || opened === 503) &&
-          reconnects < MAX_RECONNECTS
-        ) {
-          await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
-          reconnects += 1;
-          continue;
-        }
-        return { kind: 'refused', status: opened };
-      }
-      if (!announced) {
-        announced = true;
-        opts.onFirstOpen?.();
-      }
-      const end = await runSocket(
-        ws,
-        () => {
-          // Review N5: the budget is MAX_RECONNECTS drops IN A ROW. An admitted attach that LIVES
-          // ends the row (checked at the drop below), so a day of hourly LB cuts never adds up to a
-          // give-up, while an admit-then-drop loop still runs out.
-          admittedAt = Date.now();
-        },
-        intent,
-        headers,
-      );
-      // Review nit: only an attach that stayed up ADMIT_STABLE_MS ends the row of failures.
-      if (
-        admittedAt !== null &&
-        Date.now() - admittedAt >= (opts.admitStableMs ?? ADMIT_STABLE_MS)
-      ) {
-        reconnects = 0;
-      }
-      admittedAt = null;
-      if (end.kind === 'dropped' && reconnects < MAX_RECONNECTS) {
-        sink.say(`\r\n${copy.reconnecting}`);
-        await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
-        reconnects += 1;
-        intent = 'reconnect';
-        continue;
-      }
-      if (end.kind === 'dropped') return { kind: 'lost' };
-      return end;
     }
   }
+
+  /**
+   * Was `dims` broadcast before this terminal's own resize landed? Then it is not news (yet): the
+   * last size heard decides once the window closes (`recheck`).
+   */
+  const staleEcho = (dims: Dims, recheck: () => void): boolean => {
+    const own = geometry.ownResize;
+    if (own === null) return false;
+    if (sameDims(own.dims, dims)) {
+      geometry.ownResize = null;
+      return false;
+    }
+    const left = own.at + OWN_RESIZE_ECHO_MS - Date.now();
+    if (left <= 0) {
+      geometry.ownResize = null;
+      return false;
+    }
+    setTimeout(() => {
+      if (geometry.ownResize !== own) return;
+      geometry.ownResize = null;
+      recheck();
+    }, left).unref?.();
+    return true;
+  };
 
   /** One socket's life: attach, pipe, heartbeat, until it closes. */
   function runSocket(
@@ -410,9 +578,11 @@ export function createAttachSession(
     onAdmitted: () => void,
     intent: 'open' | 'reconnect',
     headers: Record<string, string>,
+    adopt: Handover | null,
   ): Promise<SocketEnd> {
-    // A reconnect / re-attach is a lifecycle reset (Decision 19): nothing predicted survives it.
-    echo?.lifecycleReset();
+    // A reconnect / re-attach is a lifecycle reset (Decision 19): nothing predicted survives it. A
+    // socket that took over (0.2.3) changed nothing on screen: the predictions stand.
+    if (!adopt) echo?.lifecycleReset();
     /** The terminal shares the person's screen: take any drawn prediction off it first. */
     const say = (line: string): void => {
       echo?.undrawNow();
@@ -423,6 +593,8 @@ export function createAttachSession(
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
     };
     const size = () => sink.size();
+    /** The size this terminal draws at: its own, or the pty's (as far as the sink can) as a non-owner. */
+    const drawn = () => geometry.drawn ?? size();
     // What the answer to the attach we sent said, read when its `attached` (always last) lands: a
     // wake code (still waking), the asleep notice (nobody waking it), or neither (the machine is back).
     //
@@ -434,14 +606,38 @@ export function createAttachSession(
     let answerWaking = false;
     let answerAsleep = false;
     let attachOutstanding = false;
+    /** A non-owner's `open` was answered at the pty's size: repaint at what it draws once admitted. */
+    let repaintAfterOpen = false;
     const attachFrame = (i: 'open' | 'reconnect') => {
       answerWaking = false;
       answerAsleep = false;
       attachOutstanding = true;
-      send({ type: 'attach', sessionId: session.id, ...size(), intent: i });
+      // The OWNER's attaches are unmarked and carry its size, as before (its `open` sizes the pty).
+      // A NON-OWNER's are marked `repaint`, so the server never takes their size for the keystroke
+      // re-statement (final review W1). Its `open` (the end of a wake, the key after "asleep") is not
+      // a person claiming the size and carries NO size at all (final review W2): the server serializes
+      // at the pty's own last-known size and sizes nothing — not `drawn()` (in a VS Code panel
+      // narrower than the pty that is min(pty, panel)), and not the size last heard either (the pty
+      // may have changed while the machine slept). It then repaints at what it draws once admitted.
+      if (geometry.drawn === null) {
+        send({ type: 'attach', sessionId: session.id, ...size(), intent: i });
+        return;
+      }
+      if (i === 'open') {
+        repaintAfterOpen = true;
+        send({ type: 'attach', sessionId: session.id, intent: i, repaint: true });
+        return;
+      }
+      send({ type: 'attach', sessionId: session.id, ...drawn(), intent: i, repaint: true });
     };
-    attachFrame(intent);
-    let filter = (opts.createFilter ?? createTerminalQueryFilter)();
+    // A socket that took over is already admitted (0.2.3); its filter is the old socket's, mid-stream.
+    if (!adopt) attachFrame(intent);
+    let filter = adopt ? adopt.filter : (opts.createFilter ?? createTerminalQueryFilter)();
+    /**
+     * 0.2.3: keys typed while the socket this one replaced is still closing wait for its close, so
+     * the server never sees a later key before an earlier one (null: send at once).
+     */
+    let heldKeys: string[] | null = adopt ? [] : null;
     /** A reset+reattach arrived while an attach was out: re-attach when that one answers. */
     let reattachPending = false;
     /** The pty was replaced: send this terminal's size when the re-attach is admitted. */
@@ -463,6 +659,16 @@ export function createAttachSession(
       let errorSaid: string | null = null;
       // When the screen was last repainted (a `history`) or wiped (a `reset`), for the notice grace.
       let repaintedAt = 0;
+      /** 0.2.3: when this socket last wrote anything to the screen (a handover needs quiet). */
+      let lastOutputAt = 0;
+      if (adopt) {
+        onAdmitted();
+        void adopt.oldClosed.then(() => {
+          const keys = heldKeys ?? [];
+          heldKeys = null;
+          for (const data of keys) send({ type: 'input', sessionId: session.id, data });
+        });
+      }
 
       // The wake cadence: 2 s, then 4 s (the browser's), one poll pending at most.
       const schedulePoll = () => {
@@ -616,9 +822,92 @@ export function createAttachSession(
         livenessTimer.unref?.();
       }
 
+      // terminal-shared-geometry: a repaint at the size this terminal draws, debounced, never with
+      // another attach outstanding, never into a wake (a frozen machine has no screen to read).
+      let repaintTimer: NodeJS.Timeout | null = null;
+      let repaintPending = false;
+      const repaint = () => {
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = setTimeout(() => {
+          repaintTimer = null;
+          if (wake.since !== null || wake.asleep) return;
+          if (attachOutstanding) repaintPending = true;
+          else attachFrame('reconnect');
+        }, REPAINT_DEBOUNCE_MS);
+      };
+      const sendOwnSize = () => {
+        const own = size();
+        geometry.ownResize = { dims: own, at: Date.now() };
+        send({ type: 'resize', sessionId: session.id, ...own });
+      };
+      /** Back to this terminal's own size: the override cleared, nothing repainted or sent. */
+      const becomeOwner = () => {
+        if (geometry.drawn === null) return; // the owner already
+        geometry.drawn = null;
+        geometry.matchedTo = null;
+        sink.matchGeometry?.(null);
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = null;
+        repaintPending = false;
+        const own = size();
+        echo?.resize(own.cols, own.rows);
+      };
+      /**
+       * Draw at the pty's size (a non-owner) or this terminal's own (the owner); repaint if what it
+       * draws moved. `boxMoved`: the terminal's own box changed, so the match is made again.
+       */
+      const follow = (boxMoved = false) => {
+        const pty = geometry.pty;
+        if (pty === null) return;
+        const own = size();
+        if (sameDims(own, pty)) {
+          becomeOwner();
+          return;
+        }
+        const matched = geometry.matchedTo;
+        if (!boxMoved && geometry.drawn !== null && matched !== null && sameDims(matched, pty)) {
+          return; // the same size again (every attach is told it): nothing moved
+        }
+        const next = sink.matchGeometry ? sink.matchGeometry(pty) : own;
+        geometry.matchedTo = pty;
+        if (geometry.drawn !== null && sameDims(geometry.drawn, next)) return;
+        geometry.drawn = next;
+        echo?.resize(next.cols, next.rows);
+        repaint();
+      };
+      // A claim: this terminal's own size goes to the pty. Only a non-owner that may type claims.
+      claimNow = () => {
+        if (!canType || geometry.drawn === null) return;
+        const own = size();
+        if (!mayClaimSize(own)) return; // too small to own it (`MIN_CLAIM_COLS` x `MIN_CLAIM_ROWS`)
+        geometry.drawn = null;
+        geometry.matchedTo = null;
+        sink.matchGeometry?.(null);
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = null;
+        repaintPending = false;
+        echo?.resize(own.cols, own.rows);
+        // The pty is already at this size: nothing to send (no redraw for nothing).
+        if (geometry.pty !== null && sameDims(geometry.pty, own)) return;
+        sendOwnSize();
+      };
       const onResize = () => {
+        if (geometry.drawn !== null) {
+          // Not the owner: this terminal's box moved, the pty did not. Re-fit the match (VS Code
+          // draws at min(pty, panel)) and repaint if what it draws changed; nothing is claimed.
+          follow(true);
+          return;
+        }
+        // Review C1: a box change claims the pty only for a terminal in FRONT. A window in the
+        // background whose panel moved (or a host echoing an override back) must not take the size
+        // from the window the person is in; it becomes a non-owner and matches instead. With no
+        // size heard yet (an older server), it states its size as it always did.
+        if (geometry.pty !== null && opts.inFront && !opts.inFront()) {
+          follow(true);
+          return;
+        }
         echo?.resize(size().cols, size().rows);
-        send({ type: 'resize', sessionId: session.id, ...size() });
+        sendOwnSize();
       };
       const detachNow = () => {
         // local-echo: nothing dim or underlined is left on screen once the socket is gone (C11).
@@ -641,8 +930,12 @@ export function createAttachSession(
         }
         if (canType && before.length > 0) {
           const data = before.toString('utf8');
+          // A key from a non-owner: its size goes to the pty first (before the held keys of a
+          // handover, too). Not a focus or wheel report: nobody typed those (review W5).
+          if (!isPassiveTerminalInput(data)) claimNow?.();
           echo?.key(data); // judged in order with the output; the bytes go out right now regardless
-          send({ type: 'input', sessionId: session.id, data });
+          if (heldKeys) heldKeys.push(data);
+          else send({ type: 'input', sessionId: session.id, data });
         }
         if (i >= 0) detachNow();
       };
@@ -651,6 +944,8 @@ export function createAttachSession(
       const offInput = sink.onInput(onData);
 
       ws.on('message', (data: Buffer) => {
+        // 0.2.3: once a standby took over, this socket's frames are the new one's, already written.
+        if (handedOver) return;
         let frame: ServerFrame;
         try {
           frame = JSON.parse(data.toString('utf8')) as ServerFrame;
@@ -663,6 +958,9 @@ export function createAttachSession(
           frame.sessionId !== session.id
         )
           return;
+        if (frame.type === 'output' || frame.type === 'history' || frame.type === 'reset') {
+          lastOutputAt = Date.now();
+        }
         if ((frame.type === 'output' || frame.type === 'history') && 'data' in frame) {
           if (frame.type === 'history') repaintedAt = Date.now();
           wake.asleep = false;
@@ -708,6 +1006,25 @@ export function createAttachSession(
           statusSaid = st;
           if (st === 'stopped') say(`\r\n${copy.sessionStopped}`);
           else if (st === 'error') say(`\r\n${copy.sessionError}`);
+        } else if (frame.type === 'geometry') {
+          const pty = wireDims(
+            'cols' in frame ? frame.cols : undefined,
+            'rows' in frame ? frame.rows : undefined,
+          );
+          if (pty === null) return;
+          geometry.pty = pty;
+          // W6: told it is the only viewer, this terminal is the owner whatever the size says.
+          if ('viewers' in frame && frame.viewers === 1) {
+            geometry.ownResize = null;
+            becomeOwner();
+            // Final review (CRITICAL): alone at a size that is not the pty's (the owner left and this
+            // terminal came back by itself), nobody else will ever size it: this terminal does, or it
+            // draws at its own size against another pty — the original garble.
+            if (!sameDims(size(), pty)) sendOwnSize();
+            return;
+          }
+          if (staleEcho(pty, () => follow())) return;
+          follow();
         } else if (frame.type === 'ownership-changed') {
           // 0.2.2 (b): the frame carries no facts on purpose; the caller re-reads the rights.
           opts.onOwnershipChanged?.();
@@ -722,7 +1039,20 @@ export function createAttachSession(
           }
           if (resizeOnAdmit) {
             resizeOnAdmit = false;
-            send({ type: 'resize', sessionId: session.id, ...size() });
+            // W2: only the OWNER sizes the new pty. A non-owner already re-attached at the size it
+            // draws (a `reconnect`, which never sizes), so it matches and has its fresh screen.
+            if (geometry.drawn === null) send({ type: 'resize', sessionId: session.id, ...size() });
+          }
+          if (repaintAfterOpen) {
+            repaintAfterOpen = false;
+            repaintPending = true;
+          }
+          if (repaintPending) {
+            repaintPending = false;
+            if (wake.since === null && !wake.asleep) {
+              attachFrame('reconnect');
+              return;
+            }
           }
           if (!answerWaking && !answerAsleep) {
             errorRetries = 0;
@@ -809,8 +1139,8 @@ export function createAttachSession(
           );
         }
       });
-      ws.on('error', () => undefined);
-      ws.on('close', (code) => {
+      /** Everything this socket runs, stopped (its close, or a standby taking over). */
+      const teardown = () => {
         detachHooks.delete(detachNow);
         for (const tm of rttTimers) clearTimeout(tm);
         if (livenessTimer) clearInterval(livenessTimer);
@@ -818,8 +1148,207 @@ export function createAttachSession(
         clearInterval(presenceTimer);
         clearWakeTimers();
         if (errorRetryTimer) clearTimeout(errorRetryTimer);
+        if (handoverTimer) clearTimeout(handoverTimer);
+        handoverTimer = null;
+        // terminal-shared-geometry: this socket's claim and repaint go with it. In teardown, never in
+        // the close handler: after a handover the old socket closes AFTER the new one took over, and
+        // its close must not null the NEW socket's claim.
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = null;
+        repaintPending = false;
+        claimNow = null;
         offInput();
         offResize();
+      };
+
+      // ── 0.2.3: make-before-break (see the header) ──────────────────────────────────────────
+      const openedAt = adopt?.openedAt ?? Date.now();
+      const handoverAfter = opts.handoverAfterMs ?? HANDOVER_AFTER_MS;
+      const retryMs = opts.handoverRetryMs ?? HANDOVER_RETRY_MS;
+      let handoverTimer: NodeJS.Timeout | null = null;
+      let handedOver = false;
+      let markOldClosed: () => void = () => undefined;
+      interface Standby {
+        ws: WebSocket;
+        headers: Record<string, string>;
+        openedAt: number;
+        /** When its attach was sent: output on the old socket since then means "busy". */
+        sentAt: number;
+        sawOutput: boolean;
+        timer: NodeJS.Timeout | null;
+      }
+      let standby: Standby | null = null;
+      const scheduleHandover = (delay: number) => {
+        if (handoverAfter <= 0 || handoverTimer !== null || handedOver || standby) return;
+        const lastStart = Math.max(HANDOVER_LAST_START_MS, handoverAfter);
+        if (Date.now() + delay - openedAt > lastStart) return; // the cut is near: the quiet reconnect
+        handoverTimer = setTimeout(
+          () => {
+            handoverTimer = null;
+            void beginHandover();
+          },
+          Math.max(0, delay),
+        );
+      };
+      /** Nothing in flight on this socket that a takeover would cut across. */
+      const steady = () =>
+        ws.readyState === WebSocket.OPEN &&
+        !userDetached &&
+        !detachRequested &&
+        !attachOutstanding &&
+        !reattachPending &&
+        !resizeOnAdmit &&
+        errorRetryTimer === null &&
+        wake.since === null &&
+        !wake.asleep &&
+        heldKeys === null && // keys still waiting on the socket this one replaced
+        // terminal-shared-geometry: a repaint is on its way; a switch would drop it on the floor.
+        repaintTimer === null &&
+        !repaintPending &&
+        !repaintAfterOpen;
+      const giveUpStandby = (retry: boolean) => {
+        const sb = standby;
+        standby = null;
+        if (sb) {
+          if (sb.timer) clearTimeout(sb.timer);
+          if (sb.ws.readyState === WebSocket.OPEN) sb.ws.close(1000);
+          else sb.ws.terminate();
+        }
+        if (retry) scheduleHandover(retryMs);
+      };
+      const takeOver = (sb: Standby) => {
+        standby = null;
+        handedOver = true;
+        if (sb.timer) clearTimeout(sb.timer);
+        teardown();
+        sb.ws.removeAllListeners('message');
+        sb.ws.removeAllListeners('close');
+        sb.ws.removeAllListeners('unexpected-response');
+        const oldClosed = new Promise<void>((done) => {
+          const hold = setTimeout(done, HANDOVER_INPUT_HOLD_MS);
+          markOldClosed = () => {
+            clearTimeout(hold);
+            done();
+          };
+        });
+        current = sb.ws;
+        resolve({
+          kind: 'handover',
+          ws: sb.ws,
+          headers: sb.headers,
+          openedAt: sb.openedAt,
+          filter,
+          oldClosed,
+        });
+        ws.close(1000);
+      };
+      const settle = (sb: Standby) => {
+        if (sb.timer) clearTimeout(sb.timer);
+        sb.timer = setTimeout(() => {
+          sb.timer = null;
+          if (standby !== sb) return;
+          // Output on either socket since the standby asked means bytes in flight that two streams
+          // with no sequence number cannot be spliced across: not now.
+          const quiet = lastOutputAt < sb.sentAt && !sb.sawOutput;
+          if (!quiet || !steady() || sb.ws.readyState !== WebSocket.OPEN) giveUpStandby(true);
+          else takeOver(sb);
+        }, opts.handoverSettleMs ?? HANDOVER_SETTLE_MS);
+      };
+      const beginHandover = async () => {
+        if (standby || handedOver || ws.readyState !== WebSocket.OPEN) return;
+        if (!steady()) {
+          scheduleHandover(retryMs);
+          return;
+        }
+        let h: Record<string, string>;
+        try {
+          h = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+        } catch {
+          scheduleHandover(retryMs);
+          return;
+        }
+        if (standby || handedOver || !steady()) return;
+        const next = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), h);
+        const sb: Standby = {
+          ws: next,
+          headers: h,
+          openedAt: 0,
+          sentAt: Date.now(),
+          sawOutput: false,
+          timer: null,
+        };
+        standby = sb;
+        next.on('error', () => undefined);
+        next.once('unexpected-response', (_req, res) => {
+          res.resume();
+          if (standby === sb) giveUpStandby(true);
+        });
+        next.once('close', () => {
+          if (standby === sb) giveUpStandby(true);
+        });
+        sb.timer = setTimeout(() => {
+          if (standby === sb) giveUpStandby(true);
+        }, HANDOVER_ADMIT_MS);
+        next.once('open', () => {
+          if (standby !== sb) return;
+          sb.openedAt = Date.now();
+          sb.sentAt = Date.now();
+          // `reconnect`: the client's own, so it neither sizes the pty nor counts as a person. At the
+          // size this terminal DRAWS (a non-owner draws the pty's), like every other `reconnect`.
+          next.send(
+            JSON.stringify({
+              type: 'attach',
+              sessionId: session.id,
+              ...drawn(),
+              intent: 'reconnect',
+              // A non-owner's standby is its own attach, marked like every other (final review W1).
+              ...(geometry.drawn !== null ? { repaint: true } : {}),
+            }),
+          );
+        });
+        next.on('message', (raw: Buffer) => {
+          if (standby !== sb) return;
+          let f: ServerFrame;
+          try {
+            f = JSON.parse(raw.toString('utf8')) as ServerFrame;
+          } catch {
+            return;
+          }
+          if (f.sessionId !== undefined && f.sessionId !== null && f.sessionId !== session.id) {
+            return;
+          }
+          // Its repaint is the screen already showing; its output is the old socket's, written.
+          if (f.type === 'history') return;
+          if (f.type === 'output') {
+            sb.sawOutput = true;
+            return;
+          }
+          if (f.type === 'attached') {
+            settle(sb);
+            return;
+          }
+          // A wake code, an error, a reset, or a notice (other than the sibling-read one): the
+          // session is in some state a quiet switch would hide. The old socket carries on.
+          const benignNotice =
+            f.type === 'notice' && 'code' in f && f.code === HISTORY_UNAVAILABLE_NOTICE;
+          if (f.type === 'error' || f.type === 'reset' || (f.type === 'notice' && !benignNotice)) {
+            giveUpStandby(true);
+          }
+        });
+      };
+      if (handoverAfter > 0) {
+        const jitter = Math.random() * (opts.handoverJitterMs ?? HANDOVER_JITTER_MS);
+        scheduleHandover(handoverAfter - jitter - (Date.now() - openedAt));
+      }
+
+      ws.on('error', () => undefined);
+      ws.on('close', (code) => {
+        if (handedOver) {
+          markOldClosed(); // the held keys may go out on the new socket now
+          return;
+        }
+        teardown();
+        giveUpStandby(false);
         const held = filter.flush();
         if (held.length > 0 && !userDetached) {
           if (echo) echo.output(held);
@@ -862,5 +1391,28 @@ export function createAttachSession(
     },
     canType: () => canType,
     setCanType: (can: boolean) => setCanType(can),
+    claim: () => {
+      if (claimTimer) clearTimeout(claimTimer);
+      claimTimer = setTimeout(() => {
+        claimTimer = null;
+        if (opts.inFront && !opts.inFront()) return;
+        claimNow?.();
+      }, CLAIM_DEBOUNCE_MS);
+      claimTimer.unref?.();
+    },
   };
+}
+
+interface Dims {
+  cols: number;
+  rows: number;
+}
+
+const sameDims = (a: Dims, b: Dims): boolean => a.cols === b.cols && a.rows === b.rows;
+
+/** The server's own wire caps for a size (500 x 300): anything else is not a size. */
+function wireDims(cols: unknown, rows: unknown): Dims | null {
+  if (typeof cols !== 'number' || typeof rows !== 'number') return null;
+  if (!Number.isInteger(cols) || !Number.isInteger(rows)) return null;
+  return cols >= 1 && cols <= 500 && rows >= 1 && rows <= 300 ? { cols, rows } : null;
 }

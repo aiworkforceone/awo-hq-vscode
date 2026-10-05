@@ -12829,6 +12829,47 @@ var ReviveGate = class {
 };
 
 // src/fs/events-client.ts
+var import_ws3 = __toESM(require_ws(), 1);
+
+// ../shared/src/terminal-queries.ts
+var QUERY_RE = /\x1b\[[>=]?[0-9;]*c|\x1b\](?:10|11);\?(?:\x07|\x1b\\)/g;
+var PARTIAL_TAIL_RE = /\x1b(?:\[[>=]?[0-9;]*|\](?:1(?:[01](?:;(?:\?(?:\x1b)?)?)?)?)?)?$/;
+var MAX_HELD = 24;
+function createTerminalQueryFilter() {
+  let held = "";
+  return {
+    push(chunk) {
+      const text = held + chunk;
+      held = "";
+      const stripped = text.replace(QUERY_RE, "");
+      const tail = PARTIAL_TAIL_RE.exec(stripped);
+      if (tail && tail[0].length <= MAX_HELD) {
+        held = tail[0];
+        return stripped.slice(0, stripped.length - held.length);
+      }
+      return stripped;
+    },
+    /** Whatever is still held (a prefix that never completed): written as is. */
+    flush() {
+      const out = held;
+      held = "";
+      return out;
+    }
+  };
+}
+
+// ../shared/src/terminal-input.ts
+var MIN_CLAIM_COLS = 40;
+var MIN_CLAIM_ROWS = 10;
+var PASSIVE_INPUT_RE = /^(?:\x1b\[[IO]|\x1b\[<6[4-7];\d+;\d+[Mm])+$/;
+function isPassiveTerminalInput(data) {
+  return data.length > 0 && PASSIVE_INPUT_RE.test(data);
+}
+function mayClaimSize(dims) {
+  return dims.cols >= MIN_CLAIM_COLS && dims.rows >= MIN_CLAIM_ROWS;
+}
+
+// ../hq-client/src/attach-session.ts
 var import_ws2 = __toESM(require_ws(), 1);
 
 // ../hq-client/src/tunnel-client.ts
@@ -12936,6 +12977,891 @@ function pipeTunnel(ws, input, output, highWater = 1 << 20) {
   });
 }
 
+// ../hq-client/src/attach-session.ts
+var TOKEN_CHECK_MS = 6e4;
+var PRESENCE_MS = 6e4;
+var WAKE_RETRY_MS = 2e3;
+var WAKE_RETRY_MAX_MS = 4e3;
+var WAKE_STILL_ON_IT_MS = 2e4;
+var HISTORY_NOTICE_GRACE_MS = 8e3;
+var HISTORY_UNAVAILABLE_NOTICE = "history_unavailable";
+var WORKSPACE_ASLEEP_NOTICE = "workspace_asleep";
+var RECONNECT_BASE_MS = 1e3;
+var RECONNECT_MAX_MS = 1e4;
+var MAX_RECONNECTS = 8;
+var QUIET_RECONNECT_NOTICE_MS = 3e3;
+var HANDOVER_AFTER_MS = 55 * 6e4;
+var HANDOVER_JITTER_MS = 3 * 6e4;
+var HANDOVER_RETRY_MS = 6e4;
+var HANDOVER_LAST_START_MS = 59 * 6e4;
+var HANDOVER_SETTLE_MS = 300;
+var HANDOVER_ADMIT_MS = 15e3;
+var HANDOVER_INPUT_HOLD_MS = 2e3;
+var RTT_PING_MS = 3e4;
+var RTT_BURST_MS = [500, 1e3, 1500];
+var TERMINAL_ERROR_CODES = /* @__PURE__ */ new Set(["NOT_FOUND", "SESSION_STOPPED", "FORBIDDEN"]);
+var ERROR_RETRY_MS = 2e3;
+var ERROR_RETRY_MAX_MS = 1e4;
+var CLAIM_DEBOUNCE_MS = 300;
+var REPAINT_DEBOUNCE_MS = 150;
+var OWN_RESIZE_ECHO_MS = 1500;
+var WAKE_CODES = /* @__PURE__ */ new Set([
+  "SESSION_STARTING",
+  "SESSION_RESUMING",
+  "SESSION_RESUME_RETRYING",
+  "SESSION_RESUME_COLD_RESTART"
+]);
+var CLI_ATTACH_COPY = {
+  prefix: "hq: ",
+  stillOnIt: "hq: Still on it...",
+  wakeTimeout: wakeTimeoutMessage,
+  reconnecting: "hq: connection lost, reconnecting...",
+  accessEnded: "hq: your access to this session ended.",
+  detached: "hq: detached.",
+  nowViewOnly: "hq: you can watch this session but not type in it.",
+  sessionStopped: "hq: the session stopped.",
+  sessionError: "hq: the session exited with an error."
+};
+var ACCOUNT_ERROR_NAMES = /* @__PURE__ */ new Set([
+  "NeedsSignInError",
+  "AccountGoneError",
+  "SlotRenewedError"
+]);
+var ADMIT_STABLE_MS = 5e3;
+function isTransientUpgradeError(err) {
+  if (err instanceof NotLoggedInError || err instanceof RefreshNeedsRenewingError) return false;
+  if (err instanceof Error && ACCOUNT_ERROR_NAMES.has(err.name)) return false;
+  if (err instanceof HqApiError) {
+    return err.status >= 500 || err.status === 429 || err.status === 408;
+  }
+  return true;
+}
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+function cleanPorts(value) {
+  if (!Array.isArray(value)) return null;
+  const ports = value.filter(
+    (p) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
+  );
+  return ports.slice(0, 64);
+}
+function createAttachSession(client, target, sink, opts = {}) {
+  const { team, session } = target;
+  const copy = { ...CLI_ATTACH_COPY, ...opts.copy ?? {} };
+  const make = opts.wsFactory ?? ((url, h) => new import_ws2.default(url, { headers: h }));
+  const reconnectBase = opts.reconnectBaseMs ?? RECONNECT_BASE_MS;
+  const echo = opts.echo ?? null;
+  const wake = { since: null, said: null, cold: false, stillSaid: false, asleep: false };
+  let canType = session.canType;
+  let current = null;
+  let detachRequested = false;
+  const detachHooks = /* @__PURE__ */ new Set();
+  const geometry = { pty: null, drawn: null, matchedTo: null, ownResize: null };
+  let claimNow = null;
+  let claimTimer = null;
+  const setCanType = (next) => {
+    if (next === canType) return;
+    canType = next;
+    opts.onCanTypeChanged?.(next);
+  };
+  async function run2() {
+    let announced = false;
+    let intent = opts.initialIntent ?? "open";
+    let reconnects = 0;
+    let admittedAt = null;
+    let lostNotice = null;
+    const cancelLostNotice = () => {
+      if (lostNotice) clearTimeout(lostNotice);
+      lostNotice = null;
+    };
+    let next = null;
+    try {
+      return await runLoop();
+    } finally {
+      cancelLostNotice();
+    }
+    async function runLoop() {
+      for (; ; ) {
+        if (detachRequested) return { kind: "ended", exitCode: 0, message: `\r
+${copy.detached}` };
+        const adopt = next;
+        next = null;
+        let headers;
+        let ws;
+        if (adopt) {
+          headers = adopt.headers;
+          ws = adopt.ws;
+          current = ws;
+        } else {
+          try {
+            headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+          } catch (err) {
+            if (!isTransientUpgradeError(err)) throw err;
+            if ((reconnects > 0 || announced) && reconnects < MAX_RECONNECTS) {
+              await sleep2(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+              reconnects += 1;
+              intent = "reconnect";
+              continue;
+            }
+            if (reconnects >= MAX_RECONNECTS) return { kind: "lost" };
+            return { kind: "refused", status: 0 };
+          }
+          ws = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), headers);
+          current = ws;
+          const opened = await new Promise((resolve) => {
+            ws.once("open", () => resolve(null));
+            ws.once("unexpected-response", (_req, res) => {
+              const status = res.statusCode ?? 0;
+              res.resume();
+              ws.terminate();
+              resolve(status);
+            });
+            ws.once("error", () => resolve(0));
+          });
+          if (opened !== null) {
+            if ((reconnects > 0 || announced) && intent === "reconnect" && (opened === 0 || opened === 503) && reconnects < MAX_RECONNECTS) {
+              await sleep2(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+              reconnects += 1;
+              continue;
+            }
+            return { kind: "refused", status: opened };
+          }
+          if (!announced) {
+            announced = true;
+            opts.onFirstOpen?.();
+          }
+        }
+        const end = await runSocket(
+          ws,
+          () => {
+            admittedAt = Date.now();
+            cancelLostNotice();
+          },
+          intent,
+          headers,
+          adopt
+        );
+        if (end.kind === "handover") {
+          next = end;
+          continue;
+        }
+        const stable = admittedAt !== null && Date.now() - admittedAt >= (opts.admitStableMs ?? ADMIT_STABLE_MS);
+        if (stable) reconnects = 0;
+        admittedAt = null;
+        if (end.kind === "dropped" && reconnects < MAX_RECONNECTS) {
+          if (stable) {
+            lostNotice = setTimeout(() => {
+              lostNotice = null;
+              sink.say(`\r
+${copy.reconnecting}`);
+            }, opts.quietReconnectNoticeMs ?? QUIET_RECONNECT_NOTICE_MS);
+          } else {
+            cancelLostNotice();
+            sink.say(`\r
+${copy.reconnecting}`);
+          }
+          await sleep2(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
+          reconnects += 1;
+          intent = "reconnect";
+          continue;
+        }
+        if (end.kind === "dropped") return { kind: "lost" };
+        return end;
+      }
+    }
+  }
+  const staleEcho = (dims, recheck) => {
+    const own = geometry.ownResize;
+    if (own === null) return false;
+    if (sameDims(own.dims, dims)) {
+      geometry.ownResize = null;
+      return false;
+    }
+    const left = own.at + OWN_RESIZE_ECHO_MS - Date.now();
+    if (left <= 0) {
+      geometry.ownResize = null;
+      return false;
+    }
+    setTimeout(() => {
+      if (geometry.ownResize !== own) return;
+      geometry.ownResize = null;
+      recheck();
+    }, left).unref?.();
+    return true;
+  };
+  function runSocket(ws, onAdmitted, intent, headers, adopt) {
+    if (!adopt) echo?.lifecycleReset();
+    const say = (line) => {
+      echo?.undrawNow();
+      sink.say(line);
+    };
+    let lastToken = (headers.Authorization ?? "").slice("Bearer ".length);
+    const send = (frame) => {
+      if (ws.readyState === import_ws2.default.OPEN) ws.send(JSON.stringify(frame));
+    };
+    const size = () => sink.size();
+    const drawn = () => geometry.drawn ?? size();
+    let answerWaking = false;
+    let answerAsleep = false;
+    let attachOutstanding = false;
+    let repaintAfterOpen = false;
+    const attachFrame = (i) => {
+      answerWaking = false;
+      answerAsleep = false;
+      attachOutstanding = true;
+      if (geometry.drawn === null) {
+        send({ type: "attach", sessionId: session.id, ...size(), intent: i });
+        return;
+      }
+      if (i === "open") {
+        repaintAfterOpen = true;
+        send({ type: "attach", sessionId: session.id, intent: i, repaint: true });
+        return;
+      }
+      send({ type: "attach", sessionId: session.id, ...drawn(), intent: i, repaint: true });
+    };
+    if (!adopt) attachFrame(intent);
+    let filter = adopt ? adopt.filter : (opts.createFilter ?? createTerminalQueryFilter)();
+    let heldKeys = adopt ? [] : null;
+    let reattachPending = false;
+    let resizeOnAdmit = false;
+    let statusSaid = null;
+    return new Promise((resolve) => {
+      let exitCode = 0;
+      let errorMessage = null;
+      let userDetached = false;
+      let wakeTimer = null;
+      let wakeAttempts = 0;
+      let stillTimer = null;
+      let giveUpTimer = null;
+      let errorRetryTimer = null;
+      let errorRetries = 0;
+      let errorSaid = null;
+      let repaintedAt = 0;
+      let lastOutputAt = 0;
+      if (adopt) {
+        onAdmitted();
+        void adopt.oldClosed.then(() => {
+          const keys = heldKeys ?? [];
+          heldKeys = null;
+          for (const data of keys) send({ type: "input", sessionId: session.id, data });
+        });
+      }
+      const schedulePoll = () => {
+        if (wakeTimer !== null) return;
+        const base = opts.wakeRetryMs ?? WAKE_RETRY_MS;
+        const delay = wakeAttempts === 0 ? base : Math.max(base, Math.min(WAKE_RETRY_MAX_MS, base * 2));
+        wakeAttempts += 1;
+        wakeTimer = setTimeout(() => {
+          wakeTimer = null;
+          attachFrame("reconnect");
+        }, delay);
+      };
+      const scheduleErrorRetry = () => {
+        if (errorRetryTimer !== null) return;
+        const base = opts.errorRetryMs ?? ERROR_RETRY_MS;
+        const delay = Math.min(ERROR_RETRY_MAX_MS, base * 2 ** Math.min(errorRetries, 8));
+        errorRetries += 1;
+        errorRetryTimer = setTimeout(() => {
+          errorRetryTimer = null;
+          if (!attachOutstanding) attachFrame("reconnect");
+        }, delay);
+      };
+      const clearWakeTimers = () => {
+        if (wakeTimer) clearTimeout(wakeTimer);
+        if (stillTimer) clearTimeout(stillTimer);
+        if (giveUpTimer) clearTimeout(giveUpTimer);
+        wakeTimer = stillTimer = giveUpTimer = null;
+      };
+      const armWakeClocks = (since) => {
+        const now = Date.now();
+        if (stillTimer === null && !wake.stillSaid) {
+          stillTimer = setTimeout(
+            () => {
+              if (wake.since === null || wake.cold || wake.stillSaid) return;
+              wake.stillSaid = true;
+              say(`\r
+${copy.stillOnIt}`);
+            },
+            Math.max(0, since + (opts.wakeStillMs ?? WAKE_STILL_ON_IT_MS) - now)
+          );
+        }
+        if (giveUpTimer === null) {
+          giveUpTimer = setTimeout(
+            () => {
+              say(`\r
+${copy.wakeTimeout(team)}`);
+              errorMessage = "";
+              exitCode = 1;
+              ws.terminate();
+            },
+            Math.max(0, since + (opts.wakeTimeoutMs ?? WAKE_TIMEOUT_MS) - now)
+          );
+        }
+      };
+      const clearWake = () => {
+        if (wake.since !== null) opts.onWaking?.(false);
+        wake.since = null;
+        wake.said = null;
+        wake.cold = false;
+        wake.stillSaid = false;
+        wakeAttempts = 0;
+        clearWakeTimers();
+      };
+      const endWake = () => {
+        if (wake.since === null) return;
+        clearWake();
+        wake.asleep = false;
+        attachFrame("open");
+      };
+      if (wake.since !== null) armWakeClocks(wake.since);
+      const tokenTimer = setInterval(() => {
+        void client.accessToken().then((t) => {
+          if (t !== lastToken) {
+            lastToken = t;
+            send({ type: "remote-token", token: t });
+          }
+        }).catch(() => void 0);
+      }, TOKEN_CHECK_MS);
+      const presenceTimer = setInterval(() => {
+        if (opts.presenceWhen && !opts.presenceWhen()) return;
+        send({ type: "presence", sessionId: session.id });
+      }, opts.presenceIntervalMs ?? PRESENCE_MS);
+      presenceTimer.unref?.();
+      tokenTimer.unref?.();
+      const rttTimers = [];
+      if (echo) {
+        const ping = () => {
+          if (ws.readyState !== import_ws2.default.OPEN) return;
+          try {
+            ws.ping(String(Date.now()));
+          } catch {
+          }
+        };
+        ws.on("pong", (payload) => {
+          const sentAt = Number(payload.toString("utf8"));
+          if (Number.isFinite(sentAt)) echo.rttSample(Date.now() - sentAt);
+        });
+        ping();
+        for (const ms of RTT_BURST_MS) rttTimers.push(setTimeout(ping, ms));
+        rttTimers.push(setInterval(ping, RTT_PING_MS));
+        for (const tm of rttTimers) tm.unref?.();
+      }
+      let livenessTimer = null;
+      let lastPongAt = Date.now();
+      if (opts.livenessPingMs !== void 0) {
+        const timeout = opts.livenessTimeoutMs ?? 1e4;
+        ws.on("pong", () => {
+          lastPongAt = Date.now();
+        });
+        let pingSentAt = 0;
+        livenessTimer = setInterval(
+          () => {
+            if (ws.readyState !== import_ws2.default.OPEN) return;
+            if (pingSentAt > lastPongAt && Date.now() - pingSentAt > timeout) {
+              ws.terminate();
+              return;
+            }
+            if (pingSentAt <= lastPongAt) {
+              pingSentAt = Date.now();
+              try {
+                ws.ping();
+              } catch {
+              }
+            }
+          },
+          Math.min(opts.livenessPingMs, timeout)
+        );
+        livenessTimer.unref?.();
+      }
+      let repaintTimer = null;
+      let repaintPending = false;
+      const repaint = () => {
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = setTimeout(() => {
+          repaintTimer = null;
+          if (wake.since !== null || wake.asleep) return;
+          if (attachOutstanding) repaintPending = true;
+          else attachFrame("reconnect");
+        }, REPAINT_DEBOUNCE_MS);
+      };
+      const sendOwnSize = () => {
+        const own = size();
+        geometry.ownResize = { dims: own, at: Date.now() };
+        send({ type: "resize", sessionId: session.id, ...own });
+      };
+      const becomeOwner = () => {
+        if (geometry.drawn === null) return;
+        geometry.drawn = null;
+        geometry.matchedTo = null;
+        sink.matchGeometry?.(null);
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = null;
+        repaintPending = false;
+        const own = size();
+        echo?.resize(own.cols, own.rows);
+      };
+      const follow = (boxMoved = false) => {
+        const pty = geometry.pty;
+        if (pty === null) return;
+        const own = size();
+        if (sameDims(own, pty)) {
+          becomeOwner();
+          return;
+        }
+        const matched = geometry.matchedTo;
+        if (!boxMoved && geometry.drawn !== null && matched !== null && sameDims(matched, pty)) {
+          return;
+        }
+        const next = sink.matchGeometry ? sink.matchGeometry(pty) : own;
+        geometry.matchedTo = pty;
+        if (geometry.drawn !== null && sameDims(geometry.drawn, next)) return;
+        geometry.drawn = next;
+        echo?.resize(next.cols, next.rows);
+        repaint();
+      };
+      claimNow = () => {
+        if (!canType || geometry.drawn === null) return;
+        const own = size();
+        if (!mayClaimSize(own)) return;
+        geometry.drawn = null;
+        geometry.matchedTo = null;
+        sink.matchGeometry?.(null);
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = null;
+        repaintPending = false;
+        echo?.resize(own.cols, own.rows);
+        if (geometry.pty !== null && sameDims(geometry.pty, own)) return;
+        sendOwnSize();
+      };
+      const onResize = () => {
+        if (geometry.drawn !== null) {
+          follow(true);
+          return;
+        }
+        if (geometry.pty !== null && opts.inFront && !opts.inFront()) {
+          follow(true);
+          return;
+        }
+        echo?.resize(size().cols, size().rows);
+        sendOwnSize();
+      };
+      const detachNow = () => {
+        echo?.close();
+        userDetached = true;
+        send({ type: "detach", sessionId: session.id });
+        ws.close(1e3);
+      };
+      const onData = (chunk) => {
+        const i = opts.detachByte === null || opts.detachByte === void 0 ? -1 : chunk.indexOf(opts.detachByte);
+        const before = i >= 0 ? chunk.subarray(0, i) : chunk;
+        if (before.length > 0 && wake.asleep) {
+          wake.asleep = false;
+          attachFrame("open");
+        }
+        if (canType && before.length > 0) {
+          const data = before.toString("utf8");
+          if (!isPassiveTerminalInput(data)) claimNow?.();
+          echo?.key(data);
+          if (heldKeys) heldKeys.push(data);
+          else send({ type: "input", sessionId: session.id, data });
+        }
+        if (i >= 0) detachNow();
+      };
+      detachHooks.add(detachNow);
+      const offResize = sink.onResize(onResize);
+      const offInput = sink.onInput(onData);
+      ws.on("message", (data) => {
+        if (handedOver) return;
+        let frame;
+        try {
+          frame = JSON.parse(data.toString("utf8"));
+        } catch {
+          return;
+        }
+        if (frame.sessionId !== void 0 && frame.sessionId !== null && frame.sessionId !== session.id)
+          return;
+        if (frame.type === "output" || frame.type === "history" || frame.type === "reset") {
+          lastOutputAt = Date.now();
+        }
+        if ((frame.type === "output" || frame.type === "history") && "data" in frame) {
+          if (frame.type === "history") repaintedAt = Date.now();
+          wake.asleep = false;
+          const clean = filter.push(frame.data);
+          if (clean.length > 0) {
+            if (!echo) sink.write(clean);
+            else if (frame.type === "history") echo.repaint(clean);
+            else echo.output(clean);
+          }
+        } else if (frame.type === "reset") {
+          repaintedAt = Date.now();
+          if ("reattach" in frame && frame.reattach === true) {
+            echo?.lifecycleReset();
+            filter = (opts.createFilter ?? createTerminalQueryFilter)();
+            const wipe = "\x1Bc\x1B[H\x1B[2J\x1B[3J";
+            if (echo) echo.repaint(wipe);
+            else sink.write(wipe);
+            resizeOnAdmit = true;
+            if (attachOutstanding) reattachPending = true;
+            else attachFrame("reconnect");
+            return;
+          }
+          if (echo) echo.repaint("\x1B[H\x1B[2J\x1B[3J");
+          else sink.write("\x1B[H\x1B[2J\x1B[3J");
+        } else if (frame.type === "status" && "status" in frame) {
+          const st = typeof frame.status === "string" ? frame.status : "";
+          if (st === "error" && (wake.since !== null || wake.asleep)) return;
+          if (st === statusSaid) return;
+          statusSaid = st;
+          if (st === "stopped") say(`\r
+${copy.sessionStopped}`);
+          else if (st === "error") say(`\r
+${copy.sessionError}`);
+        } else if (frame.type === "geometry") {
+          const pty = wireDims(
+            "cols" in frame ? frame.cols : void 0,
+            "rows" in frame ? frame.rows : void 0
+          );
+          if (pty === null) return;
+          geometry.pty = pty;
+          if ("viewers" in frame && frame.viewers === 1) {
+            geometry.ownResize = null;
+            becomeOwner();
+            if (!sameDims(size(), pty)) sendOwnSize();
+            return;
+          }
+          if (staleEcho(pty, () => follow())) return;
+          follow();
+        } else if (frame.type === "ownership-changed") {
+          opts.onOwnershipChanged?.();
+        } else if (frame.type === "attached") {
+          attachOutstanding = false;
+          onAdmitted();
+          if (reattachPending) {
+            reattachPending = false;
+            attachFrame("reconnect");
+            return;
+          }
+          if (resizeOnAdmit) {
+            resizeOnAdmit = false;
+            if (geometry.drawn === null) send({ type: "resize", sessionId: session.id, ...size() });
+          }
+          if (repaintAfterOpen) {
+            repaintAfterOpen = false;
+            repaintPending = true;
+          }
+          if (repaintPending) {
+            repaintPending = false;
+            if (wake.since === null && !wake.asleep) {
+              attachFrame("reconnect");
+              return;
+            }
+          }
+          if (!answerWaking && !answerAsleep) {
+            errorRetries = 0;
+            errorSaid = null;
+          }
+          if (answerWaking) {
+            schedulePoll();
+            return;
+          }
+          if (answerAsleep) {
+            if (wake.since !== null) clearWake();
+            return;
+          }
+          endWake();
+        } else if (frame.type === "runner-metrics" && "listenPorts" in frame) {
+          const ports = cleanPorts(frame.listenPorts);
+          if (ports !== null) opts.onListenPorts?.(ports);
+        } else if (frame.type === "error" && "message" in frame) {
+          const code = "code" in frame ? frame.code : "";
+          if (WAKE_CODES.has(code)) {
+            answerWaking = true;
+            wake.asleep = false;
+            wake.cold = code === "SESSION_RESUME_COLD_RESTART";
+            if (wake.since === null) {
+              wake.since = Date.now();
+              opts.onWaking?.(true);
+            }
+            armWakeClocks(wake.since);
+            if (wake.said !== frame.message) {
+              wake.said = frame.message;
+              say(
+                `\r
+${opts.wakeText ? opts.wakeText(code, frame.message) : `${copy.prefix}${frame.message}`}`
+              );
+            }
+            if (!attachOutstanding) schedulePoll();
+            return;
+          }
+          if (code === "FORBIDDEN" && opts.onForbidden === "view-only") {
+            if (canType) {
+              setCanType(false);
+              say(`\r
+${copy.nowViewOnly}`);
+            }
+            return;
+          }
+          if (!TERMINAL_ERROR_CODES.has(code)) {
+            attachOutstanding = false;
+            const quiet = code === "RUNNER_UNAVAILABLE" && (wake.since !== null || wake.asleep);
+            if (!quiet && errorSaid !== frame.message) {
+              errorSaid = frame.message;
+              say(`\r
+${copy.prefix}${frame.message}`);
+            }
+            scheduleErrorRetry();
+            return;
+          }
+          errorMessage = `\r
+${copy.prefix}${frame.message}`;
+          exitCode = 1;
+          ws.close(1e3);
+        } else if (frame.type === "notice" && "text" in frame) {
+          const code = "code" in frame ? frame.code : void 0;
+          if (code === HISTORY_UNAVAILABLE_NOTICE && (wake.since !== null || wake.asleep || Date.now() - repaintedAt < HISTORY_NOTICE_GRACE_MS))
+            return;
+          if (code === WORKSPACE_ASLEEP_NOTICE) {
+            wake.asleep = true;
+            answerAsleep = true;
+          }
+          say(
+            `\r
+${opts.noticeText ? opts.noticeText(code, frame.text) : `${copy.prefix}${frame.text}`}`
+          );
+        }
+      });
+      const teardown = () => {
+        detachHooks.delete(detachNow);
+        for (const tm of rttTimers) clearTimeout(tm);
+        if (livenessTimer) clearInterval(livenessTimer);
+        clearInterval(tokenTimer);
+        clearInterval(presenceTimer);
+        clearWakeTimers();
+        if (errorRetryTimer) clearTimeout(errorRetryTimer);
+        if (handoverTimer) clearTimeout(handoverTimer);
+        handoverTimer = null;
+        if (repaintTimer) clearTimeout(repaintTimer);
+        repaintTimer = null;
+        repaintPending = false;
+        claimNow = null;
+        offInput();
+        offResize();
+      };
+      const openedAt = adopt?.openedAt ?? Date.now();
+      const handoverAfter = opts.handoverAfterMs ?? HANDOVER_AFTER_MS;
+      const retryMs = opts.handoverRetryMs ?? HANDOVER_RETRY_MS;
+      let handoverTimer = null;
+      let handedOver = false;
+      let markOldClosed = () => void 0;
+      let standby = null;
+      const scheduleHandover = (delay) => {
+        if (handoverAfter <= 0 || handoverTimer !== null || handedOver || standby) return;
+        const lastStart = Math.max(HANDOVER_LAST_START_MS, handoverAfter);
+        if (Date.now() + delay - openedAt > lastStart) return;
+        handoverTimer = setTimeout(
+          () => {
+            handoverTimer = null;
+            void beginHandover();
+          },
+          Math.max(0, delay)
+        );
+      };
+      const steady = () => ws.readyState === import_ws2.default.OPEN && !userDetached && !detachRequested && !attachOutstanding && !reattachPending && !resizeOnAdmit && errorRetryTimer === null && wake.since === null && !wake.asleep && heldKeys === null && // keys still waiting on the socket this one replaced
+      // terminal-shared-geometry: a repaint is on its way; a switch would drop it on the floor.
+      repaintTimer === null && !repaintPending && !repaintAfterOpen;
+      const giveUpStandby = (retry) => {
+        const sb = standby;
+        standby = null;
+        if (sb) {
+          if (sb.timer) clearTimeout(sb.timer);
+          if (sb.ws.readyState === import_ws2.default.OPEN) sb.ws.close(1e3);
+          else sb.ws.terminate();
+        }
+        if (retry) scheduleHandover(retryMs);
+      };
+      const takeOver = (sb) => {
+        standby = null;
+        handedOver = true;
+        if (sb.timer) clearTimeout(sb.timer);
+        teardown();
+        sb.ws.removeAllListeners("message");
+        sb.ws.removeAllListeners("close");
+        sb.ws.removeAllListeners("unexpected-response");
+        const oldClosed = new Promise((done) => {
+          const hold = setTimeout(done, HANDOVER_INPUT_HOLD_MS);
+          markOldClosed = () => {
+            clearTimeout(hold);
+            done();
+          };
+        });
+        current = sb.ws;
+        resolve({
+          kind: "handover",
+          ws: sb.ws,
+          headers: sb.headers,
+          openedAt: sb.openedAt,
+          filter,
+          oldClosed
+        });
+        ws.close(1e3);
+      };
+      const settle = (sb) => {
+        if (sb.timer) clearTimeout(sb.timer);
+        sb.timer = setTimeout(() => {
+          sb.timer = null;
+          if (standby !== sb) return;
+          const quiet = lastOutputAt < sb.sentAt && !sb.sawOutput;
+          if (!quiet || !steady() || sb.ws.readyState !== import_ws2.default.OPEN) giveUpStandby(true);
+          else takeOver(sb);
+        }, opts.handoverSettleMs ?? HANDOVER_SETTLE_MS);
+      };
+      const beginHandover = async () => {
+        if (standby || handedOver || ws.readyState !== import_ws2.default.OPEN) return;
+        if (!steady()) {
+          scheduleHandover(retryMs);
+          return;
+        }
+        let h;
+        try {
+          h = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
+        } catch {
+          scheduleHandover(retryMs);
+          return;
+        }
+        if (standby || handedOver || !steady()) return;
+        const next = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), h);
+        const sb = {
+          ws: next,
+          headers: h,
+          openedAt: 0,
+          sentAt: Date.now(),
+          sawOutput: false,
+          timer: null
+        };
+        standby = sb;
+        next.on("error", () => void 0);
+        next.once("unexpected-response", (_req, res) => {
+          res.resume();
+          if (standby === sb) giveUpStandby(true);
+        });
+        next.once("close", () => {
+          if (standby === sb) giveUpStandby(true);
+        });
+        sb.timer = setTimeout(() => {
+          if (standby === sb) giveUpStandby(true);
+        }, HANDOVER_ADMIT_MS);
+        next.once("open", () => {
+          if (standby !== sb) return;
+          sb.openedAt = Date.now();
+          sb.sentAt = Date.now();
+          next.send(
+            JSON.stringify({
+              type: "attach",
+              sessionId: session.id,
+              ...drawn(),
+              intent: "reconnect",
+              // A non-owner's standby is its own attach, marked like every other (final review W1).
+              ...geometry.drawn !== null ? { repaint: true } : {}
+            })
+          );
+        });
+        next.on("message", (raw) => {
+          if (standby !== sb) return;
+          let f;
+          try {
+            f = JSON.parse(raw.toString("utf8"));
+          } catch {
+            return;
+          }
+          if (f.sessionId !== void 0 && f.sessionId !== null && f.sessionId !== session.id) {
+            return;
+          }
+          if (f.type === "history") return;
+          if (f.type === "output") {
+            sb.sawOutput = true;
+            return;
+          }
+          if (f.type === "attached") {
+            settle(sb);
+            return;
+          }
+          const benignNotice = f.type === "notice" && "code" in f && f.code === HISTORY_UNAVAILABLE_NOTICE;
+          if (f.type === "error" || f.type === "reset" || f.type === "notice" && !benignNotice) {
+            giveUpStandby(true);
+          }
+        });
+      };
+      if (handoverAfter > 0) {
+        const jitter = Math.random() * (opts.handoverJitterMs ?? HANDOVER_JITTER_MS);
+        scheduleHandover(handoverAfter - jitter - (Date.now() - openedAt));
+      }
+      ws.on("error", () => void 0);
+      ws.on("close", (code) => {
+        if (handedOver) {
+          markOldClosed();
+          return;
+        }
+        teardown();
+        giveUpStandby(false);
+        const held = filter.flush();
+        if (held.length > 0 && !userDetached) {
+          if (echo) echo.output(held);
+          else sink.write(held);
+        }
+        echo?.undrawNow();
+        if (!userDetached && exitCode === 0 && (code === 1006 || code === 1001)) {
+          resolve({ kind: "dropped" });
+          return;
+        }
+        if (code === 4401) {
+          resolve({
+            kind: "ended",
+            exitCode: 1,
+            message: `\r
+${copy.accessEnded}`,
+            unauthorized: true
+          });
+          return;
+        }
+        if (errorMessage !== null) {
+          if (errorMessage.length > 0) say(errorMessage);
+          resolve({ kind: "ended", exitCode, message: null });
+          return;
+        }
+        resolve({ kind: "ended", exitCode, message: `\r
+${copy.detached}` });
+      });
+    });
+  }
+  return {
+    run: run2,
+    detach: () => {
+      detachRequested = true;
+      for (const hook of [...detachHooks]) hook();
+      if (detachHooks.size === 0 && current && current.readyState === import_ws2.default.CONNECTING) {
+        current.terminate();
+      }
+    },
+    canType: () => canType,
+    setCanType: (can) => setCanType(can),
+    claim: () => {
+      if (claimTimer) clearTimeout(claimTimer);
+      claimTimer = setTimeout(() => {
+        claimTimer = null;
+        if (opts.inFront && !opts.inFront()) return;
+        claimNow?.();
+      }, CLAIM_DEBOUNCE_MS);
+      claimTimer.unref?.();
+    }
+  };
+}
+var sameDims = (a, b) => a.cols === b.cols && a.rows === b.rows;
+function wireDims(cols, rows) {
+  if (typeof cols !== "number" || typeof rows !== "number") return null;
+  if (!Number.isInteger(cols) || !Number.isInteger(rows)) return null;
+  return cols >= 1 && cols <= 500 && rows >= 1 && rows <= 300 ? { cols, rows } : null;
+}
+
 // src/fs/events-client.ts
 var LIVE_STATES = /* @__PURE__ */ new Set([
   "running",
@@ -12985,7 +13911,7 @@ function parseEventsFrame(v) {
 }
 var defaultWs2 = (url, headers) => (
   // A handshake that never completes must not hold the org's one socket forever.
-  new import_ws2.WebSocket(url, { headers, perMessageDeflate: false, handshakeTimeout: 2e4 })
+  new import_ws3.WebSocket(url, { headers, perMessageDeflate: false, handshakeTimeout: 2e4 })
 );
 var OrgSocket = class {
   constructor(org, deps, emit) {
@@ -13022,8 +13948,10 @@ var OrgSocket = class {
   redial = false;
   /** Teams already subscribed once on this org's socket (any of its dials). */
   announced = /* @__PURE__ */ new Set();
+  handoverTimer = null;
+  standby = null;
   isOpen() {
-    return this.ws !== null && this.ws.readyState === import_ws2.WebSocket.OPEN;
+    return this.ws !== null && this.ws.readyState === import_ws3.WebSocket.OPEN;
   }
   /** Closed for good (a 4401, or a close): a new watch builds a new socket. */
   get dead() {
@@ -13068,8 +13996,36 @@ var OrgSocket = class {
       for (const id of this.subs.keys()) this.sendSubscribe(id);
       this.startTokenRotation(client);
       if (gap) this.gapPending = new Set(this.subs.keys());
+      this.armHandover(Date.now());
     });
+    this.wire(ws, client);
+    ws.on("unexpected-response", (_req, res) => {
+      res.resume();
+      const status = res.statusCode ?? 0;
+      if (status === 404 || status === 401 || status === 403) {
+        this.backoff = this.deps.maxBackoffMs ?? 3e4;
+      }
+      if (status === 401) this.unauthorized();
+      if (status === 429) {
+        this.backoff = Math.max(
+          this.deps.refusedBackoffMs ?? 3e5,
+          this.deps.minBackoffMs ?? 1e3
+        );
+        if (!this.refusalSaid) {
+          this.refusalSaid = true;
+          try {
+            this.deps.onRefused?.(this.org, status);
+          } catch {
+          }
+        }
+      }
+      ws.terminate();
+    });
+  }
+  /** THE socket's frames and close (a dialled one, or a standby that took over). */
+  wire(ws, client) {
     ws.on("message", (data) => {
+      if (this.ws !== ws) return;
       let raw;
       try {
         raw = JSON.parse(data.toString());
@@ -13100,6 +14056,7 @@ var OrgSocket = class {
       this.ws = null;
       this.acked.clear();
       this.stopTokenRotation();
+      this.stopHandover();
       if (this.subs.size > 0) this.scheduleReconnect();
     };
     ws.on("close", (code) => {
@@ -13118,28 +14075,136 @@ var OrgSocket = class {
       down();
     });
     ws.on("error", () => void 0);
-    ws.on("unexpected-response", (_req, res) => {
+  }
+  // ── 0.2.3: make-before-break ─────────────────────────────────────────────────────────────────
+  armHandover(openedAt) {
+    this.stopHandover();
+    const after = this.deps.handoverAfterMs ?? HANDOVER_AFTER_MS;
+    if (after <= 0) return;
+    const jitter = Math.random() * (this.deps.handoverJitterMs ?? HANDOVER_JITTER_MS);
+    this.scheduleHandover(openedAt, after - jitter - (Date.now() - openedAt));
+  }
+  scheduleHandover(openedAt, delay) {
+    if (this.handoverTimer !== null || this.standby !== null) return;
+    const after = this.deps.handoverAfterMs ?? HANDOVER_AFTER_MS;
+    if (Date.now() + delay - openedAt > Math.max(HANDOVER_LAST_START_MS, after)) return;
+    this.handoverTimer = setTimeout(
+      () => {
+        this.handoverTimer = null;
+        void this.beginHandover(openedAt);
+      },
+      Math.max(0, delay)
+    );
+    this.handoverTimer.unref?.();
+  }
+  /** No handover pending or in flight (the socket went, closed, or was replaced). */
+  stopHandover() {
+    if (this.handoverTimer !== null) clearTimeout(this.handoverTimer);
+    this.handoverTimer = null;
+    this.dropStandby();
+  }
+  dropStandby() {
+    const sb = this.standby;
+    this.standby = null;
+    if (!sb) return;
+    if (sb.timer !== null) clearTimeout(sb.timer);
+    if (sb.ws.readyState === import_ws3.WebSocket.OPEN) sb.ws.close(1e3, "handover");
+    else sb.ws.terminate();
+  }
+  async beginHandover(openedAt) {
+    const old = this.ws;
+    const usable = () => this.ws === old && this.isOpen() && !this.closedForGood && this.subs.size > 0;
+    if (!usable() || this.standby !== null) return;
+    const retry = () => {
+      if (usable()) this.scheduleHandover(openedAt, this.deps.handoverRetryMs ?? HANDOVER_RETRY_MS);
+    };
+    let client;
+    let headers;
+    try {
+      client = await this.deps.client();
+      if (!client) return retry();
+      headers = await client.upgradeHeaders(REMOTE_EVENTS_WS_PATH, this.org);
+    } catch {
+      return retry();
+    }
+    if (!usable() || this.standby !== null) return;
+    const next = (this.deps.ws ?? defaultWs2)(wsUrl(client.host, REMOTE_EVENTS_WS_PATH), headers);
+    const sb = {
+      ws: next,
+      client,
+      token: /^Bearer (.+)$/.exec(headers.Authorization ?? "")?.[1] ?? null,
+      openedAt: Date.now(),
+      sent: /* @__PURE__ */ new Set(),
+      answered: /* @__PURE__ */ new Set(),
+      acked: /* @__PURE__ */ new Set(),
+      timer: null
+    };
+    this.standby = sb;
+    const giveUp = () => {
+      if (this.standby !== sb) return;
+      this.dropStandby();
+      retry();
+    };
+    sb.timer = setTimeout(giveUp, HANDOVER_ADMIT_MS);
+    sb.timer.unref?.();
+    next.on("error", () => void 0);
+    next.on("unexpected-response", (_req, res) => {
       res.resume();
-      const status = res.statusCode ?? 0;
-      if (status === 404 || status === 401 || status === 403) {
-        this.backoff = this.deps.maxBackoffMs ?? 3e4;
-      }
-      if (status === 401) this.unauthorized();
-      if (status === 429) {
-        this.backoff = Math.max(
-          this.deps.refusedBackoffMs ?? 3e5,
-          this.deps.minBackoffMs ?? 1e3
-        );
-        if (!this.refusalSaid) {
-          this.refusalSaid = true;
-          try {
-            this.deps.onRefused?.(this.org, status);
-          } catch {
-          }
-        }
-      }
-      ws.terminate();
+      giveUp();
     });
+    next.on("close", giveUp);
+    next.on("open", () => {
+      if (this.standby !== sb) return;
+      sb.openedAt = Date.now();
+      for (const id of this.subs.keys()) {
+        sb.sent.add(id);
+        next.send(JSON.stringify({ type: "subscribe", workspaceId: id, intent: "reconnect" }));
+      }
+    });
+    next.on("message", (data) => {
+      if (this.standby !== sb) return;
+      let raw;
+      try {
+        raw = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      const frame = parseEventsFrame(raw);
+      if (frame === null) return;
+      if (frame.type === "subscribed") {
+        sb.answered.add(frame.workspaceId);
+        if (frame.watch && frame.state === "running") sb.acked.add(frame.workspaceId);
+        else sb.acked.delete(frame.workspaceId);
+        if ([...sb.sent].every((id) => sb.answered.has(id))) this.takeOver(sb);
+        return;
+      }
+      if (frame.type === "error" || frame.type === "unsubscribed") {
+        giveUp();
+        return;
+      }
+      if (frame.type === "workspace-state" && frame.state !== "running") {
+        sb.acked.delete(frame.workspaceId);
+      }
+      this.emit(frame);
+    });
+  }
+  takeOver(sb) {
+    if (sb.timer !== null) clearTimeout(sb.timer);
+    this.standby = null;
+    const old = this.ws;
+    for (const event of ["message", "close", "open", "unexpected-response"]) {
+      sb.ws.removeAllListeners(event);
+    }
+    this.ws = sb.ws;
+    this.acked.clear();
+    for (const id of sb.acked) if (this.subs.has(id)) this.acked.add(id);
+    this.wire(sb.ws, sb.client);
+    this.lastToken = sb.token;
+    this.startTokenRotation(sb.client);
+    for (const id of sb.sent) if (!this.subs.has(id)) this.sendUnsubscribe(id);
+    for (const id of this.subs.keys()) if (!sb.sent.has(id)) this.sendSubscribe(id);
+    this.armHandover(sb.openedAt);
+    old?.close(1e3, "handover");
   }
   /**
    * Hand a possible revocation to the service: one check at a time. The guard re-arms when that
@@ -13174,6 +14239,7 @@ var OrgSocket = class {
     if (old !== null && old !== ws) {
       this.acked.clear();
       this.stopTokenRotation();
+      this.stopHandover();
       old.terminate();
     }
   }
@@ -13241,6 +14307,7 @@ var OrgSocket = class {
     this.ws = null;
     this.acked.clear();
     this.stopTokenRotation();
+    this.stopHandover();
     ws?.terminate();
     this.everConnected = this.everConnected || ws !== null;
     this.backoff = this.deps.minBackoffMs ?? 1e3;
@@ -13251,6 +14318,7 @@ var OrgSocket = class {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.stopTokenRotation();
+    this.stopHandover();
     const ws = this.ws;
     this.ws = null;
     this.acked.clear();
@@ -13909,7 +14977,7 @@ var SIGNIN_LOCK_TTL_MS = (REMOTE_DEVICE_CODE_TTL_SEC + 60) * 1e3;
 var SIGNIN_LOCK_STALE_MS = 3e4;
 var SIGNIN_LOCK_HEARTBEAT_MS = 5e3;
 var SIGNIN_TAKEOVER_WAIT_MS = 2e4;
-var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+var sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -14039,7 +15107,7 @@ async function takeOverSignInLock(file, opts = {}) {
     } catch {
     }
     const deadline = Date.now() + (opts.takeoverWaitMs ?? SIGNIN_TAKEOVER_WAIT_MS);
-    while (Date.now() < deadline && inspect(file, staleMs)?.raw === target.raw) await sleep2(100);
+    while (Date.now() < deadline && inspect(file, staleMs)?.raw === target.raw) await sleep3(100);
     breakIf(file, `${file}.takeover-${(0, import_node_crypto7.randomBytes)(4).toString("hex")}`, (aside) => {
       try {
         return (0, import_node_fs4.readFileSync)(aside, "utf8") === target.raw;
@@ -15506,552 +16574,6 @@ var vscode12 = __toESM(require("vscode"), 1);
 // src/terminal/hq-pty.ts
 var vscode11 = __toESM(require("vscode"), 1);
 
-// ../shared/src/terminal-queries.ts
-var QUERY_RE = /\x1b\[[>=]?[0-9;]*c|\x1b\](?:10|11);\?(?:\x07|\x1b\\)/g;
-var PARTIAL_TAIL_RE = /\x1b(?:\[[>=]?[0-9;]*|\](?:1(?:[01](?:;(?:\?(?:\x1b)?)?)?)?)?)?$/;
-var MAX_HELD = 24;
-function createTerminalQueryFilter() {
-  let held = "";
-  return {
-    push(chunk) {
-      const text = held + chunk;
-      held = "";
-      const stripped = text.replace(QUERY_RE, "");
-      const tail = PARTIAL_TAIL_RE.exec(stripped);
-      if (tail && tail[0].length <= MAX_HELD) {
-        held = tail[0];
-        return stripped.slice(0, stripped.length - held.length);
-      }
-      return stripped;
-    },
-    /** Whatever is still held (a prefix that never completed): written as is. */
-    flush() {
-      const out = held;
-      held = "";
-      return out;
-    }
-  };
-}
-
-// ../hq-client/src/attach-session.ts
-var import_ws3 = __toESM(require_ws(), 1);
-var TOKEN_CHECK_MS = 6e4;
-var PRESENCE_MS = 6e4;
-var WAKE_RETRY_MS = 2e3;
-var WAKE_RETRY_MAX_MS = 4e3;
-var WAKE_STILL_ON_IT_MS = 2e4;
-var HISTORY_NOTICE_GRACE_MS = 8e3;
-var HISTORY_UNAVAILABLE_NOTICE = "history_unavailable";
-var WORKSPACE_ASLEEP_NOTICE = "workspace_asleep";
-var RECONNECT_BASE_MS = 1e3;
-var RECONNECT_MAX_MS = 1e4;
-var MAX_RECONNECTS = 8;
-var RTT_PING_MS = 3e4;
-var RTT_BURST_MS = [500, 1e3, 1500];
-var TERMINAL_ERROR_CODES = /* @__PURE__ */ new Set(["NOT_FOUND", "SESSION_STOPPED", "FORBIDDEN"]);
-var ERROR_RETRY_MS = 2e3;
-var ERROR_RETRY_MAX_MS = 1e4;
-var WAKE_CODES = /* @__PURE__ */ new Set([
-  "SESSION_STARTING",
-  "SESSION_RESUMING",
-  "SESSION_RESUME_RETRYING",
-  "SESSION_RESUME_COLD_RESTART"
-]);
-var CLI_ATTACH_COPY = {
-  prefix: "hq: ",
-  stillOnIt: "hq: Still on it...",
-  wakeTimeout: wakeTimeoutMessage,
-  reconnecting: "hq: connection lost, reconnecting...",
-  accessEnded: "hq: your access to this session ended.",
-  detached: "hq: detached.",
-  nowViewOnly: "hq: you can watch this session but not type in it.",
-  sessionStopped: "hq: the session stopped.",
-  sessionError: "hq: the session exited with an error."
-};
-var ACCOUNT_ERROR_NAMES = /* @__PURE__ */ new Set([
-  "NeedsSignInError",
-  "AccountGoneError",
-  "SlotRenewedError"
-]);
-var ADMIT_STABLE_MS = 5e3;
-function isTransientUpgradeError(err) {
-  if (err instanceof NotLoggedInError || err instanceof RefreshNeedsRenewingError) return false;
-  if (err instanceof Error && ACCOUNT_ERROR_NAMES.has(err.name)) return false;
-  if (err instanceof HqApiError) {
-    return err.status >= 500 || err.status === 429 || err.status === 408;
-  }
-  return true;
-}
-var sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
-function cleanPorts(value) {
-  if (!Array.isArray(value)) return null;
-  const ports = value.filter(
-    (p) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
-  );
-  return ports.slice(0, 64);
-}
-function createAttachSession(client, target, sink, opts = {}) {
-  const { team, session } = target;
-  const copy = { ...CLI_ATTACH_COPY, ...opts.copy ?? {} };
-  const make = opts.wsFactory ?? ((url, h) => new import_ws3.default(url, { headers: h }));
-  const reconnectBase = opts.reconnectBaseMs ?? RECONNECT_BASE_MS;
-  const echo = opts.echo ?? null;
-  const wake = { since: null, said: null, cold: false, stillSaid: false, asleep: false };
-  let canType = session.canType;
-  let current = null;
-  let detachRequested = false;
-  const detachHooks = /* @__PURE__ */ new Set();
-  const setCanType = (next) => {
-    if (next === canType) return;
-    canType = next;
-    opts.onCanTypeChanged?.(next);
-  };
-  async function run2() {
-    let announced = false;
-    let intent = opts.initialIntent ?? "open";
-    let reconnects = 0;
-    let admittedAt = null;
-    for (; ; ) {
-      if (detachRequested) return { kind: "ended", exitCode: 0, message: `\r
-${copy.detached}` };
-      let headers;
-      try {
-        headers = await client.upgradeHeaders(REMOTE_TERMINAL_WS_PATH, team.org.slug);
-      } catch (err) {
-        if (!isTransientUpgradeError(err)) throw err;
-        if ((reconnects > 0 || announced) && reconnects < MAX_RECONNECTS) {
-          await sleep3(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
-          reconnects += 1;
-          intent = "reconnect";
-          continue;
-        }
-        if (reconnects >= MAX_RECONNECTS) return { kind: "lost" };
-        return { kind: "refused", status: 0 };
-      }
-      const ws = make(wsUrl(client.host, REMOTE_TERMINAL_WS_PATH), headers);
-      current = ws;
-      const opened = await new Promise((resolve) => {
-        ws.once("open", () => resolve(null));
-        ws.once("unexpected-response", (_req, res) => {
-          const status = res.statusCode ?? 0;
-          res.resume();
-          ws.terminate();
-          resolve(status);
-        });
-        ws.once("error", () => resolve(0));
-      });
-      if (opened !== null) {
-        if ((reconnects > 0 || announced) && intent === "reconnect" && (opened === 0 || opened === 503) && reconnects < MAX_RECONNECTS) {
-          await sleep3(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
-          reconnects += 1;
-          continue;
-        }
-        return { kind: "refused", status: opened };
-      }
-      if (!announced) {
-        announced = true;
-        opts.onFirstOpen?.();
-      }
-      const end = await runSocket(
-        ws,
-        () => {
-          admittedAt = Date.now();
-        },
-        intent,
-        headers
-      );
-      if (admittedAt !== null && Date.now() - admittedAt >= (opts.admitStableMs ?? ADMIT_STABLE_MS)) {
-        reconnects = 0;
-      }
-      admittedAt = null;
-      if (end.kind === "dropped" && reconnects < MAX_RECONNECTS) {
-        sink.say(`\r
-${copy.reconnecting}`);
-        await sleep3(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
-        reconnects += 1;
-        intent = "reconnect";
-        continue;
-      }
-      if (end.kind === "dropped") return { kind: "lost" };
-      return end;
-    }
-  }
-  function runSocket(ws, onAdmitted, intent, headers) {
-    echo?.lifecycleReset();
-    const say = (line) => {
-      echo?.undrawNow();
-      sink.say(line);
-    };
-    let lastToken = (headers.Authorization ?? "").slice("Bearer ".length);
-    const send = (frame) => {
-      if (ws.readyState === import_ws3.default.OPEN) ws.send(JSON.stringify(frame));
-    };
-    const size = () => sink.size();
-    let answerWaking = false;
-    let answerAsleep = false;
-    let attachOutstanding = false;
-    const attachFrame = (i) => {
-      answerWaking = false;
-      answerAsleep = false;
-      attachOutstanding = true;
-      send({ type: "attach", sessionId: session.id, ...size(), intent: i });
-    };
-    attachFrame(intent);
-    let filter = (opts.createFilter ?? createTerminalQueryFilter)();
-    let reattachPending = false;
-    let resizeOnAdmit = false;
-    let statusSaid = null;
-    return new Promise((resolve) => {
-      let exitCode = 0;
-      let errorMessage = null;
-      let userDetached = false;
-      let wakeTimer = null;
-      let wakeAttempts = 0;
-      let stillTimer = null;
-      let giveUpTimer = null;
-      let errorRetryTimer = null;
-      let errorRetries = 0;
-      let errorSaid = null;
-      let repaintedAt = 0;
-      const schedulePoll = () => {
-        if (wakeTimer !== null) return;
-        const base = opts.wakeRetryMs ?? WAKE_RETRY_MS;
-        const delay = wakeAttempts === 0 ? base : Math.max(base, Math.min(WAKE_RETRY_MAX_MS, base * 2));
-        wakeAttempts += 1;
-        wakeTimer = setTimeout(() => {
-          wakeTimer = null;
-          attachFrame("reconnect");
-        }, delay);
-      };
-      const scheduleErrorRetry = () => {
-        if (errorRetryTimer !== null) return;
-        const base = opts.errorRetryMs ?? ERROR_RETRY_MS;
-        const delay = Math.min(ERROR_RETRY_MAX_MS, base * 2 ** Math.min(errorRetries, 8));
-        errorRetries += 1;
-        errorRetryTimer = setTimeout(() => {
-          errorRetryTimer = null;
-          if (!attachOutstanding) attachFrame("reconnect");
-        }, delay);
-      };
-      const clearWakeTimers = () => {
-        if (wakeTimer) clearTimeout(wakeTimer);
-        if (stillTimer) clearTimeout(stillTimer);
-        if (giveUpTimer) clearTimeout(giveUpTimer);
-        wakeTimer = stillTimer = giveUpTimer = null;
-      };
-      const armWakeClocks = (since) => {
-        const now = Date.now();
-        if (stillTimer === null && !wake.stillSaid) {
-          stillTimer = setTimeout(
-            () => {
-              if (wake.since === null || wake.cold || wake.stillSaid) return;
-              wake.stillSaid = true;
-              say(`\r
-${copy.stillOnIt}`);
-            },
-            Math.max(0, since + (opts.wakeStillMs ?? WAKE_STILL_ON_IT_MS) - now)
-          );
-        }
-        if (giveUpTimer === null) {
-          giveUpTimer = setTimeout(
-            () => {
-              say(`\r
-${copy.wakeTimeout(team)}`);
-              errorMessage = "";
-              exitCode = 1;
-              ws.terminate();
-            },
-            Math.max(0, since + (opts.wakeTimeoutMs ?? WAKE_TIMEOUT_MS) - now)
-          );
-        }
-      };
-      const clearWake = () => {
-        if (wake.since !== null) opts.onWaking?.(false);
-        wake.since = null;
-        wake.said = null;
-        wake.cold = false;
-        wake.stillSaid = false;
-        wakeAttempts = 0;
-        clearWakeTimers();
-      };
-      const endWake = () => {
-        if (wake.since === null) return;
-        clearWake();
-        wake.asleep = false;
-        attachFrame("open");
-      };
-      if (wake.since !== null) armWakeClocks(wake.since);
-      const tokenTimer = setInterval(() => {
-        void client.accessToken().then((t) => {
-          if (t !== lastToken) {
-            lastToken = t;
-            send({ type: "remote-token", token: t });
-          }
-        }).catch(() => void 0);
-      }, TOKEN_CHECK_MS);
-      const presenceTimer = setInterval(() => {
-        if (opts.presenceWhen && !opts.presenceWhen()) return;
-        send({ type: "presence", sessionId: session.id });
-      }, opts.presenceIntervalMs ?? PRESENCE_MS);
-      presenceTimer.unref?.();
-      tokenTimer.unref?.();
-      const rttTimers = [];
-      if (echo) {
-        const ping = () => {
-          if (ws.readyState !== import_ws3.default.OPEN) return;
-          try {
-            ws.ping(String(Date.now()));
-          } catch {
-          }
-        };
-        ws.on("pong", (payload) => {
-          const sentAt = Number(payload.toString("utf8"));
-          if (Number.isFinite(sentAt)) echo.rttSample(Date.now() - sentAt);
-        });
-        ping();
-        for (const ms of RTT_BURST_MS) rttTimers.push(setTimeout(ping, ms));
-        rttTimers.push(setInterval(ping, RTT_PING_MS));
-        for (const tm of rttTimers) tm.unref?.();
-      }
-      let livenessTimer = null;
-      let lastPongAt = Date.now();
-      if (opts.livenessPingMs !== void 0) {
-        const timeout = opts.livenessTimeoutMs ?? 1e4;
-        ws.on("pong", () => {
-          lastPongAt = Date.now();
-        });
-        let pingSentAt = 0;
-        livenessTimer = setInterval(
-          () => {
-            if (ws.readyState !== import_ws3.default.OPEN) return;
-            if (pingSentAt > lastPongAt && Date.now() - pingSentAt > timeout) {
-              ws.terminate();
-              return;
-            }
-            if (pingSentAt <= lastPongAt) {
-              pingSentAt = Date.now();
-              try {
-                ws.ping();
-              } catch {
-              }
-            }
-          },
-          Math.min(opts.livenessPingMs, timeout)
-        );
-        livenessTimer.unref?.();
-      }
-      const onResize = () => {
-        echo?.resize(size().cols, size().rows);
-        send({ type: "resize", sessionId: session.id, ...size() });
-      };
-      const detachNow = () => {
-        echo?.close();
-        userDetached = true;
-        send({ type: "detach", sessionId: session.id });
-        ws.close(1e3);
-      };
-      const onData = (chunk) => {
-        const i = opts.detachByte === null || opts.detachByte === void 0 ? -1 : chunk.indexOf(opts.detachByte);
-        const before = i >= 0 ? chunk.subarray(0, i) : chunk;
-        if (before.length > 0 && wake.asleep) {
-          wake.asleep = false;
-          attachFrame("open");
-        }
-        if (canType && before.length > 0) {
-          const data = before.toString("utf8");
-          echo?.key(data);
-          send({ type: "input", sessionId: session.id, data });
-        }
-        if (i >= 0) detachNow();
-      };
-      detachHooks.add(detachNow);
-      const offResize = sink.onResize(onResize);
-      const offInput = sink.onInput(onData);
-      ws.on("message", (data) => {
-        let frame;
-        try {
-          frame = JSON.parse(data.toString("utf8"));
-        } catch {
-          return;
-        }
-        if (frame.sessionId !== void 0 && frame.sessionId !== null && frame.sessionId !== session.id)
-          return;
-        if ((frame.type === "output" || frame.type === "history") && "data" in frame) {
-          if (frame.type === "history") repaintedAt = Date.now();
-          wake.asleep = false;
-          const clean = filter.push(frame.data);
-          if (clean.length > 0) {
-            if (!echo) sink.write(clean);
-            else if (frame.type === "history") echo.repaint(clean);
-            else echo.output(clean);
-          }
-        } else if (frame.type === "reset") {
-          repaintedAt = Date.now();
-          if ("reattach" in frame && frame.reattach === true) {
-            echo?.lifecycleReset();
-            filter = (opts.createFilter ?? createTerminalQueryFilter)();
-            const wipe = "\x1Bc\x1B[H\x1B[2J\x1B[3J";
-            if (echo) echo.repaint(wipe);
-            else sink.write(wipe);
-            resizeOnAdmit = true;
-            if (attachOutstanding) reattachPending = true;
-            else attachFrame("reconnect");
-            return;
-          }
-          if (echo) echo.repaint("\x1B[H\x1B[2J\x1B[3J");
-          else sink.write("\x1B[H\x1B[2J\x1B[3J");
-        } else if (frame.type === "status" && "status" in frame) {
-          const st = typeof frame.status === "string" ? frame.status : "";
-          if (st === "error" && (wake.since !== null || wake.asleep)) return;
-          if (st === statusSaid) return;
-          statusSaid = st;
-          if (st === "stopped") say(`\r
-${copy.sessionStopped}`);
-          else if (st === "error") say(`\r
-${copy.sessionError}`);
-        } else if (frame.type === "ownership-changed") {
-          opts.onOwnershipChanged?.();
-        } else if (frame.type === "attached") {
-          attachOutstanding = false;
-          onAdmitted();
-          if (reattachPending) {
-            reattachPending = false;
-            attachFrame("reconnect");
-            return;
-          }
-          if (resizeOnAdmit) {
-            resizeOnAdmit = false;
-            send({ type: "resize", sessionId: session.id, ...size() });
-          }
-          if (!answerWaking && !answerAsleep) {
-            errorRetries = 0;
-            errorSaid = null;
-          }
-          if (answerWaking) {
-            schedulePoll();
-            return;
-          }
-          if (answerAsleep) {
-            if (wake.since !== null) clearWake();
-            return;
-          }
-          endWake();
-        } else if (frame.type === "runner-metrics" && "listenPorts" in frame) {
-          const ports = cleanPorts(frame.listenPorts);
-          if (ports !== null) opts.onListenPorts?.(ports);
-        } else if (frame.type === "error" && "message" in frame) {
-          const code = "code" in frame ? frame.code : "";
-          if (WAKE_CODES.has(code)) {
-            answerWaking = true;
-            wake.asleep = false;
-            wake.cold = code === "SESSION_RESUME_COLD_RESTART";
-            if (wake.since === null) {
-              wake.since = Date.now();
-              opts.onWaking?.(true);
-            }
-            armWakeClocks(wake.since);
-            if (wake.said !== frame.message) {
-              wake.said = frame.message;
-              say(
-                `\r
-${opts.wakeText ? opts.wakeText(code, frame.message) : `${copy.prefix}${frame.message}`}`
-              );
-            }
-            if (!attachOutstanding) schedulePoll();
-            return;
-          }
-          if (code === "FORBIDDEN" && opts.onForbidden === "view-only") {
-            if (canType) {
-              setCanType(false);
-              say(`\r
-${copy.nowViewOnly}`);
-            }
-            return;
-          }
-          if (!TERMINAL_ERROR_CODES.has(code)) {
-            attachOutstanding = false;
-            const quiet = code === "RUNNER_UNAVAILABLE" && (wake.since !== null || wake.asleep);
-            if (!quiet && errorSaid !== frame.message) {
-              errorSaid = frame.message;
-              say(`\r
-${copy.prefix}${frame.message}`);
-            }
-            scheduleErrorRetry();
-            return;
-          }
-          errorMessage = `\r
-${copy.prefix}${frame.message}`;
-          exitCode = 1;
-          ws.close(1e3);
-        } else if (frame.type === "notice" && "text" in frame) {
-          const code = "code" in frame ? frame.code : void 0;
-          if (code === HISTORY_UNAVAILABLE_NOTICE && (wake.since !== null || wake.asleep || Date.now() - repaintedAt < HISTORY_NOTICE_GRACE_MS))
-            return;
-          if (code === WORKSPACE_ASLEEP_NOTICE) {
-            wake.asleep = true;
-            answerAsleep = true;
-          }
-          say(
-            `\r
-${opts.noticeText ? opts.noticeText(code, frame.text) : `${copy.prefix}${frame.text}`}`
-          );
-        }
-      });
-      ws.on("error", () => void 0);
-      ws.on("close", (code) => {
-        detachHooks.delete(detachNow);
-        for (const tm of rttTimers) clearTimeout(tm);
-        if (livenessTimer) clearInterval(livenessTimer);
-        clearInterval(tokenTimer);
-        clearInterval(presenceTimer);
-        clearWakeTimers();
-        if (errorRetryTimer) clearTimeout(errorRetryTimer);
-        offInput();
-        offResize();
-        const held = filter.flush();
-        if (held.length > 0 && !userDetached) {
-          if (echo) echo.output(held);
-          else sink.write(held);
-        }
-        echo?.undrawNow();
-        if (!userDetached && exitCode === 0 && (code === 1006 || code === 1001)) {
-          resolve({ kind: "dropped" });
-          return;
-        }
-        if (code === 4401) {
-          resolve({
-            kind: "ended",
-            exitCode: 1,
-            message: `\r
-${copy.accessEnded}`,
-            unauthorized: true
-          });
-          return;
-        }
-        if (errorMessage !== null) {
-          if (errorMessage.length > 0) say(errorMessage);
-          resolve({ kind: "ended", exitCode, message: null });
-          return;
-        }
-        resolve({ kind: "ended", exitCode, message: `\r
-${copy.detached}` });
-      });
-    });
-  }
-  return {
-    run: run2,
-    detach: () => {
-      detachRequested = true;
-      for (const hook of [...detachHooks]) hook();
-      if (detachHooks.size === 0 && current && current.readyState === import_ws3.default.CONNECTING) {
-        current.terminate();
-      }
-    },
-    canType: () => canType,
-    setCanType: (can) => setCanType(can)
-  };
-}
-
 // ../shared/src/repl-markers.ts
 var MAIN_PROMPT_FOOTER = /\?\s*for\s*shortcuts|bypass\s*permissions\s*on|accept\s*edits\s*on|plan\s*mode\s*on|auto\s*mode\s*on(?![a-z])|manual\s*mode\s*on(?![a-z])/i;
 var ESC_TO_INTERRUPT = /esc\s*to\s*interrupt/i;
@@ -17064,10 +17586,15 @@ var HqPty = class {
   out = new vscode11.EventEmitter();
   closed = new vscode11.EventEmitter();
   name = new vscode11.EventEmitter();
+  overrideDims = new vscode11.EventEmitter();
   onDidWrite = this.out.event;
   onDidClose = this.closed.event;
   onDidChangeName = this.name.event;
+  onDidOverrideDimensions = this.overrideDims.event;
+  /** The PANEL's size: what this terminal claims with. Never an override echoed back (review C1). */
   dims = { cols: 80, rows: 24 };
+  /** The override this terminal has set (terminal-shared-geometry), or null. */
+  override = null;
   session = null;
   echo = null;
   inputHandler = null;
@@ -17122,8 +17649,27 @@ var HqPty = class {
     } catch {
     }
   }
+  /**
+   * terminal-shared-geometry: this terminal came to the front. If another window has the pty's size
+   * and this one may type, it takes it back (debounced in the attach; nothing while view-only).
+   */
+  claim() {
+    this.session?.claim();
+  }
+  /**
+   * VS Code's API says this keeps reporting the PANEL's size while an override is set. Review C1: a
+   * host that reports min(override, panel) instead would make the override look like the panel —
+   * this terminal would then think the pty is its own size, clear the override, see the panel
+   * again and claim from a window nobody is looking at, ping-ponging with the other viewer. So a
+   * report EQUAL to the active override is not taken as the panel's size; the panel size stays
+   * what it was. (A report smaller than the override is the panel really being smaller.)
+   */
   setDimensions(d) {
-    this.dims = { cols: d.columns, rows: d.rows };
+    const next = { cols: d.columns, rows: d.rows };
+    const o = this.override;
+    if (o && next.cols === o.cols && next.rows === o.rows) return;
+    if (next.cols === this.dims.cols && next.rows === this.dims.rows) return;
+    this.dims = next;
     this.resizeHandler?.();
   }
   close() {
@@ -17237,6 +17783,16 @@ var HqPty = class {
           return () => {
             if (this.resizeHandler === fn) this.resizeHandler = null;
           };
+        },
+        matchGeometry: (d) => {
+          if (d === null) {
+            this.override = null;
+            this.overrideDims.fire(void 0);
+            return this.dims;
+          }
+          this.override = { cols: d.cols, rows: d.rows };
+          this.overrideDims.fire({ columns: d.cols, rows: d.rows });
+          return { cols: Math.min(d.cols, this.dims.cols), rows: Math.min(d.rows, this.dims.rows) };
         }
       },
       {
@@ -17245,6 +17801,7 @@ var HqPty = class {
         onForbidden: "view-only",
         initialIntent: running ? "open" : "reconnect",
         presenceWhen: this.deps.windowActive,
+        ...this.deps.inFront ? { inFront: this.deps.inFront } : {},
         livenessPingMs: 3e4,
         livenessTimeoutMs: 1e4,
         onFirstOpen: () => {
@@ -17349,6 +17906,7 @@ ${COPY.pressKeyToWake}` : text,
     this.out.dispose();
     this.closed.dispose();
     this.name.dispose();
+    this.overrideDims.dispose();
   }
 };
 
@@ -17386,7 +17944,14 @@ var Terminals = class _Terminals {
           }
         }
       }),
-      vscode12.window.onDidChangeActiveTerminal(() => this.changed.fire()),
+      vscode12.window.onDidChangeActiveTerminal((t) => {
+        this.changed.fire();
+        if (t && vscode12.window.state.focused) this.claimFor(t);
+      }),
+      vscode12.window.onDidChangeWindowState((state) => {
+        const t = vscode12.window.activeTerminal;
+        if (state.focused && t) this.claimFor(t);
+      }),
       deps.accounts.onAccountRemoved((ref) => this.closeAccount(ref)),
       deps.accounts.onAccountRenewed((ref) => {
         for (const o of this.open.values()) {
@@ -17406,6 +17971,10 @@ var Terminals = class _Terminals {
   /** A terminal opened, closed, or changed state (the status bar listens). */
   onDidChange = this.changed.event;
   subscriptions = [];
+  /** terminal-shared-geometry: the HQ terminal `t` came to the front (debounced in the attach). */
+  claimFor(t) {
+    for (const o of this.open.values()) if (o.terminal === t) o.pty.claim();
+  }
   static key(target) {
     return `${accountTag(target.account.host, target.account.userId)}:${target.session.id}`;
   }
@@ -17467,6 +18036,7 @@ var Terminals = class _Terminals {
         onEchoOrgOff: (team) => this.echoOrgOff.show(team),
         ...this.deps.rewriteInput ? { rewriteInput: this.deps.rewriteInput(target) } : {},
         windowActive: () => vscode12.window.state.focused || vscode12.window.state.active === true,
+        inFront: () => vscode12.window.state.focused && vscode12.window.activeTerminal === entry.terminal,
         offerPorts: (team, ports) => this.deps.offerPorts(target.account, team, ports),
         // The team's live state (F11), else the last listing: an off team attaches passively.
         teamRunning: async (team) => {
@@ -18293,7 +18863,7 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.2.2".length > 0 ? "0.2.2" : "0.0.0-dev";
+var EXTENSION_VERSION = "0.2.3".length > 0 ? "0.2.3" : "0.0.0-dev";
 
 // src/extension.ts
 function vscodeUi() {

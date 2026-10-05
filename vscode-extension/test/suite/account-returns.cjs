@@ -69,7 +69,7 @@ const fake = {
   secretSet: true,
   /** 0.2.2: the events socket is served (from step 6 on; before, upgrades are refused). */
   eventsOn: false,
-  /** Open events sockets and the teams each subscribed. */
+  /** Open events sockets, the teams each subscribed, and whose socket it is. */
   subscribers: [],
   /** HQ's push after a secret change (content-free), to every socket subscribed to the team. */
   pushSecretsChanged() {
@@ -199,11 +199,17 @@ function startFakeHq() {
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
     if (!fake.eventsOn || !(req.url || '').startsWith('/ws/remote/events')) return socket.destroy();
+    const token = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+    const grant = token ? fake.grants.get(token[1]) : undefined;
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on('message', (d) => {
         const f = JSON.parse(d.toString());
         if (f.type !== 'subscribe') return;
-        fake.subscribers.push({ ws, workspaceId: f.workspaceId });
+        fake.subscribers.push({
+          ws,
+          workspaceId: f.workspaceId,
+          userId: grant ? grant.user.id : null,
+        });
         ws.send(
           JSON.stringify({
             type: 'subscribed',
@@ -396,7 +402,13 @@ async function run() {
       15_000,
       'secret.env opens masked',
     );
-    await until(() => fake.subscribers.length > 0, 45_000, 'the events socket subscribed the team');
+    // The FOLDER's account's socket (the other account's may subscribe first: a push before this
+    // one subscribed would miss it).
+    await until(
+      () => fake.subscribers.some((s) => s.userId === USER_B.id),
+      45_000,
+      "the folder's account's events socket subscribed the team",
+    );
     fake.secretSet = false; // the secret is deleted in HQ
     fake.pushSecretsChanged();
     await until(

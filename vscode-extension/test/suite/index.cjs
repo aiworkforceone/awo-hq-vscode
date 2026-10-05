@@ -149,9 +149,9 @@ const cases = {
     assert.equal(session, undefined);
   },
 
-  async 'the extension reports 0.2.2'() {
+  async 'the extension reports 0.2.3'() {
     const ext = vscode.extensions.getExtension(EXTENSION_ID);
-    assert.equal(ext.packageJSON.version, '0.2.2');
+    assert.equal(ext.packageJSON.version, '0.2.3');
   },
 
   async 'a host outside the allow-list is never signed in to'() {
