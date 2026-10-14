@@ -22,6 +22,7 @@ import {
   TunnelRefusedError,
   type WsFactory,
 } from './tunnel-client.js';
+import { copy } from '@kpa/shared/active-dev-brand';
 
 export const HEARTBEAT_MS = 30_000;
 
@@ -122,7 +123,7 @@ export async function startForward(
         deps.say(
           err instanceof TunnelRefusedError
             ? err.message
-            : `hq: stream failed (${(err as Error).message})`,
+            : copy`hq: stream failed (${(err as Error).message})`,
         );
         sock.destroy();
       });
@@ -139,7 +140,7 @@ export async function startForward(
     void lock
       .run(() => client.request('GET', connectionsPath(team, conn.id), { org, signed: true }))
       .catch((err: unknown) => {
-        deps.say(`hq: the forward ended (${(err as Error).message}).`);
+        deps.say(copy`hq: the forward ended (${(err as Error).message}).`);
         void close(1);
       });
   }, HEARTBEAT_MS);

@@ -46,6 +46,7 @@ import {
   type SignInLockOptions,
   type SignInLockResult,
 } from '../auth/signin-lock.js';
+import { KEY_NS } from '../brand-keys.js';
 import { COPY } from '../copy.js';
 import { errText, silentLog, type HqLog } from '../log.js';
 import {
@@ -58,6 +59,7 @@ import {
 } from './account-ref.js';
 import { clientHeaders, defaultLockDir, type HqUi } from './hq-service.js';
 import type { Account, SessionStore } from './session-store.js';
+import type { HostVerdict } from './hosts.js';
 
 export type SignInIntent =
   | { kind: 'first' }
@@ -86,7 +88,7 @@ export interface SignInResult {
 export interface SignInHost {
   store: SessionStore;
   ui: HqUi;
-  hostVerdict(): { ok: true; host: string } | { ok: false; host: string };
+  hostVerdict(): HostVerdict;
   extensionVersion: string;
   appName: string;
   fetch?: FetchLike;
@@ -170,6 +172,9 @@ function reportFailure(h: SignInHost, result: DeviceFlowResult, tooOld: () => vo
     case 'denied':
       h.ui.modal(COPY.signInDenied);
       return;
+    case 'wrong-host':
+      h.ui.modal(COPY.signInWrongHost(result.host));
+      return;
     case 'expired':
       h.ui.modal(COPY.signInExpired);
       return;
@@ -218,7 +223,8 @@ async function signInFlow(
 ): Promise<SignInResult> {
   const verdict = h.hostVerdict();
   if (!verdict.ok) {
-    h.ui.modal(COPY.hostNotAllowed(verdict.host));
+    // A brand with no default address: until one is set, say how to set it.
+    h.ui.modal(verdict.unset ? COPY.hostUnset : COPY.hostNotAllowed(verdict.host));
     return { outcome: 'host-not-allowed' };
   }
   if (state.signingIn) {
@@ -283,7 +289,11 @@ async function signInFlow(
     // A fresh key for every sign-in: a new grant never reuses an old grant's key.
     const { seed32, pub32 } = generateDeviceKeyMaterial();
     const hostname = (h.hostname ?? (() => os.hostname().split('.')[0] ?? ''))();
-    const openssh = toOpenSshPrivateKey(seed32, pub32, `hq-vscode@${hostname || 'computer'}`);
+    const openssh = toOpenSshPrivateKey(
+      seed32,
+      pub32,
+      `${KEY_NS}-vscode@${hostname || 'computer'}`,
+    );
     const result = await runDeviceFlow(
       {
         fetch: h.fetch ?? globalThis.fetch,

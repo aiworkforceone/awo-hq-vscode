@@ -23,8 +23,10 @@ import { accountTag, type AccountRef } from '../hq/account-ref.js';
 import type { AccountBundle, HqAccounts } from '../hq/accounts.js';
 import { cleanLabel } from '../util/text.js';
 import { FsCoreError, type FsChangeOut } from './fs-core.js';
+import { ACTIVE_DEV_BRAND } from '@kpa/shared/active-dev-brand';
 
-export const HQ_SCHEME = 'hq';
+/** The team-files URI scheme: the build's brand's (`hq` for AWO). */
+export const HQ_SCHEME = ACTIVE_DEV_BRAND.vscode.fsScheme;
 /**
  * 0.2.2 live: how long an fs call waits for the accounts to load at activation before an authority
  * that does not resolve is answered as gone (with its notice).

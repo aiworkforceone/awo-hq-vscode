@@ -11,6 +11,7 @@
  *     are all existing local image files, or a path in the terminal's own team folder. Anything else
  *     passes through untouched.
  */
+import { TEAM_ALIAS_SOURCE } from '../brand-keys.js';
 
 /** The web's cap for a pasted image (`MAX_PASTE_IMAGE_BYTES`). */
 export const MAX_PASTE_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -190,13 +191,18 @@ function hasControl(s: string): boolean {
   return false;
 }
 
+/** `\hq-…` (this build's alias prefix): a team-files URI's fsPath on Windows. */
+const TEAM_FOLDER_FSPATH = new RegExp(`^\\\\${TEAM_ALIAS_SOURCE}(\\\\|$)`);
+/** `/hq-xxxxxxxx/rest` or `\hq-xxxxxxxx\rest` (this build's alias prefix). */
+const TEAM_PATH = new RegExp(`^[/\\\\](${TEAM_ALIAS_SOURCE})(?:[/\\\\](.*))?$`);
+
 /** An absolute path: POSIX, a Windows drive, a UNC share, or `\hq-…` (an hq:// URI's fsPath). */
 function absolute(p: string): boolean {
   return (
     (p.startsWith('/') && p.length > 1) ||
     /^[A-Za-z]:\\/.test(p) ||
     /^\\\\[^\\]/.test(p) ||
-    /^\\hq-[0-9a-f]{8}(\\|$)/.test(p)
+    TEAM_FOLDER_FSPATH.test(p)
   );
 }
 
@@ -288,7 +294,7 @@ export type DropResult =
 
 /** `/hq-xxxxxxxx/rest` or `\hq-xxxxxxxx\rest` → [alias, rest with `/`]. */
 function teamPathOf(path: string): [string, string] | null {
-  const m = /^[/\\](hq-[0-9a-f]{8})(?:[/\\](.*))?$/.exec(path);
+  const m = TEAM_PATH.exec(path);
   return m ? [m[1]!, (m[2] ?? '').replace(/\\/g, '/')] : null;
 }
 

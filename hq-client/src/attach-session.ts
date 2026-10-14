@@ -11,7 +11,7 @@
  *   - a `presence` frame every 60 s while attached (the extension: only while its window is focused
  *     or active, `presenceWhen`, so a forgotten background window never keeps a machine awake);
  *   - the wake codes are progress (print the server's sentence, re-attach with intent `reconnect`),
- *     with "Still on it..." past 20 s and a bounded wait (`WAKE_TIMEOUT_MS`, the other doors' budget);
+ *     with "Taking longer than usual, still working." past 30 s and a bounded wait (`WAKE_TIMEOUT_MS`, the other doors' budget);
  *   - a `history_unavailable` notice is not printed during a wake (DEF-140: a FROZEN screen was not
  *     lost), nor right after a repaint or a reset (a sibling attach's read, not a lost screen);
  *   - after "Press any key to continue." (`workspace_asleep`, DEF-110) the next key re-attaches with
@@ -59,7 +59,12 @@
  *    wake was refused or failed) ends the wake QUIETLY: no `open` (that would wake the machine with
  *    no key pressed, DEF-110, and loop forever against a paused team); the next KEY sends it.
  */
-import type { RemoteSessionSummary } from '@kpa/shared/remote.types';
+import {
+  wakeEstimateOf,
+  wakeStillWorkingAfterMs,
+  type RemoteSessionSummary,
+  type RemoteWakeEstimate,
+} from '@kpa/shared/remote.types';
 import { createTerminalQueryFilter } from '@kpa/shared/terminal-queries';
 import { isPassiveTerminalInput, mayClaimSize } from '@kpa/shared/terminal-input';
 import WebSocket from 'ws';
@@ -68,15 +73,35 @@ import { WAKE_TIMEOUT_MS, wakeTimeoutMessage } from './connect.js';
 import type { LocalEchoSession } from './local-echo/engine-adapter.js';
 import type { Team } from './teams.js';
 import { REMOTE_TERMINAL_WS_PATH, wsUrl, type WsFactory } from './tunnel-client.js';
+import { copy } from '@kpa/shared/active-dev-brand';
 
 export const TOKEN_CHECK_MS = 60_000;
 /** The browser's presence heartbeat (runner-idle-sleep D13): "still here", once a minute. */
 export const PRESENCE_MS = 60_000;
-/** The browser's wake re-attach cadence: 2 s, then 4 s. */
-export const WAKE_RETRY_MS = 2_000;
-export const WAKE_RETRY_MAX_MS = 4_000;
-/** The browser's "Still on it..." under a wake that runs past this (WakingPill). Not for a cold restart. */
-export const WAKE_STILL_ON_IT_MS = 20_000;
+/**
+ * The browser's wake re-attach cadence (fix/wake-latency): a flat second. Nothing pushes "resumed"
+ * to a client, so the next re-attach is what finds the machine; at 2 s then 4 s that cost a mean
+ * 2.2 s per wake.
+ */
+export const WAKE_RETRY_MS = 1_000;
+export const WAKE_RETRY_MAX_MS = 1_000;
+/**
+ * The browser's "Taking longer than usual, still working." under a wake that runs past this
+ * (WakingPill): the moment the server's "15-30 seconds" promise is spent. Not for a cold restart.
+ */
+export const WAKE_STILL_ON_IT_MS = 30_000;
+/**
+ * When the still-working line is due under THIS server sentence (Jean, 2026-10-14): the browser's
+ * rule (`stillWorkingAfterMs`), 30 s under "15-30 seconds", 45 s under a 32 GB machine's
+ * "30-45 seconds", and `WAKE_STILL_ON_IT_MS` under a sentence with no range.
+ */
+export function wakeStillOnItMs(
+  message: string | null | undefined,
+  /** Review W1: the frame's `wakeEstimate`, preferred when sane. */
+  field?: unknown,
+): number {
+  return wakeStillWorkingAfterMs(wakeEstimateOf(field, message));
+}
 /**
  * How long after a repaint (or a `reset`) a `history_unavailable` notice is a sibling attach's
  * failed read, not a lost screen: the browser's 8 s (DEF-23, the after-repaint grace).
@@ -188,15 +213,15 @@ export interface AttachCopy {
 }
 
 export const CLI_ATTACH_COPY: AttachCopy = {
-  prefix: 'hq: ',
-  stillOnIt: 'hq: Still on it...',
+  prefix: copy`hq: `,
+  stillOnIt: copy`hq: Taking longer than usual, still working.`,
   wakeTimeout: wakeTimeoutMessage,
-  reconnecting: 'hq: connection lost, reconnecting...',
-  accessEnded: 'hq: your access to this session ended.',
-  detached: 'hq: detached.',
-  nowViewOnly: 'hq: you can watch this session but not type in it.',
-  sessionStopped: 'hq: the session stopped.',
-  sessionError: 'hq: the session exited with an error.',
+  reconnecting: copy`hq: connection lost, reconnecting...`,
+  accessEnded: copy`hq: your access to this session ended.`,
+  detached: copy`hq: detached.`,
+  nowViewOnly: copy`hq: you can watch this session but not type in it.`,
+  sessionStopped: copy`hq: the session stopped.`,
+  sessionError: copy`hq: the session exited with an error.`,
 };
 
 /** The extension's account errors (by `name`), never transient. */
@@ -255,7 +280,7 @@ export interface AttachSessionOptions {
    */
   noticeText?: (code: string | undefined, text: string) => string;
   /** The line said for a wake code (default: `prefix` + the server's sentence). */
-  wakeText?: (code: string, message: string) => string;
+  wakeText?: (code: string, message: string, estimate: RemoteWakeEstimate) => string;
   /**
    * hq-vscode decision 19: a client ping this often, and the socket is treated as dropped when no
    * pong comes back within `livenessTimeoutMs`. Off by default (the CLI relies on TCP).
@@ -342,6 +367,11 @@ interface WakeState {
   since: number | null;
   /** The server's sentence last printed (printed again only when it changes). */
   said: string | null;
+  /**
+   * Review S1: the promise of the last wake frame (its `wakeEstimate`, else its sentence's range).
+   * The printed line and the still-working timer both read THIS, so they cannot disagree.
+   */
+  estimate: RemoteWakeEstimate | null;
   cold: boolean;
   stillSaid: boolean;
   /** A `workspace_asleep` notice is showing: the next key re-attaches with intent `open`. */
@@ -353,7 +383,14 @@ type ServerFrame =
   | { type: 'geometry'; sessionId: string; cols?: unknown; rows?: unknown; viewers?: unknown }
   | { type: 'reset'; sessionId: string; reattach?: boolean }
   | { type: 'status'; sessionId: string; status?: string }
-  | { type: 'error'; sessionId: string | null; message: string; code: string }
+  | {
+      type: 'error';
+      sessionId: string | null;
+      message: string;
+      code: string;
+      /** Review W1: raw off the wire; read only through `wakeEstimateOf`, which guards it. */
+      wakeEstimate?: unknown;
+    }
   | { type: 'notice'; sessionId: string; text: string; code?: string }
   | { type: 'runner-metrics'; sessionId: string; listenPorts?: unknown }
   | { type: string; sessionId?: string };
@@ -392,11 +429,18 @@ export function createAttachSession(
   opts: AttachSessionOptions = {},
 ): AttachSession {
   const { team, session } = target;
-  const copy: AttachCopy = { ...CLI_ATTACH_COPY, ...(opts.copy ?? {}) };
+  const attachCopy: AttachCopy = { ...CLI_ATTACH_COPY, ...(opts.copy ?? {}) };
   const make: WsFactory = opts.wsFactory ?? ((url, h) => new WebSocket(url, { headers: h }));
   const reconnectBase = opts.reconnectBaseMs ?? RECONNECT_BASE_MS;
   const echo = opts.echo ?? null;
-  const wake: WakeState = { since: null, said: null, cold: false, stillSaid: false, asleep: false };
+  const wake: WakeState = {
+    since: null,
+    said: null,
+    estimate: null,
+    cold: false,
+    stillSaid: false,
+    asleep: false,
+  };
   let canType = session.canType;
   let current: WebSocket | null = null;
   let detachRequested = false;
@@ -442,7 +486,8 @@ export function createAttachSession(
 
     async function runLoop(): Promise<AttachEnd> {
       for (;;) {
-        if (detachRequested) return { kind: 'ended', exitCode: 0, message: `\r\n${copy.detached}` };
+        if (detachRequested)
+          return { kind: 'ended', exitCode: 0, message: `\r\n${attachCopy.detached}` };
         const adopt = next;
         next = null;
         // A FRESH signed upgrade every time: a nonce is single-use and the token may have rotated.
@@ -530,12 +575,12 @@ export function createAttachSession(
             // quietly, and say it only if the re-attach is not admitted in time.
             lostNotice = setTimeout(() => {
               lostNotice = null;
-              sink.say(`\r\n${copy.reconnecting}`);
+              sink.say(`\r\n${attachCopy.reconnecting}`);
             }, opts.quietReconnectNoticeMs ?? QUIET_RECONNECT_NOTICE_MS);
           } else {
             // A second drop in a row, or one that never settled: a real outage, said at once.
             cancelLostNotice();
-            sink.say(`\r\n${copy.reconnecting}`);
+            sink.say(`\r\n${attachCopy.reconnecting}`);
           }
           await sleep(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
           reconnects += 1;
@@ -670,7 +715,7 @@ export function createAttachSession(
         });
       }
 
-      // The wake cadence: 2 s, then 4 s (the browser's), one poll pending at most.
+      // The wake cadence: every second (the browser's), one poll pending at most.
       const schedulePoll = () => {
         if (wakeTimer !== null) return;
         const base = opts.wakeRetryMs ?? WAKE_RETRY_MS;
@@ -706,12 +751,12 @@ export function createAttachSession(
         if (stillTimer === null && !wake.stillSaid) {
           stillTimer = setTimeout(
             () => {
-              // A cold restart has already said the real answer; "Still on it..." would be vaguer.
+              // A cold restart has already said the real answer; "still working" would be vaguer.
               if (wake.since === null || wake.cold || wake.stillSaid) return;
               wake.stillSaid = true;
-              say(`\r\n${copy.stillOnIt}`);
+              say(`\r\n${attachCopy.stillOnIt}`);
             },
-            Math.max(0, since + (opts.wakeStillMs ?? WAKE_STILL_ON_IT_MS) - now),
+            Math.max(0, since + (opts.wakeStillMs ?? wakeStillWorkingAfterMs(wake.estimate)) - now),
           );
         }
         if (giveUpTimer === null) {
@@ -719,7 +764,7 @@ export function createAttachSession(
             () => {
               // Said NOW, then the socket is cut: a clean close could wait out the 30 s handshake
               // timeout on a replica that stopped answering (review N3).
-              say(`\r\n${copy.wakeTimeout(team)}`);
+              say(`\r\n${attachCopy.wakeTimeout(team)}`);
               errorMessage = '';
               exitCode = 1;
               ws.terminate();
@@ -733,6 +778,7 @@ export function createAttachSession(
         if (wake.since !== null) opts.onWaking?.(false);
         wake.since = null;
         wake.said = null;
+        wake.estimate = null;
         wake.cold = false;
         wake.stillSaid = false;
         wakeAttempts = 0;
@@ -1004,8 +1050,8 @@ export function createAttachSession(
           if (st === 'error' && (wake.since !== null || wake.asleep)) return;
           if (st === statusSaid) return;
           statusSaid = st;
-          if (st === 'stopped') say(`\r\n${copy.sessionStopped}`);
-          else if (st === 'error') say(`\r\n${copy.sessionError}`);
+          if (st === 'stopped') say(`\r\n${attachCopy.sessionStopped}`);
+          else if (st === 'error') say(`\r\n${attachCopy.sessionError}`);
         } else if (frame.type === 'geometry') {
           const pty = wireDims(
             'cols' in frame ? frame.cols : undefined,
@@ -1083,11 +1129,12 @@ export function createAttachSession(
               wake.since = Date.now();
               opts.onWaking?.(true);
             }
+            wake.estimate = wakeEstimateOf(frame.wakeEstimate, frame.message);
             armWakeClocks(wake.since);
             if (wake.said !== frame.message) {
               wake.said = frame.message;
               say(
-                `\r\n${opts.wakeText ? opts.wakeText(code, frame.message) : `${copy.prefix}${frame.message}`}`,
+                `\r\n${opts.wakeText ? opts.wakeText(code, frame.message, wake.estimate) : `${attachCopy.prefix}${frame.message}`}`,
               );
             }
             // A keystroke's wake code arrives with no attach outstanding: nothing else will arm the
@@ -1100,7 +1147,7 @@ export function createAttachSession(
             // Watching goes on; typing stops, and the terminal says so once.
             if (canType) {
               setCanType(false);
-              say(`\r\n${copy.nowViewOnly}`);
+              say(`\r\n${attachCopy.nowViewOnly}`);
             }
             return;
           }
@@ -1111,12 +1158,12 @@ export function createAttachSession(
             const quiet = code === 'RUNNER_UNAVAILABLE' && (wake.since !== null || wake.asleep);
             if (!quiet && errorSaid !== frame.message) {
               errorSaid = frame.message;
-              say(`\r\n${copy.prefix}${frame.message}`);
+              say(`\r\n${attachCopy.prefix}${frame.message}`);
             }
             scheduleErrorRetry();
             return;
           }
-          errorMessage = `\r\n${copy.prefix}${frame.message}`;
+          errorMessage = `\r\n${attachCopy.prefix}${frame.message}`;
           exitCode = 1;
           ws.close(1000);
         } else if (frame.type === 'notice' && 'text' in frame) {
@@ -1135,7 +1182,7 @@ export function createAttachSession(
             answerAsleep = true;
           }
           say(
-            `\r\n${opts.noticeText ? opts.noticeText(code, frame.text) : `${copy.prefix}${frame.text}`}`,
+            `\r\n${opts.noticeText ? opts.noticeText(code, frame.text) : `${attachCopy.prefix}${frame.text}`}`,
           );
         }
       });
@@ -1365,7 +1412,7 @@ export function createAttachSession(
           resolve({
             kind: 'ended',
             exitCode: 1,
-            message: `\r\n${copy.accessEnded}`,
+            message: `\r\n${attachCopy.accessEnded}`,
             unauthorized: true,
           });
           return;
@@ -1375,7 +1422,7 @@ export function createAttachSession(
           resolve({ kind: 'ended', exitCode, message: null });
           return;
         }
-        resolve({ kind: 'ended', exitCode, message: `\r\n${copy.detached}` });
+        resolve({ kind: 'ended', exitCode, message: `\r\n${attachCopy.detached}` });
       });
     });
   }

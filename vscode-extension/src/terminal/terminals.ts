@@ -13,6 +13,7 @@ import type {
 import type { LocalEchoMode } from '@kpa/shared/local-echo-engine';
 import { HqApiError } from '@hq/client/api.js';
 import type { Team } from '@hq/client/teams.js';
+import { KEY_NS } from '../brand-keys.js';
 import { COPY } from '../copy.js';
 import { accountTag, sameAccount, type AccountRef } from '../hq/account-ref.js';
 import type { HqAccounts } from '../hq/accounts.js';
@@ -22,6 +23,7 @@ import { Emitter } from '../util/emitter.js';
 import { HqPty, terminalName, type SessionTarget } from './hq-pty.js';
 import { teamState } from '../tree/labels.js';
 import { cleanLabel } from '../util/text.js';
+import { ACTIVE_DEV_BRAND } from '@kpa/shared/active-dev-brand';
 
 /** A listing younger than this is not re-read when a terminal attaches. */
 const LISTING_FRESH_MS = 10_000;
@@ -57,7 +59,7 @@ interface RecordedTerminal {
   session: RemoteSessionSummary;
 }
 
-const RECORD_KEY = 'hq.terminals';
+const RECORD_KEY = `${KEY_NS}.terminals`;
 
 interface Open {
   terminal: vscode.Terminal;
@@ -206,7 +208,9 @@ export class Terminals {
         service,
         accountLabel: label,
         localEchoMode: () =>
-          vscode.workspace.getConfiguration('hq').get<LocalEchoMode>('localEcho', 'auto'),
+          vscode.workspace
+            .getConfiguration(ACTIVE_DEV_BRAND.vscode.idPrefix)
+            .get<LocalEchoMode>('localEcho', 'auto'),
         vsCodeTypeaheadOn: () => {
           const c = vscode.workspace.getConfiguration('terminal.integrated');
           return vsCodeTypeaheadActive(

@@ -15,6 +15,7 @@ import { COPY } from '../copy.js';
 import type { AccountRef } from '../hq/account-ref.js';
 import { cleanLabel } from '../util/text.js';
 import { hasControlChars } from '../fs/fs-core.js';
+import { brandText } from '@kpa/shared/active-dev-brand';
 
 export type SearchNode =
   | { kind: 'summary'; text: string }
@@ -136,7 +137,7 @@ export class SearchView implements vscode.TreeDataProvider<SearchNode> {
     item.description = `${m.line}`;
     item.contextValue = 'search:match';
     item.command = {
-      command: 'hq.search.open',
+      command: brandText('hq.search.open'),
       title: COPY.searchTitle,
       arguments: [node],
     };

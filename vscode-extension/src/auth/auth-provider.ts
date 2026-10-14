@@ -12,11 +12,14 @@
 import * as vscode from 'vscode';
 import { accountTag } from '../hq/account-ref.js';
 import type { AccountBundle, HqAccounts, SignInIntent } from '../hq/accounts.js';
+import { ACTIVE_DEV_BRAND } from '@kpa/shared/active-dev-brand';
+import { KEY_NS } from '../brand-keys.js';
 
-export const AUTH_PROVIDER_ID = 'aiworkforceone-hq';
-export const AUTH_PROVIDER_LABEL = 'AI Workforce One HQ';
+/** The build's brand (`aiworkforceone-hq` / `AI Workforce One HQ` for AWO). */
+export const AUTH_PROVIDER_ID = ACTIVE_DEV_BRAND.vscode.authProviderId;
+export const AUTH_PROVIDER_LABEL = ACTIVE_DEV_BRAND.displayName;
 /** What `AuthenticationSession.accessToken` carries. Never a credential. */
-export const SESSION_SENTINEL = 'hq-session';
+export const SESSION_SENTINEL = `${KEY_NS}-session`;
 
 const sessionOf = (b: AccountBundle): vscode.AuthenticationSession => ({
   id: b.tag,

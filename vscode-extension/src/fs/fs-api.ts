@@ -21,6 +21,7 @@ import {
   type FsStat,
 } from '@kpa/shared/remote-fs.types';
 import { teamPath } from '../hq/wake.js';
+import { copy } from '@kpa/shared/active-dev-brand';
 
 export class FsApiError extends Error {
   constructor(
@@ -72,7 +73,7 @@ async function toError(res: Response): Promise<FsApiError> {
       ? body.error
       : typeof body.message === 'string'
         ? body.message
-        : `HQ answered ${res.status}`;
+        : copy`HQ answered ${res.status}`;
   return new FsApiError(
     res.status,
     typeof body.code === 'string' ? body.code : undefined,

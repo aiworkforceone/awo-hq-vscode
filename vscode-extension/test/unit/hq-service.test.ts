@@ -134,6 +134,25 @@ describe('sign-in (D1, U1)', () => {
     expect(plain.ui.modals).toEqual([COPY.signInExpired]);
   });
 
+  it('client host rule: an approval by an account of another address says where to sign in (no tokens kept)', async () => {
+    const right = 'https://app.northwind.example';
+    const wrongHost = (async (url: string | URL, init?: RequestInit) =>
+      String(url).endsWith('/device/poll')
+        ? new Response(
+            JSON.stringify({
+              error: `This account signs in at ${right}.`,
+              code: 'DEVICE_WRONG_HOST',
+              details: { host: right },
+            }),
+            { status: 409 },
+          )
+        : fetch(url, init)) as typeof fetch;
+    const w = openWindow(fake, secretsHub(), memento(), lock.dir, { fetch: wrongHost });
+    expect((await w.accounts.signIn({ kind: 'first' })).outcome).toBe('wrong-host');
+    expect(w.ui.modals).toEqual([COPY.signInWrongHost(right)]);
+    expect(w.accounts.active()).toBeNull();
+  });
+
   it('a poll that keeps failing on the network ends the sign-in with the reason, never silently', async () => {
     const down = (async (url: string | URL, init?: RequestInit) => {
       if (String(url).endsWith('/device/poll')) throw new TypeError('fetch failed');
@@ -455,5 +474,24 @@ describe('what HQ answers means for the account', () => {
     expect((await accounts.signIn({ kind: 'first' })).outcome).toBe('host-not-allowed');
     expect(fake.seen).toEqual([]);
     expect(ui.modals[0]).toMatch(/not an HQ address/);
+  });
+
+  it('no address set (a brand with no default, before setup) asks for one and contacts nothing', async () => {
+    const ui = fakeUi();
+    const accounts = new HqAccounts({
+      store: new SessionStore(secretsHub().window(), memento()),
+      ui,
+      host: () => ({ ok: false, host: '', unset: true }),
+      extensionVersion: '0.2.0',
+      appName: 'Code',
+      windowState: windowState(),
+      lockDir: lock.dir,
+      pollMs: 0,
+    });
+    expect((await accounts.signIn({ kind: 'first' })).outcome).toBe('host-not-allowed');
+    expect(fake.seen).toEqual([]);
+    expect(ui.modals[0]).toBe(
+      'Set hq.host to the address you sign in to, for example https://hq.aiworkforceone.com.',
+    );
   });
 });

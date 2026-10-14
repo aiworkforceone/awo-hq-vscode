@@ -2,7 +2,7 @@
   "name": "awo-hq",
   "displayName": "AI Workforce One HQ",
   "description": "Your AI Workforce One HQ teams inside VS Code: join their session terminals and forward their ports, without SSH.",
-  "version": "0.2.3",
+  "version": "0.4.0",
   "publisher": "aiworkforceone",
   "license": "SEE LICENSE IN LICENSE.txt",
   "private": true,
@@ -96,7 +96,7 @@
       },
       {
         "view": "hq.ports",
-        "contents": "Forward a port from a team machine to this computer.\n[Forward a Port](command:hq.forwardPort)",
+        "contents": "Forward a port from an AI Team Cloud Computer to this computer.\n[Forward a Port](command:hq.forwardPort)",
         "when": "hq.signedIn"
       },
       {
@@ -177,6 +177,24 @@
         "title": "Attach",
         "category": "HQ",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "hq.startSession",
+        "title": "Start Session",
+        "category": "HQ",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "hq.stopSession",
+        "title": "Stop Session",
+        "category": "HQ",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "hq.restartSession",
+        "title": "Restart Session",
+        "category": "HQ",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "hq.openInHqWeb",
@@ -316,6 +334,18 @@
           "when": "hq.signedIn"
         },
         {
+          "command": "hq.startSession",
+          "when": "false"
+        },
+        {
+          "command": "hq.stopSession",
+          "when": "false"
+        },
+        {
+          "command": "hq.restartSession",
+          "when": "false"
+        },
+        {
           "command": "hq.openInHqWeb",
           "when": "hq.signedIn"
         },
@@ -437,6 +467,36 @@
           "command": "hq.attachSession",
           "when": "view == hq.teams && viewItem =~ /^session/",
           "group": "1_session@1"
+        },
+        {
+          "command": "hq.startSession",
+          "when": "view == hq.teams && viewItem =~ /^session:[a-z]+:stopped:op$/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.stopSession",
+          "when": "view == hq.teams && viewItem =~ /^session:[a-z]+:(running|idle):op$/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.restartSession",
+          "when": "view == hq.teams && viewItem =~ /^session:[a-z]+:(running|idle):op$/",
+          "group": "inline"
+        },
+        {
+          "command": "hq.startSession",
+          "when": "view == hq.teams && viewItem =~ /^session:[a-z]+:stopped:op$/",
+          "group": "1_session@2"
+        },
+        {
+          "command": "hq.stopSession",
+          "when": "view == hq.teams && viewItem =~ /^session:[a-z]+:(running|idle):op$/",
+          "group": "1_session@3"
+        },
+        {
+          "command": "hq.restartSession",
+          "when": "view == hq.teams && viewItem =~ /^session:[a-z]+:(running|idle):op$/",
+          "group": "1_session@4"
         },
         {
           "command": "hq.ports.open",

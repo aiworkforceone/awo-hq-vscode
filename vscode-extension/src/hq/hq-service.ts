@@ -47,6 +47,8 @@ import {
   type Account,
   type SessionStore,
 } from './session-store.js';
+import { copy } from '@kpa/shared/active-dev-brand';
+import { HOME_DIR_NAME } from '../brand-keys.js';
 
 /** The refresh fetch is abandoned after this long (§7c step 2). */
 export const REFRESH_TIMEOUT_MS = 10_000;
@@ -115,7 +117,7 @@ export interface HqServiceDeps {
 }
 
 export function defaultLockDir(): string {
-  return path.join(os.homedir(), '.hq', 'vscode');
+  return path.join(os.homedir(), HOME_DIR_NAME, 'vscode');
 }
 
 export function clientHeaders(extensionVersion: string): Record<string, string> {
@@ -391,7 +393,7 @@ export class HqService {
           if (await this.revocationConfirmed(failing)) {
             await this.revokedUnlessSignedOutElsewhere(dead ?? null);
           } else {
-            this.log.info(`account ${this.tag}: a 401 HQ did not confirm; nothing signed out`);
+            this.log.info(copy`account ${this.tag}: a 401 HQ did not confirm; nothing signed out`);
           }
         })().finally(() => {
           this.revoking = null;
@@ -536,7 +538,7 @@ export class HqService {
       return;
     }
     const email = this.email();
-    this.log.info(`account ${this.tag}: HQ confirmed its access ended; signed out here`);
+    this.log.info(copy`account ${this.tag}: HQ confirmed its access ended; signed out here`);
     await this.deps.store.wipe(this.refValue);
     this.built = null;
     this.deps.owner.removed(this.refValue);
@@ -596,7 +598,7 @@ export class HqService {
     await this.deps.store.clearSigningOut(this.refValue.host, this.tag);
     this.built = null;
     this.deps.owner.removed(this.refValue);
-    this.log.info(`account ${this.tag} signed out (HQ ${reached ? 'reached' : 'not reached'})`);
+    this.log.info(copy`account ${this.tag} signed out (HQ ${reached ? 'reached' : 'not reached'})`);
     const others = this.deps.owner.count() > 0;
     this.deps.ui.info(
       !reached ? COPY.signOutOffline : others ? COPY.signedOutAccount(email) : COPY.signedOut,

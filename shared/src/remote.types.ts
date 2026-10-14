@@ -9,6 +9,8 @@
  *    Anything that signs or hashes lives in `src/remote/` (server) or `cli/src/` (laptop).
  */
 
+import { brandText } from './active-dev-brand.js';
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Credentials and headers
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -129,7 +131,7 @@ export function remoteClientDisplayName(name: RemoteDeviceClientName | undefined
  * no em dash.
  */
 export function remoteForwardNoticeSentence(teamName: string): string {
-  return `Developer access is on for ${teamName}. Members who can edit it can forward its ports to their own computer, which reaches programs you run on this machine, such as dev servers.`;
+  return `Developer access is on for ${teamName}. Members who can edit it can forward its ports to their own computer, which reaches programs you run on this Cloud Computer, such as dev servers.`;
 }
 
 export interface DeviceStartRequest {
@@ -248,6 +250,12 @@ export interface RemoteWorkspace {
   filesSupported?: boolean;
   hostKeyFingerprint?: string;
   hostKey?: string;
+  /**
+   * How long waking this team usually takes, by the size of its machine (Jean, 2026-10-14). The
+   * SERVER decides it from the team's machine (`wakeEstimateForMachine`); the CLI and the extension
+   * only print it. ABSENT from an older HQ, which reads as `WAKE_ESTIMATE_DEFAULT`.
+   */
+  wakeEstimate?: RemoteWakeEstimate;
 }
 
 export interface RemoteOrg {
@@ -327,6 +335,13 @@ export interface RemoteSessionSummary {
   name: string;
   ownerName: string;
   status: 'running' | 'idle' | 'stopped';
+  /**
+   * train 98 e2e: `true` while HQ is still STARTING the session (its machine may still fail to come
+   * up). `status` stays `'running'` for it, as every client in the field expects; a client that
+   * knows this field shows "starting" and never claims running. ABSENT once it runs, and from an
+   * older HQ.
+   */
+  starting?: true;
   canType: boolean;
   /**
    * local-echo (Decision 18): the `KR_LOCAL_ECHO` env flag AND the org's `local_echo_enabled` both
@@ -338,6 +353,33 @@ export interface RemoteSessionSummary {
   engine?: RemoteSessionEngine;
   /** hq-vscode: this member owns the session (the tree's "you"). ABSENT from an older HQ. */
   ownerIsMe?: boolean;
+  /**
+   * cli-session-lifecycle: this member may start, stop and restart it (the web's operator rule:
+   * `sessions:operate` on the team, then the session owner or an org owner/admin while session
+   * logins are on). ADVISORY: the routes decide. ABSENT from an older HQ (offer the action and let
+   * HQ answer).
+   */
+  canOperate?: boolean;
+  /**
+   * cli-session-lifecycle: the agent is mid-answer (running a turn, a tool or at a prompt), from the
+   * team machine's own fresh `activity` reading (`workspaces.agent_busy`). TEAM-WIDE: the runner
+   * reports one claim per machine, so every live session of a busy team reads true. Only ever used
+   * to ask before a Stop or Restart; never a gate. ABSENT from an older HQ (reads as false).
+   */
+  midTurn?: boolean;
+}
+
+/** cli-session-lifecycle: what a client may do to a session over the bearer surface. */
+export type RemoteSessionAction = 'start' | 'stop' | 'restart';
+
+/**
+ * `POST …/workspaces/:ws/sessions/:id/(start|stop|restart)` (cli-session-lifecycle). Start and
+ * restart answer 202 `starting` (the machine and the agent come up in the background, as on the
+ * web); stop answers 200 `stopped`.
+ */
+export interface RemoteSessionActionResponse {
+  id: string;
+  status: 'starting' | 'stopped';
 }
 
 /** The engine a session runs, as the extension names it. */
@@ -381,9 +423,13 @@ export const REMOTE_SHIM_ENGINE_UNSUPPORTED_MESSAGE =
  * one sentence for every place that says so: the `410 SSH_REMOVED` answer to an `ssh` connect (old
  * published CLIs print a 410's message word for word) and the `hq ssh` / `hq ssh-proxy` / `hq open`
  * stubs. Plain words, no em dash.
+ *
+ * `brandText` is the identity everywhere but in another brand's bundle, whose build writes it in
+ * that brand's words (`scripts/dev-brand-build.mjs`).
  */
-export const SSH_REMOVED_MESSAGE =
-  'SSH access to team machines was removed on 2026-10-01. Use a terminal session in HQ, `hq attach <session> --team <team>`, `hq forward <port> --team <team>`, or the AI Workforce One HQ extension for VS Code.';
+export const SSH_REMOVED_MESSAGE = brandText(
+  'SSH access to AI Team Cloud Computers was removed on 2026-10-01. Use a terminal session in HQ, `hq attach <session> --team <team>`, `hq forward <port> --team <team>`, or the AI Workforce One HQ extension for VS Code.',
+);
 
 /** `<remoteHome>/.hq/current.json` (events.json CurrentConnectionFile). Written by the door. */
 export interface CurrentConnectionFile {
@@ -452,11 +498,11 @@ export interface RemoteConnectionRow {
  * Security). No em dashes; "off", never "asleep".
  */
 export const REMOTE_DEVELOPER_ACCESS_DESCRIPTION =
-  'Members who can edit a team can open its files, join its terminals and forward its ports from their own computer (HQ for VS Code, the hq CLI). Everyone on a team machine shares one system account, so a forwarded port can reach any program listening on that machine.';
+  'Members who can edit a team can open its files, join its terminals and forward its ports from their own computer (HQ for VS Code, the hq CLI). Everyone on an AI Team Cloud Computer shares one system account, so a forwarded port can reach any program listening on that Cloud Computer.';
 
 export const REMOTE_DEVELOPER_ACCESS_CONSENT_PARAGRAPHS: readonly string[] = [
-  'Members who can edit a team will be able to open its files, join its terminals and forward its ports from their own computer, using HQ for VS Code or the hq command line tool. None of this opens a shell on the team machine.',
-  "Everyone on a team machine shares one system account, so a forwarded port can reach any program listening on that machine, including dev servers other members run there. Each team's members are told this once.",
+  'Members who can edit a team will be able to open its files, join its terminals and forward its ports from their own computer, using HQ for VS Code or the hq command line tool. None of this opens a shell on the AI Team Cloud Computer.',
+  "Everyone on an AI Team Cloud Computer shares one system account, so a forwarded port can reach any program listening on that Cloud Computer, including dev servers other members run there. Each team's members are told this once.",
   'Files and terminals keep the permissions they have in HQ: viewers can look but cannot type or save, secrets stay masked, and protected template files stay read-only.',
   'Every connection and every saved file is recorded in your audit log. You can turn this off at any time; open connections close within 30 seconds.',
 ];
@@ -523,7 +569,118 @@ export const REMOTE_CLOSE_RUNNER_UNAVAILABLE = 4503;
  * The workspace alias the CLI writes into `~/.ssh/hq_config` (`Host hq-<8hex>`). `workspaces` has no
  * slug column, so the alias is derived from the id: stable across renames, unique enough, and the
  * CLI widens it to 12 hex when two of the user's teams collide on 8.
+ *
+ * The CLI and the extension pass their build's `teamAliasPrefix`; everything else keeps `hq-`.
  */
-export function workspaceAlias(workspaceId: string, hexChars = 8): string {
-  return `hq-${workspaceId.replace(/-/g, '').slice(0, hexChars).toLowerCase()}`;
+export function workspaceAlias(workspaceId: string, hexChars = 8, prefix = 'hq'): string {
+  return `${prefix}-${workspaceId.replace(/-/g, '').slice(0, hexChars).toLowerCase()}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// The wake estimate (Jean, 2026-10-14)
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How long a sleeping team's machine usually takes to come back, in whole seconds.
+ *
+ * Measured prod resumes: p50 ~14 s on 4 GB and 16 GB machines, ~38 s on a 32 GB one (one sample),
+ * the RAM restore growing with the RAM. So the promise depends on the machine's size. Here, in the
+ * wire contract, because the server, the browser, the CLI and the extension all say it, and the
+ * CLI's and the extension's public mirrors carry this file.
+ */
+export interface RemoteWakeEstimate {
+  minSeconds: number;
+  maxSeconds: number;
+}
+
+/** Every machine up to 16 GB. */
+export const WAKE_ESTIMATE_DEFAULT: RemoteWakeEstimate = Object.freeze({
+  minSeconds: 15,
+  maxSeconds: 30,
+});
+/** 32 GB and above. */
+export const WAKE_ESTIMATE_LARGE: RemoteWakeEstimate = Object.freeze({
+  minSeconds: 30,
+  maxSeconds: 45,
+});
+/** The RAM, in GB, from which a machine gets the longer promise. */
+export const WAKE_ESTIMATE_LARGE_FROM_RAM_GB = 32;
+
+/** The promise for a machine with this much RAM; the ordinary one when the size is unknown. */
+export function wakeEstimateForRamGB(ramGB: number | null | undefined): RemoteWakeEstimate {
+  return typeof ramGB === 'number' && ramGB >= WAKE_ESTIMATE_LARGE_FROM_RAM_GB
+    ? WAKE_ESTIMATE_LARGE
+    : WAKE_ESTIMATE_DEFAULT;
+}
+
+/** Longest range an estimate may carry before it is treated as garbage (the wake's own budget). */
+const MAX_WAKE_SECONDS = 180;
+
+/**
+ * Review S2: the ONE guard on an estimate's shape, for a value that came off the wire or out of a
+ * sentence. Whole seconds, `0 < min < max <= 180`; anything else is the ordinary promise, so a
+ * malformed field can never print "45-30 seconds" or hold "still working" back for an hour.
+ */
+export function normalizeWakeEstimate(value: unknown): RemoteWakeEstimate {
+  return isSaneWakeEstimate(value)
+    ? { minSeconds: value.minSeconds, maxSeconds: value.maxSeconds }
+    : WAKE_ESTIMATE_DEFAULT;
+}
+
+/** A wire value as an estimate (a fresh object, extra keys dropped), or undefined when not sane. */
+export function parseWakeEstimate(value: unknown): RemoteWakeEstimate | undefined {
+  return isSaneWakeEstimate(value) ? normalizeWakeEstimate(value) : undefined;
+}
+
+function isSaneWakeEstimate(value: unknown): value is RemoteWakeEstimate {
+  if (typeof value !== 'object' || value === null) return false;
+  const { minSeconds, maxSeconds } = value as Partial<Record<keyof RemoteWakeEstimate, unknown>>;
+  return (
+    typeof minSeconds === 'number' &&
+    typeof maxSeconds === 'number' &&
+    Number.isInteger(minSeconds) &&
+    Number.isInteger(maxSeconds) &&
+    minSeconds > 0 &&
+    maxSeconds > minSeconds &&
+    maxSeconds <= MAX_WAKE_SECONDS
+  );
+}
+
+/** "15-30 seconds": a plain hyphen (copy rules: no en or em dash). */
+export function wakeRangeText(estimate?: RemoteWakeEstimate | null): string {
+  const e = normalizeWakeEstimate(estimate);
+  return `${e.minSeconds}-${e.maxSeconds} seconds`;
+}
+
+/**
+ * When "Taking longer than usual, still working." is added: the moment the promise is spent, so
+ * the ordinary p90 never trips it and a big machine's normal wake does not either.
+ */
+export function wakeStillWorkingAfterMs(estimate?: RemoteWakeEstimate | null): number {
+  return normalizeWakeEstimate(estimate).maxSeconds * 1_000;
+}
+
+/**
+ * The promise a SERVER sentence made ("… this usually takes 30-45 seconds"), read back for a
+ * surface that only has the sentence (an older server sends no structured `wakeEstimate`). A
+ * sentence with no range (the cold restart, an older server's) is the ordinary promise.
+ */
+export function wakeEstimateInSentence(sentence: string | null | undefined): RemoteWakeEstimate {
+  const m = typeof sentence === 'string' ? /\b(\d{1,3})-(\d{1,3}) seconds\b/.exec(sentence) : null;
+  return m
+    ? normalizeWakeEstimate({ minSeconds: Number(m[1]), maxSeconds: Number(m[2]) })
+    : WAKE_ESTIMATE_DEFAULT;
+}
+
+/**
+ * Review W1/S1: the estimate a surface should use for a wake frame. The frame's structured
+ * `wakeEstimate` when it is present and sane; otherwise the range in the sentence beside it.
+ */
+export function wakeEstimateOf(
+  field: unknown,
+  sentence: string | null | undefined,
+): RemoteWakeEstimate {
+  return isSaneWakeEstimate(field)
+    ? normalizeWakeEstimate(field)
+    : wakeEstimateInSentence(sentence);
 }

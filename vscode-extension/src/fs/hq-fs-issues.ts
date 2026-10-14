@@ -63,7 +63,7 @@ export class HqTeamIssues implements vscode.FileDecorationProvider {
       });
       return;
     }
-    void vscode.window.showInformationMessage(COPY.fsUpdating(name, issue.etaSeconds));
+    void vscode.window.showInformationMessage(COPY.fsUpdating(name));
   }
 
   private openSettings(team: Team): void {
@@ -86,7 +86,7 @@ export class HqTeamIssues implements vscode.FileDecorationProvider {
         )
       : new vscode.FileDecoration(
           '…',
-          COPY.fsUpdating(name, issue.etaSeconds),
+          COPY.fsUpdating(name),
           new vscode.ThemeColor('list.warningForeground'),
         );
   }

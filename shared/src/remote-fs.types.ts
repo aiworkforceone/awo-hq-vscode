@@ -47,6 +47,11 @@ export interface FsStat {
   readonly?: 'template' | 'credential';
   /** An ignored directory (node_modules, .venv, ...): listed, never descended implicitly. */
   ignored?: true;
+  /**
+   * A link inside the team that resolves to this entry. Set ONLY when the `list` op asked for it
+   * (`markLinks`, the web explorer); the extension never asks, so it never sees this field.
+   */
+  linked?: true;
 }
 
 export interface FsDirPage {

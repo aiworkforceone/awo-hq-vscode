@@ -37,6 +37,8 @@ import {
   USER_ID_RE,
   type AccountRef,
 } from './account-ref.js';
+import { copy } from '@kpa/shared/active-dev-brand';
+import { KEY_NS } from '../brand-keys.js';
 
 export interface SecretsLike {
   get(key: string): PromiseLike<string | undefined>;
@@ -81,7 +83,7 @@ export type SlotHealth = 'ok' | 'needs-sign-in' | 'busy';
 /** The slot's `account` record vanished: another window signed it out (decision 23). */
 export class AccountGoneError extends Error {
   constructor() {
-    super('This HQ account was signed out in another window.');
+    super(copy`This HQ account was signed out in another window.`);
     this.name = 'AccountGoneError';
   }
 }
@@ -89,7 +91,7 @@ export class AccountGoneError extends Error {
 /** The slot's `grantId` moved on: another window renewed it (decisions 17, 26). Never a 401. */
 export class SlotRenewedError extends Error {
   constructor() {
-    super('This HQ sign-in was renewed in another window.');
+    super(copy`This HQ sign-in was renewed in another window.`);
     this.name = 'SlotRenewedError';
   }
 }
@@ -97,7 +99,7 @@ export class SlotRenewedError extends Error {
 /** `secrets.get` THREW (keychain locked, the IPC failed): transient, never a wipe (decision 18). */
 export class SecretsBusyError extends Error {
   constructor() {
-    super('Could not read the HQ sign-in from the keychain.');
+    super(copy`Could not read the HQ sign-in from the keychain.`);
     this.name = 'SecretsBusyError';
   }
 }
@@ -105,7 +107,7 @@ export class SecretsBusyError extends Error {
 /** The record is present but its secrets are not usable here (decision 18's zombie). */
 export class NeedsSignInError extends Error {
   constructor() {
-    super('This HQ sign-in needs renewing.');
+    super(copy`This HQ sign-in needs renewing.`);
     this.name = 'NeedsSignInError';
   }
 }
@@ -114,7 +116,7 @@ export class NeedsSignInError extends Error {
 export const TOKEN_CACHE_MS = 60_000;
 /** Tombstones kept per host (decision 10). */
 export const TOMBSTONES_MAX = 20;
-export const PROFILE_KEY = 'hq:profileKey';
+export const PROFILE_KEY = `${KEY_NS}:profileKey`;
 
 export function tokensKey(ref: AccountRef): string {
   return `${slotPrefix(ref)}tokens`;
@@ -132,13 +134,13 @@ export function portsKey(ref: AccountRef, list: 'forwards' | 'dismissed'): strin
   return `${slotPrefix(ref)}ports:${list}`;
 }
 export function legacyUserKey(host: string): string {
-  return `hq:${host}:legacyUser`;
+  return `${KEY_NS}:${host}:legacyUser`;
 }
 export function tombstoneKey(host: string, tag: string): string {
-  return `hq:${host}:t:${tag}`;
+  return `${KEY_NS}:${host}:t:${tag}`;
 }
 export function lastActiveKey(host: string): string {
-  return `hq:${host}:lastActive`;
+  return `${KEY_NS}:${host}:lastActive`;
 }
 
 /** `sha256:<hex>` of the device key's public line; null when the text is not a key. */
@@ -251,7 +253,7 @@ export class SessionStore {
    */
   accounts(host: string, profileKey: string | null): Array<{ ref: AccountRef; account: Account }> {
     const out = new Map<string, { ref: AccountRef; account: Account }>();
-    const userPrefix = profileKey ? `hq:${host}:u:${profileKey}:` : null;
+    const userPrefix = profileKey ? `${KEY_NS}:${host}:u:${profileKey}:` : null;
     for (const key of this.memento.keys()) {
       if (!userPrefix || !key.startsWith(userPrefix) || !key.endsWith(':account')) continue;
       const userId = key.slice(userPrefix.length, -':account'.length);
@@ -260,7 +262,7 @@ export class SessionStore {
       if (!validAccount(account) || account.user.id !== userId) continue;
       out.set(userId, { ref: { host, userId, slot: 'user', profileKey: profileKey! }, account });
     }
-    const legacy = this.memento.get<Account>(`hq:${host}:account`);
+    const legacy = this.memento.get<Account>(`${KEY_NS}:${host}:account`);
     if (validAccount(legacy) && USER_ID_RE.test(legacy.user.id) && !out.has(legacy.user.id)) {
       out.set(legacy.user.id, {
         ref: { host, userId: legacy.user.id, slot: 'legacy', profileKey: profileKey ?? '' },
@@ -409,7 +411,7 @@ export class SessionStore {
   async recordLegacyUser(host: string): Promise<LegacyUser | null> {
     const have = this.legacyUser(host);
     if (have) return have;
-    const record = this.memento.get<Account>(`hq:${host}:account`);
+    const record = this.memento.get<Account>(`${KEY_NS}:${host}:account`);
     if (!validAccount(record)) return null;
     const ref: AccountRef = { host, userId: record.user.id, slot: 'legacy', profileKey: '' };
     const device = await this.loadDeviceKey(ref);
@@ -436,7 +438,7 @@ export class SessionStore {
     if (!fp) return 'mismatch';
     if (!user) return 'ok'; // nothing recorded yet: `recordLegacyUser` takes this one
     if (fp === user.devicePubFp) return 'ok';
-    const record = this.memento.get<Account>(`hq:${host}:account`);
+    const record = this.memento.get<Account>(`${KEY_NS}:${host}:account`);
     if (validAccount(record) && record.user.id === user.userId && record.grantId !== user.grantId) {
       await this.memento.update(legacyUserKey(host), {
         ...user,
@@ -534,7 +536,7 @@ export class SessionStore {
       email,
       at: new Date(this.now()).toISOString(),
     } satisfies Tombstone);
-    const prefix = `hq:${ref.host}:t:`;
+    const prefix = `${KEY_NS}:${ref.host}:t:`;
     const all = this.memento
       .keys()
       .filter((k) => k.startsWith(prefix))
@@ -560,7 +562,7 @@ export class SessionStore {
    * finishes the wipe (`HqAccounts`).
    */
   async markSigningOut(host: string, tag: string, grantId: string): Promise<void> {
-    await this.memento.update(`hq:${host}:signingOut:${tag}`, {
+    await this.memento.update(`${KEY_NS}:${host}:signingOut:${tag}`, {
       at: new Date(this.now()).toISOString(),
       grantId,
     });
@@ -577,7 +579,7 @@ export class SessionStore {
   ): Array<{ tag: string; grantId: string | null }> {
     return this.signingOutTags(host).flatMap((tag) => {
       const m = this.memento.get<{ at?: unknown; grantId?: unknown }>(
-        `hq:${host}:signingOut:${tag}`,
+        `${KEY_NS}:${host}:signingOut:${tag}`,
       );
       const at = typeof m?.at === 'string' ? Date.parse(m.at) : NaN;
       if (Number.isFinite(at) && this.now() - at < minAgeMs) return [];
@@ -586,12 +588,12 @@ export class SessionStore {
   }
 
   async clearSigningOut(host: string, tag: string): Promise<void> {
-    await this.memento.update(`hq:${host}:signingOut:${tag}`, undefined);
+    await this.memento.update(`${KEY_NS}:${host}:signingOut:${tag}`, undefined);
   }
 
   /** Tags with a sign-out marker on `host`. */
   signingOutTags(host: string): string[] {
-    const prefix = `hq:${host}:signingOut:`;
+    const prefix = `${KEY_NS}:${host}:signingOut:`;
     return this.memento
       .keys()
       .filter((k) => k.startsWith(prefix))

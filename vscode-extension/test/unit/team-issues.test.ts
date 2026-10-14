@@ -68,12 +68,17 @@ describe('HqTeamIssues', () => {
     expect(issues.provideFileDecoration(file as never)).toBeUndefined();
   });
 
-  it('updating: an info notice with the ETA, and the folder tooltip says it too', () => {
+  it('updating: an info notice with the static estimate, and the folder tooltip says it too', () => {
     issues.onIssue(TAG, rootsOf, team, { kind: 'updating', etaSeconds: 90 });
-    expect(stub.messages).toEqual([{ level: 'info', text: COPY.fsUpdating('Backend team', 90) }]);
+    expect(stub.messages).toEqual([
+      {
+        level: 'info',
+        text: "Backend team's Cloud Computer is updating. Its files are back once it is done. This usually takes about 5 to 6 minutes.",
+      },
+    ]);
     expect(issues.provideFileDecoration(root as never)).toMatchObject({
       badge: '…',
-      tooltip: COPY.fsUpdating('Backend team', 90),
+      tooltip: COPY.fsUpdating('Backend team'),
     });
   });
 

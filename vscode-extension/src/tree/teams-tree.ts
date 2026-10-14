@@ -27,6 +27,7 @@ import {
   teamDescription,
   teamState,
 } from './labels.js';
+import { brandText } from '@kpa/shared/active-dev-brand';
 
 export type TeamsNode =
   | { kind: 'org'; account: AccountRef; org: RemoteOrg; teams: Team[] }
@@ -165,7 +166,7 @@ export class TeamsTree implements vscode.TreeDataProvider<TeamsNode> {
         item.contextValue = sessionContextValue(node.session);
         item.iconPath = new vscode.ThemeIcon(node.session.canType ? 'terminal' : 'eye');
         item.command = {
-          command: 'hq.attachSession',
+          command: brandText('hq.attachSession'),
           title: 'Attach',
           arguments: [node],
         };

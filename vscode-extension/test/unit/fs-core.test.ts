@@ -713,13 +713,18 @@ describe('a machine that cannot serve files: needs an update, or is updating (no
     expect(off).toEqual([]);
   });
 
-  it('updating: the sentence carries the ETA, once per team; a new ETA is not a new notice', async () => {
+  it('updating: the static estimate, never a countdown, once per team; a new ETA is not a new notice', async () => {
     api.err = updating(120);
     await expect(core.readFile(t, 'a.txt')).rejects.toMatchObject({
-      message: COPY.fsUpdating('Backend team', 120),
+      message: COPY.fsUpdating('Backend team'),
     });
-    expect(COPY.fsUpdating('Backend team', 120)).toContain('about 2 minutes');
-    expect(COPY.fsUpdating('Backend team', null)).toContain('in a few minutes');
+    // Jean 2026-10-10: a Cloud Computer change states one static estimate, whatever the server's ETA.
+    expect(COPY.fsUpdating('Backend team')).toBe(
+      "Backend team's Cloud Computer is updating. Its files are back once it is done. This usually takes about 5 to 6 minutes.",
+    );
+    expect(COPY.fsUpdating('Backend team')).not.toMatch(
+      /\d+\s*(seconds?|minutes?)\s*left|almost done|about [0-4] minutes?\b|about a minute/i,
+    );
     api.err = updating(40);
     expect(await core.readDirectory(t, '')).toEqual([]);
     expect(issues).toEqual([{ kind: 'updating', etaSeconds: 120 }]);
@@ -1330,7 +1335,7 @@ describe('train 42 re-test: names with control characters', () => {
 
   it('the rename message says what to do, in plain words', () => {
     expect(COPY.fsControlName).toBe(
-      "This file's name has control characters HQ can't open. Rename it on the machine.",
+      "This file's name has control characters HQ can't open. Rename it on the Cloud Computer.",
     );
   });
 });

@@ -41,6 +41,9 @@ import {
   type SignInResult,
 } from './sign-in.js';
 import type { Account, SessionStore, SlotHealth } from './session-store.js';
+import type { HostVerdict } from './hosts.js';
+import { copy } from '@kpa/shared/active-dev-brand';
+import { KEY_NS } from '../brand-keys.js';
 
 export {
   AccountGoneError,
@@ -50,7 +53,7 @@ export {
 } from './session-store.js';
 export type { SignInIntent, SignInOutcome, SignInResult } from './sign-in.js';
 
-export const ACTIVE_ACCOUNT_KEY = 'hq.activeAccount';
+export const ACTIVE_ACCOUNT_KEY = `${KEY_NS}.activeAccount`;
 /** Decision 23's local poll. */
 export const REDERIVE_POLL_MS = 5_000;
 /** The active account's team listing is re-read when older than this (switch, poll). */
@@ -75,7 +78,7 @@ export interface HqAccountsDeps {
   store: SessionStore;
   ui: HqUi;
   /** `hq.host`, already checked against the allow-list (decision 26). */
-  host: () => { ok: true; host: string } | { ok: false; host: string };
+  host: () => HostVerdict;
   extensionVersion: string;
   appName: string;
   /** This window's workspaceState (the active account's tag). */
@@ -240,7 +243,7 @@ export class HqAccounts {
       deps.store.onSecretChanged((key) => {
         // A renew elsewhere rewrote this slot's key: the built client is stale (decision 26).
         for (const b of this.bundles.values()) {
-          if (key.startsWith(`hq:${b.ref.host}:`) && key.endsWith(':device'))
+          if (key.startsWith(`${KEY_NS}:${b.ref.host}:`) && key.endsWith(':device'))
             b.service.invalidate();
         }
         this.rederive('secrets');
@@ -423,7 +426,7 @@ export class HqAccounts {
     if (host !== this.hostNow) {
       // A different host needs its own sign-in: every bundle of the old one goes (decision 26).
       if (this.hostNow !== null)
-        this.log.info('the HQ address changed: its accounts here are closed');
+        this.log.info(copy`the HQ address changed: its accounts here are closed`);
       for (const tag of [...this.bundles.keys()]) this.drop(tag);
       changed = this.hostNow !== null || host !== null;
       this.hostNow = host;
@@ -564,7 +567,7 @@ export class HqAccounts {
     const b = this.bundles.get(tag);
     if (!b) return;
     this.bundles.delete(tag);
-    this.log.info(`account ${tag} closed here (signed out, revoked, or another HQ address)`);
+    this.log.info(copy`account ${tag} closed here (signed out, revoked, or another HQ address)`);
     b.dispose();
     if (this.activeTag === tag) this.activeTag = null;
     this.removedEmitter.fire(b.ref);

@@ -400,8 +400,10 @@ export class HqPty implements vscode.Pseudoterminal {
           code === 'workspace_asleep'
             ? `${COPY.teamOffTerminal(teamName)}\r\n${COPY.pressKeyToWake}`
             : text,
-        wakeText: (code, message) =>
-          code === 'SESSION_RESUME_COLD_RESTART' ? message : COPY.waking(teamName),
+        // Review S1: the frame's promise (its `wakeEstimate`, else its sentence's range), the same
+        // value the still-working timer reads, never the listing's (stale or absent) estimate.
+        wakeText: (code, message, estimate) =>
+          code === 'SESSION_RESUME_COLD_RESTART' ? message : COPY.waking(teamName, estimate),
         copy: {
           prefix: '',
           stillOnIt: COPY.stillOnIt,

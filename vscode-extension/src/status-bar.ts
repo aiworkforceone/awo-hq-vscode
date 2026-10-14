@@ -16,15 +16,16 @@ import type { Ports } from './ports/ports.js';
 import type { Terminals } from './terminal/terminals.js';
 import { teamState } from './tree/labels.js';
 import { cleanLabel } from './util/text.js';
+import { ACTIVE_DEV_BRAND, brandText, copy } from '@kpa/shared/active-dev-brand';
 
 export class StatusBar implements vscode.Disposable {
   private readonly main = vscode.window.createStatusBarItem(
-    'aiworkforceone.hq.status',
+    `${ACTIVE_DEV_BRAND.vscode.publisher}.${ACTIVE_DEV_BRAND.vscode.idPrefix}.status`,
     vscode.StatusBarAlignment.Left,
     10,
   );
   private readonly ports = vscode.window.createStatusBarItem(
-    'aiworkforceone.hq.ports',
+    `${ACTIVE_DEV_BRAND.vscode.publisher}.${ACTIVE_DEV_BRAND.vscode.idPrefix}.ports`,
     vscode.StatusBarAlignment.Left,
     9,
   );
@@ -37,9 +38,9 @@ export class StatusBar implements vscode.Disposable {
   ) {
     this.main.name = COPY.statusTooltip;
     this.main.tooltip = COPY.statusTooltip;
-    this.main.command = 'hq.accounts.primaryAction';
-    this.ports.name = 'AI Workforce One HQ ports';
-    this.ports.command = 'hq.ports.focus';
+    this.main.command = brandText('hq.accounts.primaryAction');
+    this.ports.name = copy`AI Workforce One HQ ports`;
+    this.ports.command = brandText('hq.ports.focus');
     this.subscriptions.push(
       accounts.onDidChange(() => this.render()),
       terminals.onDidChange(() => this.render()),

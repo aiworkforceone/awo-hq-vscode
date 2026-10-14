@@ -1,6 +1,7 @@
 // The .vsix allow-list (DEVOPS §3.2 step 7 / §3.5): every entry must be named in
 // vsix-allowlist.json, and nothing that could leak or execute may ride along (a native module, a
 // source map, source, dependencies, an env file, a test). Run: node scripts/check-vsix.mjs <file.vsix>
+// [--allowlist <file>] (another brand's staged list, which names its own mark).
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +13,10 @@ if (!vsix) {
   console.error('usage: node scripts/check-vsix.mjs <file.vsix>');
   process.exit(2);
 }
-const allowed = new Set(
-  JSON.parse(readFileSync(path.join(here, '..', 'vsix-allowlist.json'), 'utf8')).files,
-);
+const listArg = process.argv.indexOf('--allowlist');
+const listFile =
+  listArg === -1 ? path.join(here, '..', 'vsix-allowlist.json') : process.argv[listArg + 1];
+const allowed = new Set(JSON.parse(readFileSync(listFile, 'utf8')).files);
 const entries = execFileSync('unzip', ['-Z1', vsix], { encoding: 'utf8' })
   .split('\n')
   .map((l) => l.trim())

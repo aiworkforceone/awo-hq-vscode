@@ -11,6 +11,7 @@
 import * as vscode from 'vscode';
 import { COPY } from './copy.js';
 import { notificationText } from './util/text.js';
+import { copy } from '@kpa/shared/active-dev-brand';
 
 /** A command URI argument: JSON, percent-encoded, and no `)` or `(` left to end the link early. */
 function uriArg(value: unknown): string {
@@ -28,7 +29,7 @@ export class TeamOffNotices {
     if (this.open.has(key) || this.dismissed.has(key)) return;
     // Security L1: the team name is neutralized; only OUR link is a link.
     const text = notificationText(action === 'open' ? COPY.fsOffOpen(name) : COPY.fsOffSave(name));
-    const title = `${text} [${COPY.wakeTeam}](command:hq.wakeTeamOf?${uriArg([tag, workspaceId])})`;
+    const title = copy`${text} [${COPY.wakeTeam}](command:hq.wakeTeamOf?${uriArg([tag, workspaceId])})`;
     let end: () => void = () => undefined;
     const ended = new Promise<void>((r) => (end = r));
     this.open.set(key, end);

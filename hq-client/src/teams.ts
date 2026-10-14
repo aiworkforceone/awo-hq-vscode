@@ -3,7 +3,12 @@
  * full team id, or a team name — optionally narrowed by `--org`.
  */
 import { workspaceAlias, type RemoteOrg, type RemoteWorkspace } from '@kpa/shared/remote.types';
+import { ACTIVE_DEV_BRAND, copy } from '@kpa/shared/active-dev-brand';
 import { ALIAS_RE, ORG_SLUG_RE, UUID_RE, oneLine } from './safe-text.js';
+
+/** This build's alias prefix (`hq` for AWO; each brand names its own). */
+const ALIAS_PREFIX = ACTIVE_DEV_BRAND.teamAliasPrefix;
+const alias = (id: string, hexChars = 8): string => workspaceAlias(id, hexChars, ALIAS_PREFIX);
 
 export interface Team {
   org: RemoteOrg;
@@ -31,14 +36,14 @@ export function partitionTeams(orgs: RemoteOrg[]): { teams: Team[]; skipped: Tea
   });
   const counts = new Map<string, number>();
   for (const t of all) {
-    const a = workspaceAlias(t.workspace.id);
+    const a = alias(t.workspace.id);
     counts.set(a, (counts.get(a) ?? 0) + 1);
   }
   const aliased = all.map((t) => {
-    const short = workspaceAlias(t.workspace.id);
+    const short = alias(t.workspace.id);
     return {
       ...t,
-      alias: (counts.get(short) ?? 0) > 1 ? workspaceAlias(t.workspace.id, 12) : short,
+      alias: (counts.get(short) ?? 0) > 1 ? alias(t.workspace.id, 12) : short,
     };
   });
   return {
@@ -64,16 +69,17 @@ export function resolveTeam(orgs: RemoteOrg[], ref: string, org?: string): Team 
       t.workspace.name.toLowerCase() === needle,
   );
   if (exact.length === 1) return exact[0]!;
-  const prefix = teams.filter((t) =>
-    t.workspace.id.toLowerCase().startsWith(needle.replace(/^hq-/, '')),
-  );
+  const bare = needle.startsWith(`${ALIAS_PREFIX}-`)
+    ? needle.slice(ALIAS_PREFIX.length + 1)
+    : needle;
+  const prefix = teams.filter((t) => t.workspace.id.toLowerCase().startsWith(bare));
   if (exact.length === 0 && prefix.length === 1) return prefix[0]!;
   if (exact.length > 1 || prefix.length > 1) {
     throw new TeamNotFoundError(
-      `hq: "${ref}" matches more than one team. Use the hq-… name from hq status.`,
+      copy`hq: "${ref}" matches more than one team. Use the hq-… name from hq status.`,
     );
   }
   throw new TeamNotFoundError(
-    `hq: no team "${ref}" on this login. Run hq status to see your teams.`,
+    copy`hq: no team "${ref}" on this login. Run hq status to see your teams.`,
   );
 }

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0
+
+- A session HQ is still starting shows `starting` in the Teams view instead of looking like a
+  running one, and Start on it says "Session "fix login bug" is already starting." instead of
+  "already running". With an older HQ, sessions show as before.
+- Start, Stop and Restart on each session in the Teams view, as icons and in the right-click menu,
+  shown only on sessions you may operate (the session owner or a team owner, as in HQ). Stop and
+  Restart ask first while Claude or Codex is answering. A refusal, such as a team at its session
+  limit, shows as a notification. Too many starts in a minute says how long to wait ("Too many
+  requests. Try again in 34 seconds.").
+- A start, stop, restart or port forward that reached the server without this computer's signature
+  now says so, instead of nothing (Start, Stop, Restart) or asking you to sign in again (ports).
+- While a team's AI Team Cloud Computer is updating or changing size, its files say "This usually
+  takes about 5 to 6 minutes" instead of counting down a time left.
+- Wake Team says "Waking Backend team... this usually takes 15-30 seconds" instead of "about 15 s",
+  adds "Taking longer than usual, still working." after 30 seconds, and notices the team is running
+  within about a second.
+- On a Boost Max team (32 GB) Wake Team and the terminal say "this usually takes 30-45 seconds", and
+  "Taking longer than usual, still working." waits for 45 seconds.
+- Messages, prompts and the Ports view say "AI Team Cloud Computer" (or "Cloud Computer") where
+  they said "team machine" or "machine", for example "AI Team Cloud Computer port to forward".
+- Approving a sign-in with an account that signs in at another address now says which address to
+  set in the host setting, and keeps nothing.
+
 ## 0.2.3
 
 - A session open in more than one place (HQ in the browser and a VS Code terminal, or two VS Code

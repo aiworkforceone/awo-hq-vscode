@@ -27,6 +27,7 @@ import { forwardError, Ports } from '../../src/ports/ports.js';
 import { COPY } from '../../src/copy.js';
 import { HqApiError } from '@hq/client/api.js';
 import { ConnectRefusedError } from '@hq/client/connect.js';
+import { deviceSignatureMissingMessage } from '@hq/client/session-actions.js';
 import { legacySignedIn, memento } from './harness.js';
 import { stub, window as stubWindow } from './vscode-stub.js';
 
@@ -612,11 +613,34 @@ describe("the extension never shows the CLI's sentences (item 14)", () => {
       refused('REMOTE_TOKEN_INVALID', 401),
       refused('FEATURE_NOT_AVAILABLE', 403),
       refused('NOT_FOUND', 404),
-      new ConnectRefusedError('hq: the team machine is asleep'),
+      new ConnectRefusedError('hq: the AI Team Cloud Computer is sleeping'),
     ]) {
       const text = forwardError(team, err);
       expect(text).not.toMatch(/^hq:|asleep/);
     }
+  });
+});
+
+describe('train 96 review W1: a forward refused for a missing device signature', () => {
+  it('says the request was not signed (the shared sentence), not "sign in again"', () => {
+    const e = new ConnectRefusedError(
+      'hq: x',
+      new HqApiError(401, 'DEVICE_SIGNATURE_MISSING', 'not signed', undefined),
+    );
+    const text = forwardError('Backend team', e);
+    expect(text).toBe(deviceSignatureMissingMessage());
+    expect(text).not.toBe(COPY.renewSignIn);
+    expect(text).not.toMatch(/^hq:/);
+    // Every other 401 is still the dead sign-in.
+    expect(
+      forwardError(
+        'Backend team',
+        new ConnectRefusedError(
+          'hq: x',
+          new HqApiError(401, 'REMOTE_TOKEN_INVALID', 'x', undefined),
+        ),
+      ),
+    ).toBe(COPY.renewSignIn);
   });
 });
 
@@ -628,7 +652,7 @@ describe('a machine that started before Developer access was turned on', () => {
     );
     const text = forwardError('tech & software', e);
     expect(text).toBe(
-      'tech & software started before Developer access was turned on. Restart it once (Restart machine in HQ team settings) and ports will forward.',
+      'tech & software started before Developer access was turned on. Restart it once (Restart Cloud Computer in HQ team settings) and ports will forward.',
     );
     expect(text).not.toMatch(/—| - |asleep|needs a restart/i);
   });
@@ -663,7 +687,7 @@ describe('code review S5/S6', () => {
               type: 'error',
               sessionId: 's-1',
               code: 'SESSION_RESUMING',
-              message: 'Waking the machine',
+              message: 'Waking the Cloud Computer',
             }),
           );
           ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
@@ -700,6 +724,60 @@ describe('code review S5/S6', () => {
   }, 15_000);
 });
 
+// Review S1: the terminal's waking line and its "still working" timer read ONE source: the frame's
+// `wakeEstimate`, else the server sentence's range. Never the listing, which may be stale or absent.
+describe('HqPty wake line follows the wake frame', () => {
+  it('says 30-45 seconds when the frame says so, though the listing carries no estimate', async () => {
+    let attaches = 0;
+    fake.terminal = (ws) => {
+      ws.on('message', (d) => {
+        const f = JSON.parse(d.toString()) as Record<string, unknown>;
+        if (f.type !== 'attach') return;
+        attaches += 1;
+        if (attaches === 1) {
+          ws.send(
+            JSON.stringify({
+              type: 'error',
+              sessionId: 's-1',
+              code: 'SESSION_RESUMING',
+              message: 'Waking your AI Team Cloud Computer… this usually takes 30-45 seconds',
+              wakeEstimate: { minSeconds: 30, maxSeconds: 45 },
+            }),
+          );
+          ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'history', sessionId: 's-1', data: 'back' }));
+        ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
+      });
+    };
+    const team = withTeamAliases(orgs())[0]!;
+    expect(team.workspace.wakeEstimate).toBeUndefined();
+    const pty = new HqPty(
+      {
+        service: svc,
+        localEchoMode: () => 'off',
+        vsCodeTypeaheadOn: () => false,
+        windowActive: () => true,
+        offerPorts: () => undefined,
+        teamRunning: async () => teamIsRunning({ ...team.workspace, state: 'starting' }),
+      },
+      {
+        account: svc.ref,
+        team,
+        session: { id: 's-1', name: 'x', ownerName: 'Jean', status: 'running', canType: true },
+      },
+    );
+    let out = '';
+    pty.onDidWrite((d) => (out += d));
+    pty.open({ columns: 80, rows: 24 });
+    await waitFor(() => out.includes('back'), 8_000);
+    expect(out).toContain('this usually takes 30-45 seconds');
+    expect(out).not.toContain('15-30');
+    pty.close();
+  }, 15_000);
+});
+
 describe('HqPty on a team that is off (item 10)', () => {
   it('attaches passively: "Press any key to wake it", and only the key sends the waking attach', async () => {
     const frames: Array<Record<string, unknown>> = [];
@@ -713,7 +791,7 @@ describe('HqPty on a team that is off (item 10)', () => {
               type: 'notice',
               sessionId: 's-1',
               code: 'workspace_asleep',
-              text: 'The team machine is asleep.',
+              text: 'The AI Team Cloud Computer is sleeping.',
             }),
           );
           ws.send(JSON.stringify({ type: 'attached', sessionId: 's-1' }));
@@ -799,7 +877,7 @@ describe('Ports (D11)', () => {
     await ports.start(svc.ref, withTeamAliases(orgs())[0]!, 9229, 9229);
     expect(fake.requests.filter((r) => r.path.endsWith('/connections'))).toEqual([]);
     expect(stub.messages.map((m) => m.text)).toEqual([
-      'Port 9229 cannot be forwarded: the team machine uses it itself.',
+      'Port 9229 cannot be forwarded: the AI Team Cloud Computer uses it itself.',
     ]);
   });
 
@@ -810,7 +888,7 @@ describe('Ports (D11)', () => {
       await ports.start(svc.ref, withTeamAliases(orgs())[0]!, port, port);
       expect(fake.requests.filter((r) => r.path.endsWith('/connections'))).toEqual([]);
       expect(stub.messages.map((m) => m.text)).toEqual([
-        `Port ${port} cannot be forwarded: the team machine uses it itself.`,
+        `Port ${port} cannot be forwarded: the AI Team Cloud Computer uses it itself.`,
       ]);
     },
   );

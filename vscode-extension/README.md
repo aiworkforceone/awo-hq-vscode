@@ -1,7 +1,7 @@
 # AI Workforce One HQ for VS Code
 
 Your AI Workforce One HQ teams inside VS Code, Cursor, Windsurf and VSCodium, without installing
-anything on your team machines. This is a pre-release.
+anything on your AI Team Cloud Computers. This is a pre-release.
 
 - **Sign in** with the same device approval as the `hq` command line tool: run **HQ: Sign In**,
   enter the code on the HQ page that opens, and approve this computer. It gets its own access,
@@ -10,12 +10,13 @@ anything on your team machines. This is a pre-release.
 - **Teams**: the AI Workforce One HQ sidebar lists your organizations, their teams (running,
   starting or off) and each team's sessions.
 - **Team files**: **Open Team Files** adds a team's folder to the Explorer. Open, edit and save its
-  files, and search them on the team machine with **Search in Team Files**.
+  files, and search them on the AI Team Cloud Computer with **Search in Team Files**.
 - **Session terminals**: open any session you can see in a VS Code terminal. You type in your own
   sessions; other people's sessions are view only. Closing the terminal leaves the session running.
-  Wake Team starts a team machine that is off; New Session Terminal starts a new HQ session.
-- **Ports**: forward a port from a team machine to `localhost` on this computer and open it in
-  your browser. Ports the machine is listening on are offered for you.
+  Wake Team starts an AI Team Cloud Computer that is off; New Session Terminal starts a new HQ session.
+  Start, Stop and Restart Session act on a session from the HQ sidebar (the session owner or a team owner only).
+- **Ports**: forward a port from an AI Team Cloud Computer to `localhost` on this computer and open it in
+  your browser. Ports the Cloud Computer is listening on are offered for you.
 
 Everything goes through HQ's own permissions: your role on each team, your plan, and your
 organization's Developer access setting. Secrets stay masked, exactly as in HQ.
@@ -41,8 +42,8 @@ kept in the editor's secret storage on this computer, and team file contents onl
   values, and protected template files, open read only.
 - **Forwarded ports.** A forwarded port listens on `127.0.0.1` only, so other computers cannot reach
   it. Any program on this computer can, while the forward is open, as with any local port. On the
-  team machine, a forward reaches whatever program listens on that port, including other members'
-  dev servers. HQ refuses the machine's own service ports, the Docker API ports (2375 and 2376), the
+  AI Team Cloud Computer, a forward reaches whatever program listens on that port, including other members'
+  dev servers. HQ refuses the Cloud Computer's own service ports, the Docker API ports (2375 and 2376), the
   Node debugger ports (9229 and 9230) and editor bridge ports.
 
 ## Settings

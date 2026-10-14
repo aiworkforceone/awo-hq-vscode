@@ -8787,10 +8787,132 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode16 = __toESM(require("vscode"), 1);
+var vscode17 = __toESM(require("vscode"), 1);
 
 // src/accounts-ui.ts
 var vscode2 = __toESM(require("vscode"), 1);
+
+// ../shared/src/dev-brands/awo.ts
+var DEV_BRAND = Object.freeze({
+  id: "awo",
+  productName: "HQ",
+  displayName: "AI Workforce One HQ",
+  defaultHost: "https://hq.aiworkforceone.com",
+  builtInHosts: ["https://hq.aiworkforceone.com", "https://hq-test.aiworkforceone.com"],
+  builtInHostParents: [],
+  reservedHostLabels: [],
+  hostExample: "https://hq.aiworkforceone.com",
+  teamAliasPrefix: "hq",
+  apiBaseUrl: "https://api-hq.aiworkforceone.com",
+  apiDocsBase: "https://hq.aiworkforceone.com/docs/api",
+  cli: {
+    command: "hq",
+    packageName: "@aiworkforceoneofficial/hq",
+    description: "Connect your computer to your AI Team Cloud Computers in AI Workforce One HQ: attach and port forwarding.",
+    envPrefix: "HQ",
+    homeDirName: ".hq",
+    keychainService: "hq.aiworkforceone",
+    bundleFile: "hq.cjs",
+    repository: "aiworkforceone/awo-hq-cli",
+    legacySshConfig: "~/.ssh/hq_config"
+  },
+  sdk: { npm: "@aiworkforceoneofficial/hq-sdk", pypi: "aiworkforceone-hq" },
+  vscode: {
+    publisher: "aiworkforceone",
+    name: "awo-hq",
+    displayName: "AI Workforce One HQ",
+    description: "Your AI Workforce One HQ teams inside VS Code: join their session terminals and forward their ports, without SSH.",
+    idPrefix: "hq",
+    authProviderId: "aiworkforceone-hq",
+    fsScheme: "hq",
+    repository: "aiworkforceone/awo-hq-vscode"
+  }
+});
+
+// ../shared/src/dev-brand-copy.ts
+var COPY_SOURCE = Object.freeze({
+  displayName: "AI Workforce One HQ",
+  hostExample: "https://hq.aiworkforceone.com",
+  homeDir: "~/.hq"
+});
+function rebrandCopy(brand, text) {
+  if (brand.id === "awo") return text;
+  return text.split(COPY_SOURCE.displayName).join(brand.displayName).split(COPY_SOURCE.hostExample).join(brand.hostExample).replace(/~\/\.hq(?![\w-])/g, `~/${brand.cli.homeDirName}`).replace(/(?<![\w.-])HQ_(?=[A-Z])/g, `${brand.cli.envPrefix}_`).replace(/(?<![\w.-])hq-(?=…|[0-9a-f]{8}|name>)/g, `${brand.teamAliasPrefix}-`).replace(/(?<![\w./-])hq:\/\//g, `${brand.vscode.fsScheme}://`).replace(/(?<![\w./-])hq\.(?=[a-z])/g, `${brand.vscode.idPrefix}.`).replace(/(?<=[a-z])Hq(?=[A-Z])/g, brand.productName.replace(/[^A-Za-z0-9]/g, "")).replace(/(?<![\w./-])hq(?![\w-])/g, brand.cli.command).replace(
+    /(?<![\w-])([Aa])n HQ(?![\w-])/g,
+    (_m, a) => /^[aeiou]/i.test(brand.productName) ? `${a}n ${brand.productName}` : `${a} ${brand.productName}`
+  ).replace(/(?<![\w-])HQ(?![\w-])/g, brand.productName);
+}
+function brandCopyTag(brand) {
+  return (strings, ...values) => {
+    let out = rebrandCopy(brand, strings[0] ?? "");
+    for (let i = 0; i < values.length; i++) {
+      out += String(values[i]) + rebrandCopy(brand, strings[i + 1] ?? "");
+    }
+    return out;
+  };
+}
+
+// ../shared/src/active-dev-brand.ts
+var ACTIVE_DEV_BRAND = DEV_BRAND;
+var copy = brandCopyTag(ACTIVE_DEV_BRAND);
+function brandText(text) {
+  return rebrandCopy(ACTIVE_DEV_BRAND, text);
+}
+
+// ../shared/src/remote.types.ts
+var REMOTE_ACCESS_TTL_SEC = 15 * 60;
+var REMOTE_REFRESH_IDLE_TTL_SEC = 30 * 24 * 60 * 60;
+var REMOTE_REFRESH_ABSOLUTE_TTL_SEC = 90 * 24 * 60 * 60;
+var REMOTE_DEVICE_CODE_TTL_SEC = 600;
+var HQ_HEADER_ORG = "x-hq-org";
+var HQ_HEADER_NONCE = "x-hq-nonce";
+var HQ_HEADER_DEVICE_SIG = "x-hq-device-sig";
+var HQ_HEADER_CONNECT_CODE = "x-hq-connect-code";
+var HQ_HEADER_CLIENT = "x-hq-client";
+var HQ_HEADER_WANT_NONCE = "x-hq-want-nonce";
+function deviceSignaturePayload(nonce, method, path5, bodySha256Hex) {
+  return `${nonce}
+${method.toUpperCase()}
+${path5}
+${bodySha256Hex.toLowerCase()}`;
+}
+var SSH_REMOVED_MESSAGE = brandText(
+  "SSH access to AI Team Cloud Computers was removed on 2026-10-01. Use a terminal session in HQ, `hq attach <session> --team <team>`, `hq forward <port> --team <team>`, or the AI Workforce One HQ extension for VS Code."
+);
+function workspaceAlias(workspaceId, hexChars = 8, prefix = "hq") {
+  return `${prefix}-${workspaceId.replace(/-/g, "").slice(0, hexChars).toLowerCase()}`;
+}
+var WAKE_ESTIMATE_DEFAULT = Object.freeze({
+  minSeconds: 15,
+  maxSeconds: 30
+});
+var WAKE_ESTIMATE_LARGE = Object.freeze({
+  minSeconds: 30,
+  maxSeconds: 45
+});
+var MAX_WAKE_SECONDS = 180;
+function normalizeWakeEstimate(value) {
+  return isSaneWakeEstimate(value) ? { minSeconds: value.minSeconds, maxSeconds: value.maxSeconds } : WAKE_ESTIMATE_DEFAULT;
+}
+function isSaneWakeEstimate(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const { minSeconds, maxSeconds } = value;
+  return typeof minSeconds === "number" && typeof maxSeconds === "number" && Number.isInteger(minSeconds) && Number.isInteger(maxSeconds) && minSeconds > 0 && maxSeconds > minSeconds && maxSeconds <= MAX_WAKE_SECONDS;
+}
+function wakeRangeText(estimate) {
+  const e = normalizeWakeEstimate(estimate);
+  return `${e.minSeconds}-${e.maxSeconds} seconds`;
+}
+function wakeStillWorkingAfterMs(estimate) {
+  return normalizeWakeEstimate(estimate).maxSeconds * 1e3;
+}
+function wakeEstimateInSentence(sentence) {
+  const m = typeof sentence === "string" ? /\b(\d{1,3})-(\d{1,3}) seconds\b/.exec(sentence) : null;
+  return m ? normalizeWakeEstimate({ minSeconds: Number(m[1]), maxSeconds: Number(m[2]) }) : WAKE_ESTIMATE_DEFAULT;
+}
+function wakeEstimateOf(field, sentence) {
+  return isSaneWakeEstimate(field) ? normalizeWakeEstimate(field) : wakeEstimateInSentence(sentence);
+}
 
 // src/copy.ts
 var COPY = {
@@ -8798,56 +8920,59 @@ var COPY = {
   signedOutWelcome: "Sign in to see your teams.",
   deviceCode: (code) => `Enter ${code} in the browser (copied). Waiting for approval.`,
   signInDenied: "The sign-in was denied in the browser.",
+  /** The client host rule: the approving account belongs to another address. */
+  signInWrongHost: (host) => `This account signs in at ${host}. Set the host setting to ${host} and sign in again.`,
   signInExpired: "This sign-in code expired. Sign in again.",
   // Review MUST 5: the approval may have reached HQ while this editor could not hear the answer.
-  signInExpiredAfterNetwork: "This sign-in code expired while HQ could not be reached, so the approval may have gone through without reaching this editor. If this computer shows in HQ, under Account, Devices, remove it there, then sign in again.",
-  signInUnavailable: "HQ for VS Code is not available on this HQ yet.",
+  signInExpiredAfterNetwork: copy`This sign-in code expired while HQ could not be reached, so the approval may have gone through without reaching this editor. If this computer shows in HQ, under Account, Devices, remove it there, then sign in again.`,
+  signInUnavailable: copy`HQ for VS Code is not available on this HQ yet.`,
   signInFailed: (detail) => `Could not sign in: ${detail}`,
-  signedIn: (email) => `Signed in to AI Workforce One HQ as ${email}.`,
-  signedOut: "Signed out of AI Workforce One HQ. This computer can no longer reach your teams.",
+  signedIn: (email) => copy`Signed in to AI Workforce One HQ as ${email}.`,
+  signedOut: copy`Signed out of AI Workforce One HQ. This computer can no longer reach your teams.`,
   // One account of several (live test 2026-10-02: the sentence above said "your teams" while the
   // other accounts' teams were still right there).
   signedOutAccount: (email) => `Signed out of ${email}. Other accounts stay signed in.`,
-  signOutOffline: "Signed out on this computer. HQ could not be reached to end this computer\u2019s access; remove it in HQ, under Account, Devices.",
-  hostNotAllowed: (host) => `"${host}" is not an HQ address this editor may use. Set hq.host to https://hq.aiworkforceone.com or add it to hq.allowedHosts.`,
-  hostChanged: "The HQ address changed. Sign in again to use it.",
-  keyringMissing: "Your HQ sign-in is stored without the system keychain on this computer.",
-  renewSignIn: "Your HQ sign-in needs renewing.",
+  signOutOffline: copy`Signed out on this computer. HQ could not be reached to end this computer’s access; remove it in HQ, under Account, Devices.`,
+  hostNotAllowed: (host) => copy`"${host}" is not an HQ address this editor may use. Set hq.host to https://hq.aiworkforceone.com or add it to hq.allowedHosts.`,
+  hostChanged: copy`The HQ address changed. Sign in again to use it.`,
+  hostUnset: copy`Set hq.host to the address you sign in to, for example https://hq.aiworkforceone.com.`,
+  keyringMissing: copy`Your HQ sign-in is stored without the system keychain on this computer.`,
+  renewSignIn: copy`Your HQ sign-in needs renewing.`,
   // hq-vscode-multi-account: an `add` sign-in becomes active only in the window that started it.
-  signInOtherWindow: "Signing in to AI Workforce One HQ from another VS Code window. Wait for it to finish, or sign in here instead.",
+  signInOtherWindow: copy`Signing in to AI Workforce One HQ from another VS Code window. Wait for it to finish, or sign in here instead.`,
   signInHereAction: "Sign in here instead",
   signInMovedToOtherWindow: "Sign-in moved to another VS Code window. Finish it there.",
-  signInInProgress: "Already signing in to AI Workforce One HQ in this window. Waiting for the code.",
+  signInInProgress: copy`Already signing in to AI Workforce One HQ in this window. Waiting for the code.`,
   signInAction: "Sign in",
-  tooOld: "This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view.",
-  unreachable: "HQ could not be reached. Check your connection and try again.",
-  signInThrottled: "Too many HQ sign-ins were started from this network. Wait a minute and try again.",
+  tooOld: copy`This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view.`,
+  unreachable: copy`HQ could not be reached. Check your connection and try again.`,
+  signInThrottled: copy`Too many HQ sign-ins were started from this network. Wait a minute and try again.`,
   // ── accounts (hq-vscode-multi-account) ───────────────────────────────────────────────────────
   pickAccount: "Choose an account",
   pickAccountForCommand: "Choose an account for this window",
   accountActiveNote: "Active in this window",
   addAnotherAccount: "Add another account...",
-  addedAccount: (email) => `Signed in to AI Workforce One HQ as ${email}. This window now uses it.`,
-  accountAlreadySignedIn: (email) => `The browser approved this sign-in as ${email}, who is already signed in here, so it was not kept. To add another account, sign in to HQ in your browser as that account first.`,
+  addedAccount: (email) => copy`Signed in to AI Workforce One HQ as ${email}. This window now uses it.`,
+  accountAlreadySignedIn: (email) => copy`The browser approved this sign-in as ${email}, who is already signed in here, so it was not kept. To add another account, sign in to HQ in your browser as that account first.`,
   // Jean 2026-10-01: the first sentence verbatim; the grant approved as someone else is revoked.
-  renewMismatch: (expected, got) => `You approved as ${got}, but this account is ${expected}. Sign in to HQ in your browser as ${expected}, then try again.`,
-  renewMismatchUnknown: (got) => `You approved as ${got}, but this sign-in was for another account. Sign in to HQ in your browser as that account, then try again.`,
-  signInUnstorableUser: "HQ answered with an account this editor cannot store. It was not kept.",
-  revokeNewFailed: "HQ could not be reached to undo that sign-in. Remove the newest computer in HQ, under Account, Devices.",
+  renewMismatch: (expected, got) => copy`You approved as ${got}, but this account is ${expected}. Sign in to HQ in your browser as ${expected}, then try again.`,
+  renewMismatchUnknown: (got) => copy`You approved as ${got}, but this sign-in was for another account. Sign in to HQ in your browser as that account, then try again.`,
+  signInUnstorableUser: copy`HQ answered with an account this editor cannot store. It was not kept.`,
+  revokeNewFailed: copy`HQ could not be reached to undo that sign-in. Remove the newest computer in HQ, under Account, Devices.`,
   slotInUse: "This sign-in could not be stored: another VS Code profile on this computer holds one for the same account. It was not kept.",
   fsAccountGone: (email) => `This folder belongs to ${email}, who is not signed in on this computer.`,
-  fsAccountUnknown: "This folder belongs to an HQ account that is not signed in on this computer. Open it again from the Teams view.",
+  fsAccountUnknown: copy`This folder belongs to an HQ account that is not signed in on this computer. Open it again from the Teams view.`,
   signInAsAction: (email) => `Sign in as ${email}`,
-  revokedAccount: (email) => `Your access to HQ as ${email} ended on this computer. Sign in again, or switch to another account.`,
-  renewSignInAccount: (email) => `Your HQ sign-in as ${email} needs renewing.`,
+  revokedAccount: (email) => copy`Your access to HQ as ${email} ended on this computer. Sign in again, or switch to another account.`,
+  renewSignInAccount: (email) => copy`Your HQ sign-in as ${email} needs renewing.`,
   needsSignInDescription: "Sign in again",
-  keychainBusy: (email) => `Could not read your HQ sign-in for ${email} from the keychain. Unlock it and try again.`,
-  confirmSignOut: (email) => `Sign out of ${email}? Its HQ terminals and port forwards close in every window.`,
+  keychainBusy: (email) => copy`Could not read your HQ sign-in for ${email} from the keychain. Unlock it and try again.`,
+  confirmSignOut: (email) => copy`Sign out of ${email}? Its HQ terminals and port forwards close in every window.`,
   statusOtherAccount: "other account",
-  accountsExistNoneActive: "You have other HQ accounts signed in on this computer.",
-  manageDevicesBrowserNote: (email) => `Opens HQ in your browser. If your browser is signed in as someone other than ${email}, sign in there first.`,
+  accountsExistNoneActive: copy`You have other HQ accounts signed in on this computer.`,
+  manageDevicesBrowserNote: (email) => copy`Opens HQ in your browser. If your browser is signed in as someone other than ${email}, sign in there first.`,
   // ── teams tree ───────────────────────────────────────────────────────────────────────────────
-  noOrgs: "No org has developer access on yet. An org owner turns it on in HQ, under Settings, Security.",
+  noOrgs: copy`No org has developer access on yet. An org owner turns it on in HQ, under Settings, Security.`,
   stateRunning: "running",
   stateStarting: "starting",
   stateOff: "off",
@@ -8858,20 +8983,35 @@ var COPY = {
   noSessions: "No sessions yet",
   sessionsFailed: "Could not load sessions",
   teamOffTooltip: (team) => `${team} is off. Wake it to join its sessions.`,
-  updateNeededLong: (team) => `${team}'s machine needs an update for this. An owner or admin can update it in HQ, under Team, Settings, Update machine.`,
+  updateNeededLong: (team) => copy`${team}'s Cloud Computer needs an update for this. An owner or admin can update it in HQ, under Team, Settings, Update Cloud Computer.`,
+  // ── session lifecycle (cli-session-lifecycle) ────────────────────────────────────────────────
+  // Refusals are the shared client's sentences (`describeSessionRefusal`), the same the CLI prints.
+  sessionStarting: (name) => `Starting session "${name}"...`,
+  sessionStopping: (name) => `Stopping session "${name}"...`,
+  sessionRestartingProgress: (name) => `Restarting session "${name}"...`,
+  sessionStarted: (name) => `Session "${name}" is starting.`,
+  sessionStopped: (name) => `Session "${name}" stopped.`,
+  sessionRestarted: (name) => `Session "${name}" is restarting.`,
+  // train 98 e2e: HQ answers ALREADY_RUNNING while a session is still starting too (the CLI's words).
+  sessionAlreadyStarting: (name) => `Session "${name}" is already starting.`,
+  sessionBusyConfirm: (agent, name, action) => `${agent} is answering in "${name}" right now. ${action === "stop" ? "Stop" : "Restart"} it anyway?`,
+  stopSessionAction: "Stop Session",
+  restartSessionAction: "Restart Session",
   // ── wake ─────────────────────────────────────────────────────────────────────────────────────
-  waking: (team) => `Waking ${team} (about 15 s)...`,
-  stillOnIt: "Still on it...",
+  // Jean 2026-10-14: the team's own range from HQ's listing (30-45 seconds from 32 GB); an older HQ
+  // sends none and the ordinary 15-30 holds.
+  waking: (team, estimate) => `Waking ${team}... this usually takes ${wakeRangeText(estimate)}`,
+  stillOnIt: "Taking longer than usual, still working.",
   woke: (team) => `${team} is running.`,
-  wakeTimeout: (team) => `${team} did not start within 3 minutes. Check it in HQ and try again.`,
+  wakeTimeout: (team) => copy`${team} did not start within 3 minutes. Check it in HQ and try again.`,
   // ALSO-3 (live re-test, round 3): HQ's wake only resumes a machine that went to sleep (it never
   // starts a stopped one, D23); a session start is what starts it, in HQ or here.
-  wakeStopped: (team) => `${team} is stopped. Wake only resumes a sleeping team: start a session to start its machine.`,
+  wakeStopped: (team) => `${team} is stopped. Wake only resumes a sleeping team: start a session to start its Cloud Computer.`,
   startSessionAction: "Start a Session",
-  openInHqAction: "Open in HQ",
+  openInAppAction: copy`Open in HQ`,
   wakeThrottled: "Too many wake requests for this team. Wait a few minutes and try again.",
   wakeTeam: "Wake Team",
-  wakeUnavailable: "Waking a team from VS Code is not available on this HQ yet. Open one of its session terminals to wake it.",
+  wakeUnavailable: copy`Waking a team from VS Code is not available on this HQ yet. Open one of its session terminals to wake it.`,
   // ── image paste and drop (hq-vscode-image-paste; the web terminal's sentences) ────────────────
   imageUploading: "Uploading image...",
   imageAdded: "Image added. Describe it, then press Enter.",
@@ -8883,10 +9023,10 @@ var COPY = {
   imageUploadAction: "Upload",
   imageTypePathAction: "Type the path",
   imageDropOtherTeam: (team) => `That file is in another team. Drop files from ${team}'s folder, or from your computer.`,
-  imagePasteRemoteHost: "Pasting an image needs the HQ extension on this computer. Drag the image file onto the terminal instead.",
+  imagePasteRemoteHost: copy`Pasting an image needs the HQ extension on this computer. Drag the image file onto the terminal instead.`,
   // ── terminal ─────────────────────────────────────────────────────────────────────────────────
   // Decision 21: the account's short label, only while 2 or more accounts are signed in.
-  terminalName: (team, session, label) => label ? `HQ \xB7 ${label} \xB7 ${team} \xB7 ${session}` : `HQ \xB7 ${team} \xB7 ${session}`,
+  terminalName: (team, session, label) => label ? copy`HQ · ${label} · ${team} · ${session}` : copy`HQ · ${team} · ${session}`,
   terminalSuffixViewOnly: " \xB7 view only",
   terminalSuffixWaking: " \xB7 waking",
   terminalSuffixStopped: " \xB7 stopped",
@@ -8894,39 +9034,39 @@ var COPY = {
   teamOffTerminal: (team) => `${team} is off.`,
   pressKeyToWake: "Press any key to wake it.",
   reconnecting: "Connection lost, reconnecting...",
-  connectionLost: "The connection to HQ was lost.",
+  connectionLost: copy`The connection to HQ was lost.`,
   // 0.2.2: an ended or lost terminal comes back in place on the next key.
   pressKeyToReconnect: "Press any key to reconnect.",
   sessionStoppedTerminal: "The session stopped.",
   sessionErrorTerminal: "The session exited with an error.",
   sessionAccessEnded: "Your access to this session ended.",
-  detached: "Detached. The session keeps running in HQ.",
+  detached: copy`Detached. The session keeps running in HQ.`,
   nowViewOnly: "You can watch this session but not type in it.",
-  terminalRefused: (status) => status === 403 ? "You cannot open this session from this computer." : status === 404 ? "HQ for VS Code is not available on this HQ." : status === 426 ? "This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view." : status === 0 ? "HQ could not be reached." : `The session could not be opened (HTTP ${status}).`,
-  localEchoUnavailable: "Local echo is not available on this HQ yet.",
-  localEchoOrgOff: (org) => `Instant local echo is off for ${org}. An owner or admin can turn it on in HQ, under Settings, Security, Instant local echo.`,
-  localEchoTypeaheadConflict: "HQ local echo is off in this terminal because VS Code's own local echo is on (terminal.integrated.localEchoEnabled).",
+  terminalRefused: (status) => status === 403 ? "You cannot open this session from this computer." : status === 404 ? copy`HQ for VS Code is not available on this HQ.` : status === 426 ? copy`This version of AI Workforce One HQ is no longer supported. Update it from the Extensions view.` : status === 0 ? copy`HQ could not be reached.` : `The session could not be opened (HTTP ${status}).`,
+  localEchoUnavailable: copy`Local echo is not available on this HQ yet.`,
+  localEchoOrgOff: (org) => copy`Instant local echo is off for ${org}. An owner or admin can turn it on in HQ, under Settings, Security, Instant local echo.`,
+  localEchoTypeaheadConflict: copy`HQ local echo is off in this terminal because VS Code's own local echo is on (terminal.integrated.localEchoEnabled).`,
   pickSession: "Choose a session to open",
   pickTeam: "Choose a team",
   newSessionFailed: (detail) => `Could not start a session: ${detail}`,
-  sessionLimit: "This team is at its session limit. Stop a session in HQ, then try again.",
-  planReadOnly: "Your plan is read-only. Reactivate billing in HQ to save files or start sessions.",
+  sessionLimit: copy`This team is at its session limit. Stop a session in HQ, then try again.`,
+  planReadOnly: copy`Your plan is read-only. Reactivate billing in HQ to save files or start sessions.`,
   viewOnlyTeam: "You can view this team but not start sessions on it.",
   // ── ports ────────────────────────────────────────────────────────────────────────────────────
-  forwardPrompt: "Team machine port to forward (1024-65535)",
+  forwardPrompt: "AI Team Cloud Computer port to forward (1024-65535)",
   forwardLocalPrompt: "Port on this computer (leave empty to use the same)",
   forwardBadPort: "Enter a port number from 1024 to 65535.",
   forwardBadLocal: "Enter a port number from 1 to 65535.",
   forwarding: (local, team, remote) => `Forwarding localhost:${local} to ${team} :${remote}`,
   forwardDetected: (port) => `${port}  detected \xB7 Forward?`,
   forwardPaused: "paused \xB7 click to resume",
-  forwardRefusedPort: (port) => `Port ${port} cannot be forwarded: the team machine uses it itself.`,
+  forwardRefusedPort: (port) => `Port ${port} cannot be forwarded: the AI Team Cloud Computer uses it itself.`,
   // kr-api's `restart_required`: Developer access is on now (the org gate passed), but this boot
   // started without it, so its relay does not serve `forward` until the next start.
-  forwardRestart: (team) => `${team} started before Developer access was turned on. Restart it once (Restart machine in HQ team settings) and ports will forward.`,
+  forwardRestart: (team) => copy`${team} started before Developer access was turned on. Restart it once (Restart Cloud Computer in HQ team settings) and ports will forward.`,
   forwardNotAllowed: (team) => `You cannot forward ports from ${team}.`,
   forwardTeamOff: (team) => `${team} is off. Wake it, then forward the port again.`,
-  forwardTeamStopped: (team) => `${team} is stopped. Start it from the team page in HQ, then forward the port again.`,
+  forwardTeamStopped: (team) => copy`${team} is stopped. Start it from the team page in HQ, then forward the port again.`,
   forwardEnded: (port) => `The forward of port ${port} ended.`,
   forwardInUse: (port) => `Port ${port} is already in use on this computer.`,
   forwardFailed: (detail) => `Could not forward the port: ${detail}`,
@@ -8938,8 +9078,8 @@ var COPY = {
   fsOffOpen: (team) => `${team} is off. Wake it to open this file.`,
   fsOffSave: (team) => `${team} is off. Wake it to save this file.`,
   fsViewOnly: "You can view this team but not change its files.",
-  fsPlanReadOnly: "Your plan is read-only. Reactivate billing in HQ to save files or start sessions.",
-  fsMasked: "This file contains masked secret values. Edit it from an HQ terminal.",
+  fsPlanReadOnly: copy`Your plan is read-only. Reactivate billing in HQ to save files or start sessions.`,
+  fsMasked: copy`This file contains masked secret values. Edit it from an HQ terminal.`,
   // 0.2.2 review: unsaved edits in a file that just became masked cannot be saved through HQ.
   fsMaskedWhileEditing: (file) => `${file} now holds the value of a secret, so it is shown masked and can't be saved here. Copy your changes out (for example into a new file) before you close it.`,
   // 0.2.2: the one-time notice for a masked file, naming the secret(s) when HQ said which.
@@ -8956,20 +9096,16 @@ var COPY = {
     return `${file} contains the values of secrets (${names.join(", ")}), so it's shown masked and read-only. Edit it in the terminal, or read the secrets from ${said} instead of keeping their values in the file.`;
   },
   // The web's `TEMPLATE_READ_ONLY_SENTENCE` (client/src/lib/template-protected-path.ts).
-  fsProtected: "This file came from an AI Workforce One HQ template, so it is read-only.",
-  fsTooLarge: "This file is too large to open here. Open it in HQ or from a terminal.",
-  fsChangedOnMachine: "This file changed on the team machine. Save again to compare.",
-  fsControlName: "This file's name has control characters HQ can't open. Rename it on the machine.",
-  // The web's WORKSPACE_UPDATING sentence (client/src/lib/team-updating.ts), for files.
-  fsUpdating: (team, etaSeconds) => {
-    if (etaSeconds === null) {
-      return `${team}'s machine is updating. Its files are back in a few minutes.`;
-    }
-    const min = Math.max(1, Math.ceil(etaSeconds / 60));
-    return `${team}'s machine is updating. Its files are back in about ${min} ${min === 1 ? "minute" : "minutes"}.`;
-  },
+  fsProtected: copy`This file came from an AI Workforce One HQ template, so it is read-only.`,
+  fsTooLarge: copy`This file is too large to open here. Open it in HQ or from a terminal.`,
+  fsChangedOnMachine: "This file changed on the AI Team Cloud Computer. Save again to compare.",
+  fsControlName: copy`This file's name has control characters HQ can't open. Rename it on the Cloud Computer.`,
+  // The web's WORKSPACE_UPDATING sentence (client/src/lib/team-updating.ts), for files. Jean
+  // 2026-10-10: one static estimate (CLOUD_COMPUTER_CHANGE_ESTIMATE), never the server's ETA, which
+  // counted down past what a real change took.
+  fsUpdating: (team) => `${team}'s Cloud Computer is updating. Its files are back once it is done. This usually takes about 5 to 6 minutes.`,
   openTeamSettings: "Open Team Settings",
-  fsEventsRefused: (org) => `Live file updates for ${org} are paused: HQ is holding too many connections for this sign-in (other VS Code windows). Files still refresh every minute. Close other HQ windows to restore live updates.`,
+  fsEventsRefused: (org) => copy`Live file updates for ${org} are paused: HQ is holding too many connections for this sign-in (other VS Code windows). Files still refresh every minute. Close other HQ windows to restore live updates.`,
   // ── search ───────────────────────────────────────────────────────────────────────────────────
   searchTitle: "Search in Team Files",
   searchPrompt: "Search the team files (text)",
@@ -8982,16 +9118,16 @@ var COPY = {
   searchNone: "No results.",
   searchResults: (n, truncated) => `${n} ${n === 1 ? "result" : "results"}${truncated ? " (more were found; narrow the search)" : ""}`,
   searchFailed: (detail) => `The search did not run: ${detail}`,
-  searchHint: "For a fast search on the team machine, use HQ: Search in Team Files.",
+  searchHint: copy`For a fast search on the AI Team Cloud Computer, use HQ: Search in Team Files.`,
   // ── account ──────────────────────────────────────────────────────────────────────────────────
-  accountHost: (host) => `HQ: ${host}`,
-  manageDevices: "Manage devices in HQ",
+  accountHost: (host) => copy`HQ: ${host}`,
+  manageDevices: copy`Manage devices in HQ`,
   signOut: "Sign out",
   // ── status bar ───────────────────────────────────────────────────────────────────────────────
-  statusSignedOut: "HQ: signed out",
-  statusSignedIn: (email) => `HQ: ${email}`,
-  statusTeam: (email, team, state) => `HQ: ${email} \xB7 ${team} ${state}`,
-  statusTooltip: "AI Workforce One HQ"
+  statusSignedOut: copy`HQ: signed out`,
+  statusSignedIn: (email) => copy`HQ: ${email}`,
+  statusTeam: (email, team, state) => copy`HQ: ${email} · ${team} ${state}`,
+  statusTooltip: copy`AI Workforce One HQ`
 };
 
 // src/hq/account-ref.ts
@@ -8999,12 +9135,22 @@ var import_node_crypto = require("node:crypto");
 
 // ../hq-client/src/safe-text.ts
 var CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu;
+var BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 function oneLine(value) {
-  return value.replace(CONTROLS, " ");
+  return value.replace(CONTROLS, " ").replace(BIDI_CONTROLS, "");
 }
-var ALIAS_RE = /^hq-[0-9a-f]{8,12}$/;
+function aliasPattern(prefix) {
+  return new RegExp(`^${prefix.replace(/[^a-z]/g, "")}-[0-9a-f]{8,12}$`);
+}
+var ALIAS_RE = aliasPattern(ACTIVE_DEV_BRAND.teamAliasPrefix);
 var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var ORG_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+// src/brand-keys.ts
+var KEY_NS = ACTIVE_DEV_BRAND.vscode.idPrefix;
+var HOME_DIR_NAME = ACTIVE_DEV_BRAND.cli.homeDirName;
+var TEAM_ALIAS_PREFIX = ACTIVE_DEV_BRAND.teamAliasPrefix;
+var TEAM_ALIAS_SOURCE = `${TEAM_ALIAS_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{8}`;
 
 // src/hq/account-ref.ts
 var PROFILE_KEY_RE = /^p[0-9a-f]{8}$/;
@@ -9020,11 +9166,11 @@ function accountTag(host, userId) {
   return `a${(0, import_node_crypto.createHash)("sha256").update(`${host}|${userId}`).digest("hex").slice(0, 12)}`;
 }
 function slotPrefix(ref) {
-  if (ref.slot === "legacy") return `hq:${ref.host}:`;
+  if (ref.slot === "legacy") return `${KEY_NS}:${ref.host}:`;
   if (!USER_ID_RE.test(ref.userId) || !PROFILE_KEY_RE.test(ref.profileKey)) {
     throw new Error("bad slot");
   }
-  return `hq:${ref.host}:u:${ref.profileKey}:${ref.userId}:`;
+  return `${KEY_NS}:${ref.host}:u:${ref.profileKey}:${ref.userId}:`;
 }
 function legacyLockName(purpose, appName, host) {
   return `${purpose}-${(0, import_node_crypto.createHash)("sha256").update(`${appName}|${host}`).digest("hex").slice(0, 12)}.lock`;
@@ -9095,27 +9241,6 @@ var import_node_crypto6 = require("node:crypto");
 var import_node_crypto4 = require("node:crypto");
 var import_node_fs2 = require("node:fs");
 var import_node_path = __toESM(require("node:path"), 1);
-
-// ../shared/src/remote.types.ts
-var REMOTE_ACCESS_TTL_SEC = 15 * 60;
-var REMOTE_REFRESH_IDLE_TTL_SEC = 30 * 24 * 60 * 60;
-var REMOTE_REFRESH_ABSOLUTE_TTL_SEC = 90 * 24 * 60 * 60;
-var REMOTE_DEVICE_CODE_TTL_SEC = 600;
-var HQ_HEADER_ORG = "x-hq-org";
-var HQ_HEADER_NONCE = "x-hq-nonce";
-var HQ_HEADER_DEVICE_SIG = "x-hq-device-sig";
-var HQ_HEADER_CONNECT_CODE = "x-hq-connect-code";
-var HQ_HEADER_CLIENT = "x-hq-client";
-var HQ_HEADER_WANT_NONCE = "x-hq-want-nonce";
-function deviceSignaturePayload(nonce, method, path5, bodySha256Hex) {
-  return `${nonce}
-${method.toUpperCase()}
-${path5}
-${bodySha256Hex.toLowerCase()}`;
-}
-function workspaceAlias(workspaceId, hexChars = 8) {
-  return `hq-${workspaceId.replace(/-/g, "").slice(0, hexChars).toLowerCase()}`;
-}
 
 // ../hq-client/src/device-key.ts
 var import_node_crypto2 = require("node:crypto");
@@ -9302,6 +9427,104 @@ async function acquireFileLock(file, opts = {}) {
   }
 }
 
+// ../hq-client/src/session-actions.ts
+var SESSION_NOT_OPERATOR_MESSAGE = "Only the session owner or a team owner can do this.";
+var DEVICE_SIGNATURE_MISSING_CODE = "DEVICE_SIGNATURE_MISSING";
+function deviceSignatureMissingMessage() {
+  return copy`HQ refused this request because it was not signed by this computer. That is a bug in this app, not an expired login, so signing in again will not help. Update the app and try again.`;
+}
+function throttledMessage(details) {
+  const raw = details?.retryAfterSeconds;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return "Too many requests. Wait a moment and try again.";
+  }
+  const seconds = Math.ceil(raw);
+  return `Too many requests. Try again in ${seconds} ${seconds === 1 ? "second" : "seconds"}.`;
+}
+function teamApiPath(team) {
+  return `/api/remote/orgs/${encodeURIComponent(team.org.slug)}/workspaces/${team.workspace.id}`;
+}
+function sessionActionPath(team, sessionId, action) {
+  return `${teamApiPath(team)}/sessions/${encodeURIComponent(sessionId)}/${action}`;
+}
+function isApiError(err) {
+  return err instanceof Error && typeof err.status === "number" && "code" in err && "details" in err;
+}
+function describeSessionRefusal(err, action, names) {
+  if (!isApiError(err)) {
+    return { kind: "other", message: err instanceof Error ? err.message : String(err) };
+  }
+  const { status, code } = err;
+  if (status === 403 && (code === "SESSION_NOT_OPERATOR" || code === "FORBIDDEN")) {
+    return { kind: "not_operator", message: SESSION_NOT_OPERATOR_MESSAGE };
+  }
+  if (status === 403 && code === "SESSION_NOT_OWNER") {
+    return { kind: "not_operator", message: SESSION_NOT_OPERATOR_MESSAGE };
+  }
+  if (status === 403 && code === "PERMISSION_DENIED") {
+    return {
+      kind: "no_access",
+      message: copy`You do not have remote access to team "${names.team}".`
+    };
+  }
+  if (status === 401 && code === DEVICE_SIGNATURE_MISSING_CODE) {
+    return { kind: "client_bug", message: deviceSignatureMissingMessage() };
+  }
+  if (status === 429) {
+    return { kind: "throttled", message: throttledMessage(err.details) };
+  }
+  if (status === 401) {
+    return {
+      kind: "signed_out",
+      message: copy`Your HQ login on this computer expired or was revoked. Sign in again.`
+    };
+  }
+  if (status === 404) {
+    if (/session not found/i.test(err.message)) {
+      return {
+        kind: "not_found",
+        message: `Session "${names.session}" was not found. It may have been deleted.`
+      };
+    }
+    return {
+      kind: "unsupported",
+      message: copy`This HQ cannot start or stop sessions from here yet. Use HQ in your browser.`
+    };
+  }
+  if (status === 402) {
+    return {
+      kind: "plan_inactive",
+      message: copy`This organization's plan is not active, so its sessions cannot be started or stopped. An owner can fix billing in HQ.`
+    };
+  }
+  if (status === 409 && code === "ALREADY_RUNNING" && action !== "stop") {
+    return { kind: "already", message: `Session "${names.session}" is already running.` };
+  }
+  if (status === 409 && code === "NOT_RUNNING" && action === "stop") {
+    return { kind: "already", message: `Session "${names.session}" is already stopped.` };
+  }
+  if (status === 409 && code === "LIMIT_EXCEEDED") {
+    const reason2 = typeof err.details?.reason === "string" ? ` (${err.details.reason})` : "";
+    return {
+      kind: "limit",
+      message: copy`Team "${names.team}" is running as many sessions as it can${reason2}. Stop one of its sessions first, or give the team more room in HQ.`
+    };
+  }
+  if (status === 409 && code === "WORKSPACE_PAUSED") {
+    return {
+      kind: "paused",
+      message: copy`Team "${names.team}" is paused. An owner can resume it in HQ.`
+    };
+  }
+  if (status === 409 && code === "WORKSPACE_UPDATING") {
+    return {
+      kind: "updating",
+      message: `Team "${names.team}" is updating its AI Team Cloud Computer. Try again in a few minutes.`
+    };
+  }
+  return { kind: "other", message: err.message };
+}
+
 // ../hq-client/src/api.ts
 var HqApiError = class extends Error {
   constructor(status, code, message, details) {
@@ -9309,14 +9532,14 @@ var HqApiError = class extends Error {
     this.status = status;
     this.code = code;
     this.details = details;
-    this.name = "HqApiError";
+    this.name = "ApiError";
   }
   status;
   code;
   details;
 };
 var NotLoggedInError = class extends Error {
-  constructor(message = "hq: you are not logged in on this computer. Run hq login.") {
+  constructor(message = copy`hq: you are not logged in on this computer. Run hq login.`) {
     super(message);
     this.name = "NotLoggedInError";
   }
@@ -9328,7 +9551,7 @@ var RefreshBusyError = class extends Error {
   }
 };
 var RefreshNeedsRenewingError = class extends Error {
-  constructor(message = "hq: your HQ login on this computer needs renewing. Run hq login.") {
+  constructor(message = copy`hq: your HQ login on this computer needs renewing. Run hq login.`) {
     super(message);
     this.name = "RefreshNeedsRenewingError";
   }
@@ -9616,6 +9839,34 @@ var HqClient = class {
     }
     return res;
   }
+  // ── sessions (cli-session-lifecycle) ─────────────────────────────────────────────────────────
+  // The bearer twins of the web's session lifecycle routes (`session-actions.ts`). Reads are
+  // unsigned; every state change is device-signed. Refusals throw `HqApiError` (status + code);
+  // `describeSessionRefusal` turns one into the sentence both clients print.
+  /** The sessions of one team this member may see, with `canOperate` and `midTurn`. */
+  async listSessions(team) {
+    return (await this.request("GET", `${teamApiPath(team)}/sessions`, {
+      org: team.org.slug
+    })).body;
+  }
+  /** Start a stopped session (202 `starting`); a sleeping team wakes for it, as on the web. */
+  async startSession(team, sessionId, size) {
+    return this.sessionAction(team, sessionId, "start", size);
+  }
+  async stopSession(team, sessionId) {
+    return this.sessionAction(team, sessionId, "stop");
+  }
+  /** Restart: resumes the conversation unless `fresh` (a blank chat), as on the web. */
+  async restartSession(team, sessionId, opts = {}) {
+    return this.sessionAction(team, sessionId, "restart", opts.fresh ? { fresh: true } : void 0);
+  }
+  async sessionAction(team, sessionId, action, body) {
+    return (await this.request(
+      "POST",
+      sessionActionPath(team, sessionId, action),
+      { ...body !== void 0 ? { body } : {}, org: team.org.slug, signed: true }
+    )).body;
+  }
   /**
    * Is this login really gone (security review B1)? Only an UNSIGNED `GET /api/remote/orgs` that
    * answers 401 (or a refresh HQ refuses with 401, or no stored login) says so: a signed call's 401
@@ -9635,7 +9886,7 @@ var HqClient = class {
       body = await res.json();
     } catch {
     }
-    const message = typeof body.error === "string" ? body.error : `HQ answered ${res.status}`;
+    const message = typeof body.error === "string" ? body.error : copy`HQ answered ${res.status}`;
     return new HqApiError(
       res.status,
       typeof body.code === "string" ? body.code : void 0,
@@ -9697,31 +9948,31 @@ var Emitter = class {
 // src/hq/session-store.ts
 var AccountGoneError = class extends Error {
   constructor() {
-    super("This HQ account was signed out in another window.");
+    super(copy`This HQ account was signed out in another window.`);
     this.name = "AccountGoneError";
   }
 };
 var SlotRenewedError = class extends Error {
   constructor() {
-    super("This HQ sign-in was renewed in another window.");
+    super(copy`This HQ sign-in was renewed in another window.`);
     this.name = "SlotRenewedError";
   }
 };
 var SecretsBusyError = class extends Error {
   constructor() {
-    super("Could not read the HQ sign-in from the keychain.");
+    super(copy`Could not read the HQ sign-in from the keychain.`);
     this.name = "SecretsBusyError";
   }
 };
 var NeedsSignInError = class extends Error {
   constructor() {
-    super("This HQ sign-in needs renewing.");
+    super(copy`This HQ sign-in needs renewing.`);
     this.name = "NeedsSignInError";
   }
 };
 var TOKEN_CACHE_MS = 6e4;
 var TOMBSTONES_MAX = 20;
-var PROFILE_KEY = "hq:profileKey";
+var PROFILE_KEY = `${KEY_NS}:profileKey`;
 function tokensKey(ref) {
   return `${slotPrefix(ref)}tokens`;
 }
@@ -9738,13 +9989,13 @@ function portsKey(ref, list) {
   return `${slotPrefix(ref)}ports:${list}`;
 }
 function legacyUserKey(host) {
-  return `hq:${host}:legacyUser`;
+  return `${KEY_NS}:${host}:legacyUser`;
 }
 function tombstoneKey(host, tag) {
-  return `hq:${host}:t:${tag}`;
+  return `${KEY_NS}:${host}:t:${tag}`;
 }
 function lastActiveKey(host) {
-  return `hq:${host}:lastActive`;
+  return `${KEY_NS}:${host}:lastActive`;
 }
 function deviceFingerprint(openssh) {
   try {
@@ -9833,7 +10084,7 @@ var SessionStore = class {
    */
   accounts(host, profileKey) {
     const out = /* @__PURE__ */ new Map();
-    const userPrefix = profileKey ? `hq:${host}:u:${profileKey}:` : null;
+    const userPrefix = profileKey ? `${KEY_NS}:${host}:u:${profileKey}:` : null;
     for (const key of this.memento.keys()) {
       if (!userPrefix || !key.startsWith(userPrefix) || !key.endsWith(":account")) continue;
       const userId = key.slice(userPrefix.length, -":account".length);
@@ -9842,7 +10093,7 @@ var SessionStore = class {
       if (!validAccount(account) || account.user.id !== userId) continue;
       out.set(userId, { ref: { host, userId, slot: "user", profileKey }, account });
     }
-    const legacy = this.memento.get(`hq:${host}:account`);
+    const legacy = this.memento.get(`${KEY_NS}:${host}:account`);
     if (validAccount(legacy) && USER_ID_RE.test(legacy.user.id) && !out.has(legacy.user.id)) {
       out.set(legacy.user.id, {
         ref: { host, userId: legacy.user.id, slot: "legacy", profileKey: profileKey ?? "" },
@@ -9956,7 +10207,7 @@ var SessionStore = class {
   async recordLegacyUser(host) {
     const have = this.legacyUser(host);
     if (have) return have;
-    const record = this.memento.get(`hq:${host}:account`);
+    const record = this.memento.get(`${KEY_NS}:${host}:account`);
     if (!validAccount(record)) return null;
     const ref = { host, userId: record.user.id, slot: "legacy", profileKey: "" };
     const device = await this.loadDeviceKey(ref);
@@ -9982,7 +10233,7 @@ var SessionStore = class {
     if (!fp) return "mismatch";
     if (!user) return "ok";
     if (fp === user.devicePubFp) return "ok";
-    const record = this.memento.get(`hq:${host}:account`);
+    const record = this.memento.get(`${KEY_NS}:${host}:account`);
     if (validAccount(record) && record.user.id === user.userId && record.grantId !== user.grantId) {
       await this.memento.update(legacyUserKey(host), {
         ...user,
@@ -10059,7 +10310,7 @@ var SessionStore = class {
       email,
       at: new Date(this.now()).toISOString()
     });
-    const prefix = `hq:${ref.host}:t:`;
+    const prefix = `${KEY_NS}:${ref.host}:t:`;
     const all = this.memento.keys().filter((k) => k.startsWith(prefix)).map((k) => ({ k, at: this.memento.get(k)?.at ?? "" })).sort((a, b) => a.at < b.at ? 1 : a.at > b.at ? -1 : 0);
     for (const old of all.slice(TOMBSTONES_MAX)) await this.memento.update(old.k, void 0);
   }
@@ -10077,7 +10328,7 @@ var SessionStore = class {
    * finishes the wipe (`HqAccounts`).
    */
   async markSigningOut(host, tag, grantId) {
-    await this.memento.update(`hq:${host}:signingOut:${tag}`, {
+    await this.memento.update(`${KEY_NS}:${host}:signingOut:${tag}`, {
       at: new Date(this.now()).toISOString(),
       grantId
     });
@@ -10090,7 +10341,7 @@ var SessionStore = class {
   staleSigningOutMarkers(host, minAgeMs) {
     return this.signingOutTags(host).flatMap((tag) => {
       const m = this.memento.get(
-        `hq:${host}:signingOut:${tag}`
+        `${KEY_NS}:${host}:signingOut:${tag}`
       );
       const at = typeof m?.at === "string" ? Date.parse(m.at) : NaN;
       if (Number.isFinite(at) && this.now() - at < minAgeMs) return [];
@@ -10098,11 +10349,11 @@ var SessionStore = class {
     });
   }
   async clearSigningOut(host, tag) {
-    await this.memento.update(`hq:${host}:signingOut:${tag}`, void 0);
+    await this.memento.update(`${KEY_NS}:${host}:signingOut:${tag}`, void 0);
   }
   /** Tags with a sign-out marker on `host`. */
   signingOutTags(host) {
-    const prefix = `hq:${host}:signingOut:`;
+    const prefix = `${KEY_NS}:${host}:signingOut:`;
     return this.memento.keys().filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length));
   }
   /**
@@ -10319,7 +10570,7 @@ var ConnectRefusedError = class extends Error {
 var WAKE_TIMEOUT_MS = 17e4;
 var WAKE_POLL_MS = 2e3;
 function wakeTimeoutMessage(team) {
-  return `hq: team "${team.workspace.name}" did not wake within 3 minutes. Check it in HQ and try again.`;
+  return copy`hq: team "${team.workspace.name}" did not wake within 3 minutes. Check it in HQ and try again.`;
 }
 function connectionsPath(team, id) {
   const base = `/api/remote/orgs/${encodeURIComponent(team.org.slug)}/workspaces/${team.workspace.id}/connections`;
@@ -10329,31 +10580,36 @@ function refusalMessage(team, err) {
   const name = team.workspace.name;
   if (err instanceof HqApiError) {
     if (err.code === "RUNNER_UNAVAILABLE" && err.details?.hint === "reconnect") {
-      return `hq: team "${name}" is asleep and this looks like an editor reconnect, so it was not woken. Run \`hq up ${team.alias}\` or open HQ to wake it.`;
+      return copy`hq: team "${name}" is asleep and this looks like an editor reconnect, so it was not woken. Run \`hq up ${team.alias}\` or open HQ to wake it.`;
     }
     if (err.code === "RUNNER_UNAVAILABLE") {
-      return `hq: team "${name}" has no running machine. Open the team in HQ and start a session to start it.`;
+      return copy`hq: team "${name}" has no running Cloud Computer. Open the team in HQ and start a session to start it.`;
     }
     if (err.code === "REMOTE_UNSUPPORTED_RUNNER" && err.details?.reason === "restart_required") {
-      return `hq: team "${name}" must restart its machine before remote access works (remote access was turned on while it was running). An owner or admin can stop and start it from the team page in HQ.`;
+      return copy`hq: team "${name}" cannot forward ports yet: its AI Team Cloud Computer started before Developer access was turned on. Restart the AI Team Cloud Computer, then try again. An owner or admin presses Restart Cloud Computer in the team's Settings in HQ.`;
     }
     if (err.code === "REMOTE_UNSUPPORTED_RUNNER") {
-      return `hq: team "${name}" runs an older machine image without remote access. An owner or admin can update it: HQ \u2192 ${name} \u2192 Settings \u2192 Update machine.`;
+      return copy`hq: team "${name}" runs an older Cloud Computer image without remote access. An owner or admin can update it: HQ → ${name} → Settings → Update Cloud Computer.`;
     }
     if (err.code === "THROTTLED") {
-      return `hq: too many open connections to team "${name}". Close one and try again.`;
+      return copy`hq: too many open connections to team "${name}". Close one and try again.`;
     }
-    if (err.code === "UPGRADE_REQUIRED") return `hq: ${err.message}`;
+    if (err.code === "UPGRADE_REQUIRED") return copy`hq: ${err.message}`;
+    if (err.code === DEVICE_SIGNATURE_MISSING_CODE)
+      return copy`hq: ${deviceSignatureMissingMessage()}`;
     if (err.code === "REMOTE_TOKEN_INVALID")
-      return "hq: your HQ login on this computer expired or was revoked. Run hq login.";
+      return copy`hq: your HQ login on this computer expired or was revoked. Run hq login.`;
     if (err.code === "FEATURE_NOT_AVAILABLE")
-      return `hq: remote access is not available for ${team.org.name} yet.`;
-    if (err.status === 403) return `hq: you do not have remote access to team "${name}".`;
+      return copy`hq: remote access is not available for ${team.org.name} yet.`;
+    if (err.status === 403) return copy`hq: you do not have remote access to team "${name}".`;
     if (err.status === 404)
-      return `hq: team "${name}" was not found. Run hq status to refresh your teams.`;
-    return `hq: ${err.message}`;
+      return copy`hq: team "${name}" was not found. Run hq status to refresh your teams.`;
+    return copy`hq: ${err.message}`;
   }
-  return `hq: ${err.message}`;
+  return copy`hq: ${err.message}`;
+}
+function wakingTeamLine(team) {
+  return copy`hq: waking team "${team.workspace.name}", this usually takes ${wakeRangeText(team.workspace.wakeEstimate)}...`;
 }
 async function openConnection(client, team, req, deps) {
   let first;
@@ -10376,7 +10632,7 @@ async function openConnection(client, team, req, deps) {
   if (first.body.state === "ready") return first.body;
   const id = first.body.id;
   deps.say(
-    first.body.code === "SESSION_RESUME_COLD_RESTART" ? `hq: starting team "${team.workspace.name}" fresh (about 60 s)...` : `hq: waking team "${team.workspace.name}" (about 15 s)...`
+    first.body.code === "SESSION_RESUME_COLD_RESTART" ? copy`hq: starting team "${team.workspace.name}" fresh (about 60 s)...` : wakingTeamLine(team)
   );
   const deadline = deps.now() + WAKE_TIMEOUT_MS;
   while (deps.now() < deadline) {
@@ -10408,9 +10664,9 @@ async function closeConnection(client, team, id) {
 }
 
 // src/hq/wake.ts
-var WAKE_POLL_FIRST_MS = 2e3;
-var WAKE_POLL_MS2 = 4e3;
-var WAKE_STILL_MS = 2e4;
+var WAKE_POLL_FIRST_MS = 1e3;
+var WAKE_POLL_MS2 = 1e3;
+var WAKE_STILL_MS = 3e4;
 function wakeNotice(outcome, name, team) {
   switch (outcome.kind) {
     case "running":
@@ -10421,7 +10677,7 @@ function wakeNotice(outcome, name, team) {
       return {
         level: "warning",
         message: COPY.wakeStopped(name),
-        actions: team.workspace.rights.forward ? ["newSession", "openInHq"] : ["openInHq"]
+        actions: team.workspace.rights.forward ? ["newSession", "openInApp"] : ["openInApp"]
       };
     case "throttled":
       return { level: "warning", message: COPY.wakeThrottled, actions: [] };
@@ -10451,14 +10707,16 @@ async function wakeTeam(client, team, deps) {
   }
   if (answer.state === "running") return { kind: "running" };
   const name = team.workspace.name;
-  deps.report(COPY.waking(name));
+  const estimate = team.workspace.wakeEstimate;
+  deps.report(COPY.waking(name, estimate));
+  const stillMs = estimate ? wakeStillWorkingAfterMs(estimate) : WAKE_STILL_MS;
   const started = deps.now();
   let saidStill = false;
   let first = true;
   while (deps.now() - started < WAKE_TIMEOUT_MS) {
     await deps.sleep(first ? WAKE_POLL_FIRST_MS : WAKE_POLL_MS2);
     first = false;
-    if (!saidStill && deps.now() - started >= WAKE_STILL_MS) {
+    if (!saidStill && deps.now() - started >= stillMs) {
       saidStill = true;
       deps.report(COPY.stillOnIt);
     }
@@ -10496,7 +10754,7 @@ async function toError(res) {
     body = await res.json();
   } catch {
   }
-  const message = typeof body.error === "string" ? body.error : typeof body.message === "string" ? body.message : `HQ answered ${res.status}`;
+  const message = typeof body.error === "string" ? body.error : typeof body.message === "string" ? body.message : copy`HQ answered ${res.status}`;
   return new FsApiError(
     res.status,
     typeof body.code === "string" ? body.code : void 0,
@@ -11006,8 +11264,8 @@ var HqFsCore = class {
     return `${team.workspace.id}:${path5}`;
   }
   /** The team an `hq://<org>/<alias>` names, among this sign-in's teams. */
-  team(orgSlug, alias) {
-    const t = this.deps.teams().find((x) => x.org.slug === orgSlug && x.alias === alias);
+  team(orgSlug, alias2) {
+    const t = this.deps.teams().find((x) => x.org.slug === orgSlug && x.alias === alias2);
     if (!t) throw new FsCoreError("unavailable", COPY.fsTeamGone);
     return t;
   }
@@ -11186,11 +11444,7 @@ var HqFsCore = class {
           return new FsCoreError("unavailable", COPY.updateNeededLong(name));
         }
         if (err.code === "WORKSPACE_UPDATING") {
-          const issue = this.issueOf(err);
-          return new FsCoreError(
-            "unavailable",
-            COPY.fsUpdating(name, issue?.kind === "updating" ? issue.etaSeconds : null)
-          );
+          return new FsCoreError("unavailable", COPY.fsUpdating(name));
         }
         if (err.code === "CONFLICT") return new FsCoreError("exists", err.message);
         if (err.code === "NOT_A_DIRECTORY") return new FsCoreError("not-a-dir", err.message);
@@ -11811,13 +12065,13 @@ function sameBytes(a, b) {
 }
 
 // src/fs/hq-fs-provider.ts
-var HQ_SCHEME = "hq";
+var HQ_SCHEME = ACTIVE_DEV_BRAND.vscode.fsScheme;
 var ACCOUNTS_READY_MS = 5e3;
 var MAX_REOPENS = 2;
 function relPathOf(uri) {
   const parts = uri.path.split("/").filter((p) => p.length > 0);
-  const alias = parts.shift() ?? "";
-  return { alias, path: parts.join("/") };
+  const alias2 = parts.shift() ?? "";
+  return { alias: alias2, path: parts.join("/") };
 }
 function teamPathOf(team, path5) {
   return path5 === "" ? `/${team.alias}` : `/${team.alias}/${path5}`;
@@ -11832,9 +12086,9 @@ function teamFileUri(ref, team, path5) {
     path: teamPathOf(team, path5)
   });
 }
-function untaggedFolderOpen(orgSlug, alias) {
+function untaggedFolderOpen(orgSlug, alias2) {
   return (vscode.workspace.workspaceFolders ?? []).some(
-    (f) => f.uri.scheme === HQ_SCHEME && f.uri.authority === orgSlug && (alias === void 0 || relPathOf(f.uri).alias === alias)
+    (f) => f.uri.scheme === HQ_SCHEME && f.uri.authority === orgSlug && (alias2 === void 0 || relPathOf(f.uri).alias === alias2)
   );
 }
 function uriFor(b, team, path5, isLegacyUser) {
@@ -12076,8 +12330,8 @@ var HqFileSystemProvider = class {
         r.email ? COPY.fsAccountGone(r.email) : COPY.fsAccountUnknown
       );
     }
-    const { alias, path: path5 } = relPathOf(uri);
-    return { bundle: r.bundle, team: r.bundle.core.team(r.orgSlug, alias), path: path5 };
+    const { alias: alias2, path: path5 } = relPathOf(uri);
+    return { bundle: r.bundle, team: r.bundle.core.team(r.orgSlug, alias2), path: path5 };
   }
   /** Arm `w` on its account's core when that account and team resolve; quietly wait otherwise. */
   arm(w) {
@@ -12295,7 +12549,9 @@ async function switchAccount(c, ref) {
 }
 async function primaryAction(c) {
   if (c.accounts.list().length <= 1) {
-    await vscode2.commands.executeCommand("workbench.view.extension.hq");
+    await vscode2.commands.executeCommand(
+      `workbench.view.extension.${ACTIVE_DEV_BRAND.vscode.idPrefix}`
+    );
     return;
   }
   await switchAccount(c);
@@ -12375,9 +12631,9 @@ function openFolderOf(b, team, isLegacyUser) {
 
 // src/auth/auth-provider.ts
 var vscode3 = __toESM(require("vscode"), 1);
-var AUTH_PROVIDER_ID = "aiworkforceone-hq";
-var AUTH_PROVIDER_LABEL = "AI Workforce One HQ";
-var SESSION_SENTINEL = "hq-session";
+var AUTH_PROVIDER_ID = ACTIVE_DEV_BRAND.vscode.authProviderId;
+var AUTH_PROVIDER_LABEL = ACTIVE_DEV_BRAND.displayName;
+var SESSION_SENTINEL = `${KEY_NS}-session`;
 var sessionOf = (b) => ({
   id: b.tag,
   accessToken: SESSION_SENTINEL,
@@ -12448,7 +12704,7 @@ var HqAuthenticationProvider = class {
 var import_node_fs3 = require("node:fs");
 var import_node_os = __toESM(require("node:os"), 1);
 var import_node_path2 = __toESM(require("node:path"), 1);
-var KEYRING_WARNED_KEY = "hq:keyringWarned";
+var KEYRING_WARNED_KEY = `${KEY_NS}:keyringWarned`;
 function keyringLikelyMissing(input) {
   if (input.platform !== "linux") return false;
   if (!input.env.DBUS_SESSION_BUS_ADDRESS?.trim()) return true;
@@ -12505,7 +12761,7 @@ var AccountNotices = class {
     if (this.open.has(tag) || this.dismissed.has(tag)) return;
     const text = notificationText(COPY.fsAccountGone(info.email));
     const label = notificationText(COPY.signInAsAction(info.email));
-    const title = `${text} [${label}](command:hq.signInAs?${uriArg([tag, info.userId])})`;
+    const title = copy`${text} [${label}](command:hq.signInAs?${uriArg([tag, info.userId])})`;
     let end = () => void 0;
     const ended = new Promise((r) => end = r);
     this.open.set(tag, end);
@@ -12554,7 +12810,7 @@ var TeamOffNotices = class {
     const key = `${tag}:${workspaceId}`;
     if (this.open.has(key) || this.dismissed.has(key)) return;
     const text = notificationText(action === "open" ? COPY.fsOffOpen(name) : COPY.fsOffSave(name));
-    const title = `${text} [${COPY.wakeTeam}](command:hq.wakeTeamOf?${uriArg2([tag, workspaceId])})`;
+    const title = copy`${text} [${COPY.wakeTeam}](command:hq.wakeTeamOf?${uriArg2([tag, workspaceId])})`;
     let end = () => void 0;
     const ended = new Promise((r) => end = r);
     this.open.set(key, end);
@@ -12659,12 +12915,13 @@ function sessionLabel(s) {
 }
 function sessionDescription(s) {
   const parts = [s.ownerIsMe === true ? COPY.you : cleanLabel(s.ownerName)];
+  if (s.starting === true) parts.push(COPY.stateStarting);
   if (!s.canType) parts.push(COPY.viewOnly);
   if (s.engine === "codex") parts.push(COPY.codex);
   return parts.filter((p) => p.length > 0).join(" \xB7 ");
 }
 function sessionContextValue(s) {
-  return `session:${s.canType ? "type" : "view"}`;
+  return `session:${s.canType ? "type" : "view"}:${s.status}:${s.canOperate === false ? "noop" : "op"}`;
 }
 function webUrl(host, target) {
   return target.sessionId ? `${host}/sessions/${encodeURIComponent(target.sessionId)}` : `${host}/workspaces/${encodeURIComponent(target.workspaceId)}`;
@@ -12707,7 +12964,7 @@ var HqTeamIssues = class {
       });
       return;
     }
-    void vscode6.window.showInformationMessage(COPY.fsUpdating(name, issue.etaSeconds));
+    void vscode6.window.showInformationMessage(COPY.fsUpdating(name));
   }
   openSettings(team) {
     const host = this.deps.host();
@@ -12726,7 +12983,7 @@ var HqTeamIssues = class {
       new vscode6.ThemeColor("list.warningForeground")
     ) : new vscode6.FileDecoration(
       "\u2026",
-      COPY.fsUpdating(name, issue.etaSeconds),
+      COPY.fsUpdating(name),
       new vscode6.ThemeColor("list.warningForeground")
     );
   }
@@ -12752,13 +13009,13 @@ var UnopenableNames = class {
   resolveCore;
   provideFileDecoration(uri) {
     if (uri.scheme !== HQ_SCHEME) return void 0;
-    const { alias, path: path5 } = relPathOf(uri);
+    const { alias: alias2, path: path5 } = relPathOf(uri);
     if (path5 === "") return void 0;
     const owner = this.resolveCore(uri.authority);
     if (!owner) return void 0;
     let team;
     try {
-      team = owner.core.team(owner.orgSlug, alias);
+      team = owner.core.team(owner.orgSlug, alias2);
     } catch {
       return void 0;
     }
@@ -12889,18 +13146,19 @@ var TunnelRefusedError = class extends Error {
 };
 function upgradeRefusalMessage(status) {
   if (status === 401)
-    return "hq: this connection was refused. Your login may have expired: run hq login.";
-  if (status === 403) return "hq: remote access to this team is not allowed for you right now.";
-  if (status === 404) return "hq: remote access is not available on this HQ.";
+    return copy`hq: this connection was refused. Your login may have expired: run hq login.`;
+  if (status === 403) return copy`hq: remote access to this team is not allowed for you right now.`;
+  if (status === 404) return copy`hq: remote access is not available on this HQ.`;
   if (status === 409)
-    return "hq: this team machine needs an update before it accepts this connection. An owner or admin can update it in HQ.";
+    return copy`hq: this AI Team Cloud Computer needs an update before it accepts this connection. An owner or admin can update it in HQ.`;
   if (status === 429)
-    return "hq: too many connection attempts right now. Wait a minute and try again.";
+    return copy`hq: too many connection attempts right now. Wait a minute and try again.`;
   if (status === 501)
-    return "hq: connections to team machines are not switched on for this HQ yet. Ask an owner or admin.";
-  if (status === 503) return "hq: HQ is restarting. Try again in a moment.";
-  if (status === 504) return "hq: the team machine did not answer in time. Try again in a moment.";
-  return `hq: the team machine could not be reached (HTTP ${status}).`;
+    return copy`hq: connections to AI Team Cloud Computers are not switched on for this HQ yet. Ask an owner or admin.`;
+  if (status === 503) return copy`hq: HQ is restarting. Try again in a moment.`;
+  if (status === 504)
+    return copy`hq: the AI Team Cloud Computer did not answer in time. Try again in a moment.`;
+  return copy`hq: the AI Team Cloud Computer could not be reached (HTTP ${status}).`;
 }
 var defaultWs = (url, headers) => new import_ws.default(url, { headers, perMessageDeflate: false });
 async function openTunnelSocket(client, org, connectCode, factory = defaultWs) {
@@ -12922,7 +13180,7 @@ async function openTunnelSocket(client, org, connectCode, factory = defaultWs) {
     });
     ws.once(
       "error",
-      (err) => reject(new TunnelRefusedError(0, `hq: could not reach HQ (${err.message}).`))
+      (err) => reject(new TunnelRefusedError(0, copy`hq: could not reach HQ (${err.message}).`))
     );
   });
 }
@@ -12980,9 +13238,8 @@ function pipeTunnel(ws, input, output, highWater = 1 << 20) {
 // ../hq-client/src/attach-session.ts
 var TOKEN_CHECK_MS = 6e4;
 var PRESENCE_MS = 6e4;
-var WAKE_RETRY_MS = 2e3;
-var WAKE_RETRY_MAX_MS = 4e3;
-var WAKE_STILL_ON_IT_MS = 2e4;
+var WAKE_RETRY_MS = 1e3;
+var WAKE_RETRY_MAX_MS = 1e3;
 var HISTORY_NOTICE_GRACE_MS = 8e3;
 var HISTORY_UNAVAILABLE_NOTICE = "history_unavailable";
 var WORKSPACE_ASLEEP_NOTICE = "workspace_asleep";
@@ -13012,15 +13269,15 @@ var WAKE_CODES = /* @__PURE__ */ new Set([
   "SESSION_RESUME_COLD_RESTART"
 ]);
 var CLI_ATTACH_COPY = {
-  prefix: "hq: ",
-  stillOnIt: "hq: Still on it...",
+  prefix: copy`hq: `,
+  stillOnIt: copy`hq: Taking longer than usual, still working.`,
   wakeTimeout: wakeTimeoutMessage,
-  reconnecting: "hq: connection lost, reconnecting...",
-  accessEnded: "hq: your access to this session ended.",
-  detached: "hq: detached.",
-  nowViewOnly: "hq: you can watch this session but not type in it.",
-  sessionStopped: "hq: the session stopped.",
-  sessionError: "hq: the session exited with an error."
+  reconnecting: copy`hq: connection lost, reconnecting...`,
+  accessEnded: copy`hq: your access to this session ended.`,
+  detached: copy`hq: detached.`,
+  nowViewOnly: copy`hq: you can watch this session but not type in it.`,
+  sessionStopped: copy`hq: the session stopped.`,
+  sessionError: copy`hq: the session exited with an error.`
 };
 var ACCOUNT_ERROR_NAMES = /* @__PURE__ */ new Set([
   "NeedsSignInError",
@@ -13046,11 +13303,18 @@ function cleanPorts(value) {
 }
 function createAttachSession(client, target, sink, opts = {}) {
   const { team, session } = target;
-  const copy = { ...CLI_ATTACH_COPY, ...opts.copy ?? {} };
+  const attachCopy = { ...CLI_ATTACH_COPY, ...opts.copy ?? {} };
   const make = opts.wsFactory ?? ((url, h) => new import_ws2.default(url, { headers: h }));
   const reconnectBase = opts.reconnectBaseMs ?? RECONNECT_BASE_MS;
   const echo = opts.echo ?? null;
-  const wake = { since: null, said: null, cold: false, stillSaid: false, asleep: false };
+  const wake = {
+    since: null,
+    said: null,
+    estimate: null,
+    cold: false,
+    stillSaid: false,
+    asleep: false
+  };
   let canType = session.canType;
   let current = null;
   let detachRequested = false;
@@ -13081,8 +13345,9 @@ function createAttachSession(client, target, sink, opts = {}) {
     }
     async function runLoop() {
       for (; ; ) {
-        if (detachRequested) return { kind: "ended", exitCode: 0, message: `\r
-${copy.detached}` };
+        if (detachRequested)
+          return { kind: "ended", exitCode: 0, message: `\r
+${attachCopy.detached}` };
         const adopt = next;
         next = null;
         let headers;
@@ -13152,12 +13417,12 @@ ${copy.detached}` };
             lostNotice = setTimeout(() => {
               lostNotice = null;
               sink.say(`\r
-${copy.reconnecting}`);
+${attachCopy.reconnecting}`);
             }, opts.quietReconnectNoticeMs ?? QUIET_RECONNECT_NOTICE_MS);
           } else {
             cancelLostNotice();
             sink.say(`\r
-${copy.reconnecting}`);
+${attachCopy.reconnecting}`);
           }
           await sleep2(Math.min(RECONNECT_MAX_MS, reconnectBase * 2 ** reconnects));
           reconnects += 1;
@@ -13280,16 +13545,16 @@ ${copy.reconnecting}`);
               if (wake.since === null || wake.cold || wake.stillSaid) return;
               wake.stillSaid = true;
               say(`\r
-${copy.stillOnIt}`);
+${attachCopy.stillOnIt}`);
             },
-            Math.max(0, since + (opts.wakeStillMs ?? WAKE_STILL_ON_IT_MS) - now)
+            Math.max(0, since + (opts.wakeStillMs ?? wakeStillWorkingAfterMs(wake.estimate)) - now)
           );
         }
         if (giveUpTimer === null) {
           giveUpTimer = setTimeout(
             () => {
               say(`\r
-${copy.wakeTimeout(team)}`);
+${attachCopy.wakeTimeout(team)}`);
               errorMessage = "";
               exitCode = 1;
               ws.terminate();
@@ -13302,6 +13567,7 @@ ${copy.wakeTimeout(team)}`);
         if (wake.since !== null) opts.onWaking?.(false);
         wake.since = null;
         wake.said = null;
+        wake.estimate = null;
         wake.cold = false;
         wake.stillSaid = false;
         wakeAttempts = 0;
@@ -13513,9 +13779,9 @@ ${copy.wakeTimeout(team)}`);
           if (st === statusSaid) return;
           statusSaid = st;
           if (st === "stopped") say(`\r
-${copy.sessionStopped}`);
+${attachCopy.sessionStopped}`);
           else if (st === "error") say(`\r
-${copy.sessionError}`);
+${attachCopy.sessionError}`);
         } else if (frame.type === "geometry") {
           const pty = wireDims(
             "cols" in frame ? frame.cols : void 0,
@@ -13582,12 +13848,13 @@ ${copy.sessionError}`);
               wake.since = Date.now();
               opts.onWaking?.(true);
             }
+            wake.estimate = wakeEstimateOf(frame.wakeEstimate, frame.message);
             armWakeClocks(wake.since);
             if (wake.said !== frame.message) {
               wake.said = frame.message;
               say(
                 `\r
-${opts.wakeText ? opts.wakeText(code, frame.message) : `${copy.prefix}${frame.message}`}`
+${opts.wakeText ? opts.wakeText(code, frame.message, wake.estimate) : `${attachCopy.prefix}${frame.message}`}`
               );
             }
             if (!attachOutstanding) schedulePoll();
@@ -13597,7 +13864,7 @@ ${opts.wakeText ? opts.wakeText(code, frame.message) : `${copy.prefix}${frame.me
             if (canType) {
               setCanType(false);
               say(`\r
-${copy.nowViewOnly}`);
+${attachCopy.nowViewOnly}`);
             }
             return;
           }
@@ -13607,13 +13874,13 @@ ${copy.nowViewOnly}`);
             if (!quiet && errorSaid !== frame.message) {
               errorSaid = frame.message;
               say(`\r
-${copy.prefix}${frame.message}`);
+${attachCopy.prefix}${frame.message}`);
             }
             scheduleErrorRetry();
             return;
           }
           errorMessage = `\r
-${copy.prefix}${frame.message}`;
+${attachCopy.prefix}${frame.message}`;
           exitCode = 1;
           ws.close(1e3);
         } else if (frame.type === "notice" && "text" in frame) {
@@ -13626,7 +13893,7 @@ ${copy.prefix}${frame.message}`;
           }
           say(
             `\r
-${opts.noticeText ? opts.noticeText(code, frame.text) : `${copy.prefix}${frame.text}`}`
+${opts.noticeText ? opts.noticeText(code, frame.text) : `${attachCopy.prefix}${frame.text}`}`
           );
         }
       });
@@ -13818,7 +14085,7 @@ ${opts.noticeText ? opts.noticeText(code, frame.text) : `${copy.prefix}${frame.t
             kind: "ended",
             exitCode: 1,
             message: `\r
-${copy.accessEnded}`,
+${attachCopy.accessEnded}`,
             unauthorized: true
           });
           return;
@@ -13829,7 +14096,7 @@ ${copy.accessEnded}`,
           return;
         }
         resolve({ kind: "ended", exitCode, message: `\r
-${copy.detached}` });
+${attachCopy.detached}` });
       });
     });
   }
@@ -14394,6 +14661,8 @@ var import_node_os3 = __toESM(require("node:os"), 1);
 var import_node_path3 = __toESM(require("node:path"), 1);
 
 // ../hq-client/src/teams.ts
+var ALIAS_PREFIX = ACTIVE_DEV_BRAND.teamAliasPrefix;
+var alias = (id, hexChars = 8) => workspaceAlias(id, hexChars, ALIAS_PREFIX);
 function isWellFormedTeam(t) {
   return ORG_SLUG_RE.test(t.org.slug) && UUID_RE.test(t.workspace.id) && ALIAS_RE.test(t.alias);
 }
@@ -14407,14 +14676,14 @@ function partitionTeams(orgs) {
   });
   const counts = /* @__PURE__ */ new Map();
   for (const t of all) {
-    const a = workspaceAlias(t.workspace.id);
+    const a = alias(t.workspace.id);
     counts.set(a, (counts.get(a) ?? 0) + 1);
   }
   const aliased = all.map((t) => {
-    const short = workspaceAlias(t.workspace.id);
+    const short = alias(t.workspace.id);
     return {
       ...t,
-      alias: (counts.get(short) ?? 0) > 1 ? workspaceAlias(t.workspace.id, 12) : short
+      alias: (counts.get(short) ?? 0) > 1 ? alias(t.workspace.id, 12) : short
     };
   });
   return {
@@ -14431,7 +14700,7 @@ var SIGNOUT_GRACE_MS = 5e3;
 var SIGNOUT_LOOK_MS = 250;
 var STAMP_REREAD_MS = 500;
 function defaultLockDir() {
-  return import_node_path3.default.join(import_node_os3.default.homedir(), ".hq", "vscode");
+  return import_node_path3.default.join(import_node_os3.default.homedir(), HOME_DIR_NAME, "vscode");
 }
 function clientHeaders(extensionVersion) {
   return {
@@ -14675,7 +14944,7 @@ var HqService = class {
           if (await this.revocationConfirmed(failing)) {
             await this.revokedUnlessSignedOutElsewhere(dead ?? null);
           } else {
-            this.log.info(`account ${this.tag}: a 401 HQ did not confirm; nothing signed out`);
+            this.log.info(copy`account ${this.tag}: a 401 HQ did not confirm; nothing signed out`);
           }
         })().finally(() => {
           this.revoking = null;
@@ -14808,7 +15077,7 @@ var HqService = class {
       return;
     }
     const email = this.email();
-    this.log.info(`account ${this.tag}: HQ confirmed its access ended; signed out here`);
+    this.log.info(copy`account ${this.tag}: HQ confirmed its access ended; signed out here`);
     await this.deps.store.wipe(this.refValue);
     this.built = null;
     this.deps.owner.removed(this.refValue);
@@ -14854,7 +15123,7 @@ var HqService = class {
     await this.deps.store.clearSigningOut(this.refValue.host, this.tag);
     this.built = null;
     this.deps.owner.removed(this.refValue);
-    this.log.info(`account ${this.tag} signed out (HQ ${reached ? "reached" : "not reached"})`);
+    this.log.info(copy`account ${this.tag} signed out (HQ ${reached ? "reached" : "not reached"})`);
     const others = this.deps.owner.count() > 0;
     this.deps.ui.info(
       !reached ? COPY.signOutOffline : others ? COPY.signedOutAccount(email) : COPY.signedOut
@@ -14868,12 +15137,24 @@ var import_node_crypto8 = require("node:crypto");
 var import_node_os4 = __toESM(require("node:os"), 1);
 var import_node_path4 = __toESM(require("node:path"), 1);
 
+// ../shared/src/dev-brand-core.ts
+var LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+function isBuiltInHost(brand, host) {
+  if (brand.builtInHosts.includes(host)) return true;
+  if (!host.startsWith("https://")) return false;
+  const name = host.slice("https://".length);
+  for (const parent of brand.builtInHostParents) {
+    const suffix = `.${parent}`;
+    if (!name.endsWith(suffix)) continue;
+    const label = name.slice(0, -suffix.length);
+    if (LABEL_RE.test(label) && !brand.reservedHostLabels.includes(label)) return true;
+  }
+  return false;
+}
+
 // src/hq/hosts.ts
-var DEFAULT_HOST = "https://hq.aiworkforceone.com";
-var BUILT_IN_HOSTS = [
-  DEFAULT_HOST,
-  "https://hq-test.aiworkforceone.com"
-];
+var DEFAULT_HOST = ACTIVE_DEV_BRAND.defaultHost ?? "";
+var BUILT_IN_HOSTS = ACTIVE_DEV_BRAND.builtInHosts;
 var LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
 var HTTPS = /^https:\/\/[a-z0-9.-]{1,253}(:\d{1,5})?$/;
 function normalizeHqHost(value) {
@@ -14882,14 +15163,14 @@ function normalizeHqHost(value) {
   if (HTTPS.test(v) || LOOPBACK.test(v)) return v;
   return null;
 }
-function resolveHqHost(configured, allowedExtra) {
-  const raw = typeof configured === "string" && configured.trim() !== "" ? configured : DEFAULT_HOST;
+function resolveHqHost(configured, allowedExtra, brand = ACTIVE_DEV_BRAND) {
+  const raw = typeof configured === "string" && configured.trim() !== "" ? configured : brand.defaultHost ?? "";
+  if (raw === "") return { ok: false, host: "", unset: true };
   const host = normalizeHqHost(raw);
   if (host === null) return { ok: false, host: String(raw) };
   const extra = Array.isArray(allowedExtra) ? allowedExtra.map(normalizeHqHost).filter((h) => h !== null) : [];
-  const allowed = /* @__PURE__ */ new Set([...BUILT_IN_HOSTS, ...extra]);
   if (LOOPBACK.test(host) && !extra.includes(host)) return { ok: false, host };
-  return allowed.has(host) ? { ok: true, host } : { ok: false, host };
+  return isBuiltInHost(brand, host) || extra.includes(host) ? { ok: true, host } : { ok: false, host };
 }
 function isOnHost(url, host) {
   let u;
@@ -14904,6 +15185,16 @@ function isOnHost(url, host) {
 }
 
 // src/auth/device-flow.ts
+function wrongHostOf(body) {
+  const host = body?.details?.host;
+  if (typeof host !== "string") return null;
+  try {
+    const u = new URL(host);
+    return u.protocol === "https:" && u.origin === host ? host : null;
+  } catch {
+    return null;
+  }
+}
 function deviceLabelFor(appName, hostname) {
   const clean = (s) => (
     // eslint-disable-next-line no-control-regex -- the label is shown to an approver
@@ -14957,6 +15248,10 @@ async function runDeviceFlow(deps, input) {
     if (poll.status === 200 && (poll.body.status === "authorization_pending" || poll.body.status === "slow_down")) {
       interval = Math.max(interval, poll.body.interval);
       continue;
+    }
+    if (poll.status === 409 && poll.body?.code === "DEVICE_WRONG_HOST") {
+      const host = wrongHostOf(poll.body);
+      if (host) return { kind: "wrong-host", host };
     }
     if (poll.status === 403) return { kind: "denied" };
     if (poll.status === 410) return { kind: "expired" };
@@ -15161,6 +15456,9 @@ function reportFailure(h, result, tooOld) {
     case "denied":
       h.ui.modal(COPY.signInDenied);
       return;
+    case "wrong-host":
+      h.ui.modal(COPY.signInWrongHost(result.host));
+      return;
     case "expired":
       h.ui.modal(COPY.signInExpired);
       return;
@@ -15196,7 +15494,7 @@ async function runSignIn(h, state, intent, opts) {
 async function signInFlow(h, state, intent, opts) {
   const verdict = h.hostVerdict();
   if (!verdict.ok) {
-    h.ui.modal(COPY.hostNotAllowed(verdict.host));
+    h.ui.modal(verdict.unset ? COPY.hostUnset : COPY.hostNotAllowed(verdict.host));
     return { outcome: "host-not-allowed" };
   }
   if (state.signingIn) {
@@ -15253,7 +15551,11 @@ async function signInFlow(h, state, intent, opts) {
     const sleep4 = h.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     const { seed32, pub32 } = generateDeviceKeyMaterial();
     const hostname = (h.hostname ?? (() => import_node_os4.default.hostname().split(".")[0] ?? ""))();
-    const openssh = toOpenSshPrivateKey(seed32, pub32, `hq-vscode@${hostname || "computer"}`);
+    const openssh = toOpenSshPrivateKey(
+      seed32,
+      pub32,
+      `${KEY_NS}-vscode@${hostname || "computer"}`
+    );
     const result = await runDeviceFlow(
       {
         fetch: h.fetch ?? globalThis.fetch,
@@ -15401,7 +15703,7 @@ async function readOldGrant(h, ref) {
 }
 
 // src/hq/accounts.ts
-var ACTIVE_ACCOUNT_KEY = "hq.activeAccount";
+var ACTIVE_ACCOUNT_KEY = `${KEY_NS}.activeAccount`;
 var REDERIVE_POLL_MS = 5e3;
 var LISTING_STALE_MS = 6e4;
 var SIGNOUT_MARKER_STALE_MS = 6e4;
@@ -15493,7 +15795,7 @@ var HqAccounts = class {
     this.subscriptions.push(
       deps.store.onSecretChanged((key) => {
         for (const b of this.bundles.values()) {
-          if (key.startsWith(`hq:${b.ref.host}:`) && key.endsWith(":device"))
+          if (key.startsWith(`${KEY_NS}:${b.ref.host}:`) && key.endsWith(":device"))
             b.service.invalidate();
         }
         this.rederive("secrets");
@@ -15683,7 +15985,7 @@ var HqAccounts = class {
     let changed = false;
     if (host !== this.hostNow) {
       if (this.hostNow !== null)
-        this.log.info("the HQ address changed: its accounts here are closed");
+        this.log.info(copy`the HQ address changed: its accounts here are closed`);
       for (const tag of [...this.bundles.keys()]) this.drop(tag);
       changed = this.hostNow !== null || host !== null;
       this.hostNow = host;
@@ -15815,7 +16117,7 @@ var HqAccounts = class {
     const b = this.bundles.get(tag);
     if (!b) return;
     this.bundles.delete(tag);
-    this.log.info(`account ${tag} closed here (signed out, revoked, or another HQ address)`);
+    this.log.info(copy`account ${tag} closed here (signed out, revoked, or another HQ address)`);
     b.dispose();
     if (this.activeTag === tag) this.activeTag = null;
     this.removedEmitter.fire(b.ref);
@@ -15977,8 +16279,77 @@ var HqAccounts = class {
   }
 };
 
-// src/ports/ports.ts
+// src/hq/session-lifecycle.ts
 var vscode8 = __toESM(require("vscode"), 1);
+function progressTitle(action, name) {
+  if (action === "start") return COPY.sessionStarting(name);
+  if (action === "stop") return COPY.sessionStopping(name);
+  return COPY.sessionRestartingProgress(name);
+}
+function doneMessage(action, name) {
+  if (action === "start") return COPY.sessionStarted(name);
+  if (action === "stop") return COPY.sessionStopped(name);
+  return COPY.sessionRestarted(name);
+}
+async function confirmInterrupt(session, name, action) {
+  const agent = session.engine === "codex" ? "Codex" : "Claude";
+  const button = action === "stop" ? COPY.stopSessionAction : COPY.restartSessionAction;
+  const chosen = await vscode8.window.showWarningMessage(
+    notificationText(COPY.sessionBusyConfirm(agent, name, action)),
+    { modal: true },
+    button
+  );
+  return chosen === button;
+}
+async function runSessionLifecycle(deps, target, action) {
+  const { team, session } = target;
+  const name = cleanLabel(session.name) || session.id.slice(0, 8);
+  if (session.canOperate === false) {
+    void vscode8.window.showErrorMessage(SESSION_NOT_OPERATOR_MESSAGE);
+    return "refused";
+  }
+  if (action !== "start" && session.midTurn === true) {
+    if (!await confirmInterrupt(session, name, action)) return "cancelled";
+  }
+  try {
+    const outcome = await vscode8.window.withProgress(
+      {
+        location: vscode8.ProgressLocation.Notification,
+        title: notificationText(progressTitle(action, name))
+      },
+      () => deps.call(
+        (client) => action === "start" ? client.startSession(team, session.id) : action === "stop" ? client.stopSession(team, session.id) : client.restartSession(team, session.id)
+      ).then(
+        () => ({ ok: true }),
+        (error) => ({ ok: false, error })
+      )
+    );
+    if (!outcome.ok) throw outcome.error;
+    vscode8.window.setStatusBarMessage(notificationText(doneMessage(action, name)), 5e3);
+    return "done";
+  } catch (err) {
+    const missingSig = err instanceof HqApiError && err.code === DEVICE_SIGNATURE_MISSING_CODE;
+    if (!(err instanceof HqApiError) || err.status === 401 && !missingSig || err.status === 426)
+      return "failed";
+    const refusal = describeSessionRefusal(err, action, {
+      session: name,
+      team: cleanLabel(team.workspace.name) || team.alias
+    });
+    if (refusal.kind === "already") {
+      const stillStarting = action !== "stop" && (session.starting === true || session.status === "stopped");
+      const message = stillStarting ? COPY.sessionAlreadyStarting(name) : refusal.message;
+      void vscode8.window.showInformationMessage(notificationText(message));
+      return "already";
+    }
+    void vscode8.window.showErrorMessage(notificationText(refusal.message));
+    return "refused";
+  } finally {
+    deps.refresh();
+  }
+}
+
+// src/ports/ports.ts
+var vscode9 = __toESM(require("vscode"), 1);
 
 // ../hq-client/src/forward.ts
 var import_node_net = __toESM(require("node:net"), 1);
@@ -16043,7 +16414,7 @@ async function startForward(deps, client, team, remotePort, localPort, opts = {}
       if (!sock.destroyed) sock.end();
     }).catch((err) => {
       deps.say(
-        err instanceof TunnelRefusedError ? err.message : `hq: stream failed (${err.message})`
+        err instanceof TunnelRefusedError ? err.message : copy`hq: stream failed (${err.message})`
       );
       sock.destroy();
     });
@@ -16057,7 +16428,7 @@ async function startForward(deps, client, team, remotePort, localPort, opts = {}
   const done = new Promise((r) => resolveDone = r);
   const heartbeat = setInterval(() => {
     void lock.run(() => client.request("GET", connectionsPath(team, conn.id), { org, signed: true })).catch((err) => {
-      deps.say(`hq: the forward ended (${err.message}).`);
+      deps.say(copy`hq: the forward ended (${err.message}).`);
       void close(1);
     });
   }, HEARTBEAT_MS);
@@ -16089,6 +16460,7 @@ function forwardError(team, err) {
       return COPY.forwardTeamStopped(team);
     }
     if (e.code === "UPGRADE_REQUIRED" || e.status === 426) return COPY.tooOld;
+    if (e.code === DEVICE_SIGNATURE_MISSING_CODE) return deviceSignatureMissingMessage();
     if (e.code === "REMOTE_TOKEN_INVALID" || e.status === 401) return COPY.renewSignIn;
     if (e.status === 403) return COPY.forwardNotAllowed(team);
     if (e.status === 404) return COPY.fsTeamGone;
@@ -16113,7 +16485,7 @@ var Ports = class {
   forwards = /* @__PURE__ */ new Map();
   /** Offers per account + team: listening ports not forwarded and not dismissed. */
   detected = /* @__PURE__ */ new Map();
-  treeChanged = new vscode8.EventEmitter();
+  treeChanged = new vscode9.EventEmitter();
   onDidChangeTreeData = this.treeChanged.event;
   countChanged = new Emitter();
   onDidChangeCount = this.countChanged.event;
@@ -16186,7 +16558,7 @@ var Ports = class {
    */
   async start(account, team, remotePort, localPort, opts = {}) {
     if (DENIED_FORWARD_PORTS.includes(remotePort)) {
-      void vscode8.window.showErrorMessage(COPY.forwardRefusedPort(remotePort));
+      void vscode9.window.showErrorMessage(COPY.forwardRefusedPort(remotePort));
       return;
     }
     const service = this.deps.accounts.get(account)?.service;
@@ -16228,7 +16600,7 @@ var Ports = class {
       if (this.forwards.get(key)?.kind === "starting") {
         this.forwards.set(key, { kind: "paused", spec });
         this.fire();
-        void vscode8.window.showErrorMessage(forwardError(spec.teamName, err));
+        void vscode9.window.showErrorMessage(forwardError(spec.teamName, err));
       }
       return;
     }
@@ -16241,7 +16613,7 @@ var Ports = class {
     this.forwards.set(key, { kind: "active", spec: bound, handle });
     await this.persist(account);
     this.fire();
-    void vscode8.window.setStatusBarMessage(
+    void vscode9.window.setStatusBarMessage(
       COPY.forwarding(handle.port, spec.teamName, remotePort),
       5e3
     );
@@ -16256,7 +16628,7 @@ var Ports = class {
       this.forwards.set(key, { kind: "paused", spec: bound });
       this.fire();
       if (code !== 0) {
-        void vscode8.window.showWarningMessage(COPY.forwardEnded(remotePort));
+        void vscode9.window.showWarningMessage(COPY.forwardEnded(remotePort));
         void service.refreshOrgs().catch(() => void 0);
       }
     });
@@ -16271,7 +16643,7 @@ var Ports = class {
     }
     const team = b.service.teams().find((t) => t.workspace.id === entry.spec.workspaceId && t.org.slug === entry.spec.orgSlug);
     if (!team) {
-      void vscode8.window.showErrorMessage(COPY.forwardNotAllowed(entry.spec.teamName));
+      void vscode9.window.showErrorMessage(COPY.forwardNotAllowed(entry.spec.teamName));
       return;
     }
     await this.start(entry.spec.account, team, entry.spec.remotePort, entry.spec.localPort);
@@ -16347,22 +16719,22 @@ var Ports = class {
   }
   getTreeItem(entry) {
     if (entry.kind === "detected") {
-      const item2 = new vscode8.TreeItem(COPY.forwardDetected(entry.port));
+      const item2 = new vscode9.TreeItem(COPY.forwardDetected(entry.port));
       item2.description = this.withLabel(cleanLabel(entry.team.workspace.name), entry.account);
       item2.contextValue = "port:detected";
-      item2.iconPath = new vscode8.ThemeIcon("radio-tower");
+      item2.iconPath = new vscode9.ThemeIcon("radio-tower");
       return item2;
     }
     const s = entry.spec;
-    const item = new vscode8.TreeItem(`${s.remotePort} \u2192 localhost:${s.localPort}`);
+    const item = new vscode9.TreeItem(`${s.remotePort} \u2192 localhost:${s.localPort}`);
     const team = this.withLabel(s.teamName, s.account);
     item.description = entry.kind === "paused" ? `${team} \xB7 ${COPY.forwardPaused}` : team;
     item.contextValue = entry.kind === "active" ? "port:active" : entry.kind === "paused" ? "port:paused" : "port:starting";
-    item.iconPath = new vscode8.ThemeIcon(
+    item.iconPath = new vscode9.ThemeIcon(
       entry.kind === "active" ? "plug" : entry.kind === "starting" ? "sync~spin" : "debug-pause"
     );
     if (entry.kind === "paused") {
-      item.command = { command: "hq.ports.resume", title: "Resume", arguments: [entry] };
+      item.command = { command: brandText("hq.ports.resume"), title: "Resume", arguments: [entry] };
     }
     return item;
   }
@@ -16374,13 +16746,13 @@ var Ports = class {
   }
 };
 async function askForPorts() {
-  const remoteRaw = await vscode8.window.showInputBox({
+  const remoteRaw = await vscode9.window.showInputBox({
     prompt: COPY.forwardPrompt,
     validateInput: (v) => parsePort(v.trim(), 1024) === null ? COPY.forwardBadPort : null
   });
   if (remoteRaw === void 0) return null;
   const remote = parsePort(remoteRaw.trim(), 1024);
-  const localRaw = await vscode8.window.showInputBox({
+  const localRaw = await vscode9.window.showInputBox({
     prompt: COPY.forwardLocalPrompt,
     value: String(remote),
     validateInput: (v) => v.trim() === "" || parsePort(v.trim(), 1) !== null ? null : COPY.forwardBadLocal
@@ -16391,7 +16763,7 @@ async function askForPorts() {
 }
 
 // src/search/search-view.ts
-var vscode9 = __toESM(require("vscode"), 1);
+var vscode10 = __toESM(require("vscode"), 1);
 function groupByFile(account, team, res) {
   const byPath = /* @__PURE__ */ new Map();
   for (const m of res.matches) {
@@ -16425,7 +16797,7 @@ function parseGlobs(text) {
   return (text ?? "").split(",").map((g) => g.trim()).filter((g) => g.length > 0);
 }
 var SearchView = class {
-  changed = new vscode9.EventEmitter();
+  changed = new vscode10.EventEmitter();
   onDidChangeTreeData = this.changed.event;
   roots = [];
   show(nodes) {
@@ -16453,26 +16825,26 @@ var SearchView = class {
   }
   getTreeItem(node) {
     if (node.kind === "summary") {
-      const item2 = new vscode9.TreeItem(node.text);
+      const item2 = new vscode10.TreeItem(node.text);
       item2.contextValue = "search:summary";
       return item2;
     }
     if (node.kind === "file") {
-      const item2 = new vscode9.TreeItem(
+      const item2 = new vscode10.TreeItem(
         cleanLabel(node.shown ?? node.path),
-        vscode9.TreeItemCollapsibleState.Expanded
+        vscode10.TreeItemCollapsibleState.Expanded
       );
       item2.description = String(node.matches.length);
-      item2.iconPath = new vscode9.ThemeIcon("file");
+      item2.iconPath = new vscode10.ThemeIcon("file");
       item2.contextValue = "search:file";
       return item2;
     }
     const m = node.match;
-    const item = new vscode9.TreeItem(cleanLabel(m.preview).trim() || `${m.line}`);
+    const item = new vscode10.TreeItem(cleanLabel(m.preview).trim() || `${m.line}`);
     item.description = `${m.line}`;
     item.contextValue = "search:match";
     item.command = {
-      command: "hq.search.open",
+      command: brandText("hq.search.open"),
       title: COPY.searchTitle,
       arguments: [node]
     };
@@ -16482,29 +16854,29 @@ var SearchView = class {
 async function openMatch(node, opener) {
   if (node.kind !== "match") return;
   if (hasControlChars(node.match.path)) {
-    void vscode9.window.showWarningMessage(COPY.fsControlName);
+    void vscode10.window.showWarningMessage(COPY.fsControlName);
     return;
   }
   if (!opener) return;
   const uri = opener.uriOf(node.team, await opener.shownPath(node.team, node.match.path));
   const line = Math.max(0, node.match.line - 1);
-  await vscode9.window.showTextDocument(uri, {
-    selection: new vscode9.Range(line, 0, line, 0),
+  await vscode10.window.showTextDocument(uri, {
+    selection: new vscode10.Range(line, 0, line, 0),
     preview: true
   });
 }
 
 // src/status-bar.ts
-var vscode10 = __toESM(require("vscode"), 1);
+var vscode11 = __toESM(require("vscode"), 1);
 var StatusBar = class {
   constructor(accounts, terminals, portsView) {
     this.accounts = accounts;
     this.terminals = terminals;
     this.main.name = COPY.statusTooltip;
     this.main.tooltip = COPY.statusTooltip;
-    this.main.command = "hq.accounts.primaryAction";
-    this.ports.name = "AI Workforce One HQ ports";
-    this.ports.command = "hq.ports.focus";
+    this.main.command = brandText("hq.accounts.primaryAction");
+    this.ports.name = copy`AI Workforce One HQ ports`;
+    this.ports.command = brandText("hq.ports.focus");
     this.subscriptions.push(
       accounts.onDidChange(() => this.render()),
       terminals.onDidChange(() => this.render()),
@@ -16515,14 +16887,14 @@ var StatusBar = class {
   }
   accounts;
   terminals;
-  main = vscode10.window.createStatusBarItem(
-    "aiworkforceone.hq.status",
-    vscode10.StatusBarAlignment.Left,
+  main = vscode11.window.createStatusBarItem(
+    `${ACTIVE_DEV_BRAND.vscode.publisher}.${ACTIVE_DEV_BRAND.vscode.idPrefix}.status`,
+    vscode11.StatusBarAlignment.Left,
     10
   );
-  ports = vscode10.window.createStatusBarItem(
-    "aiworkforceone.hq.ports",
-    vscode10.StatusBarAlignment.Left,
+  ports = vscode11.window.createStatusBarItem(
+    `${ACTIVE_DEV_BRAND.vscode.publisher}.${ACTIVE_DEV_BRAND.vscode.idPrefix}.ports`,
+    vscode11.StatusBarAlignment.Left,
     9
   );
   subscriptions = [];
@@ -16569,10 +16941,10 @@ var StatusBar = class {
 };
 
 // src/terminal/terminals.ts
-var vscode12 = __toESM(require("vscode"), 1);
+var vscode13 = __toESM(require("vscode"), 1);
 
 // src/terminal/hq-pty.ts
-var vscode11 = __toESM(require("vscode"), 1);
+var vscode12 = __toESM(require("vscode"), 1);
 
 // ../shared/src/repl-markers.ts
 var MAIN_PROMPT_FOOTER = /\?\s*for\s*shortcuts|bypass\s*permissions\s*on|accept\s*edits\s*on|plan\s*mode\s*on|auto\s*mode\s*on(?![a-z])|manual\s*mode\s*on(?![a-z])/i;
@@ -17583,10 +17955,10 @@ var HqPty = class {
   }
   deps;
   target;
-  out = new vscode11.EventEmitter();
-  closed = new vscode11.EventEmitter();
-  name = new vscode11.EventEmitter();
-  overrideDims = new vscode11.EventEmitter();
+  out = new vscode12.EventEmitter();
+  closed = new vscode12.EventEmitter();
+  name = new vscode12.EventEmitter();
+  overrideDims = new vscode12.EventEmitter();
   onDidWrite = this.out.event;
   onDidClose = this.closed.event;
   onDidChangeName = this.name.event;
@@ -17822,7 +18194,9 @@ var HqPty = class {
         onListenPorts: (ports) => this.deps.offerPorts(team, ports),
         noticeText: (code, text) => code === "workspace_asleep" ? `${COPY.teamOffTerminal(teamName2)}\r
 ${COPY.pressKeyToWake}` : text,
-        wakeText: (code, message) => code === "SESSION_RESUME_COLD_RESTART" ? message : COPY.waking(teamName2),
+        // Review S1: the frame's promise (its `wakeEstimate`, else its sentence's range), the same
+        // value the still-working timer reads, never the listing's (stale or absent) estimate.
+        wakeText: (code, message, estimate) => code === "SESSION_RESUME_COLD_RESTART" ? message : COPY.waking(teamName2, estimate),
         copy: {
           prefix: "",
           stillOnIt: COPY.stillOnIt,
@@ -17912,7 +18286,7 @@ ${COPY.pressKeyToWake}` : text,
 
 // src/terminal/terminals.ts
 var LISTING_FRESH_MS = 1e4;
-var RECORD_KEY = "hq.terminals";
+var RECORD_KEY = `${KEY_NS}.terminals`;
 function teamIsRunning(ws) {
   return teamState(ws) === "running";
 }
@@ -17925,7 +18299,7 @@ var EchoOrgOffNotice = class {
   show(team) {
     if (this.said.has(team.org.id)) return;
     this.said.add(team.org.id);
-    void vscode12.window.showInformationMessage(
+    void vscode13.window.showInformationMessage(
       COPY.localEchoOrgOff(cleanLabel(team.org.name) || team.org.slug)
     );
   }
@@ -17934,7 +18308,7 @@ var Terminals = class _Terminals {
   constructor(deps) {
     this.deps = deps;
     this.subscriptions.push(
-      vscode12.window.onDidCloseTerminal((t) => {
+      vscode13.window.onDidCloseTerminal((t) => {
         for (const [id, o] of this.open) {
           if (o.terminal === t) {
             this.open.delete(id);
@@ -17944,12 +18318,12 @@ var Terminals = class _Terminals {
           }
         }
       }),
-      vscode12.window.onDidChangeActiveTerminal((t) => {
+      vscode13.window.onDidChangeActiveTerminal((t) => {
         this.changed.fire();
-        if (t && vscode12.window.state.focused) this.claimFor(t);
+        if (t && vscode13.window.state.focused) this.claimFor(t);
       }),
-      vscode12.window.onDidChangeWindowState((state) => {
-        const t = vscode12.window.activeTerminal;
+      vscode13.window.onDidChangeWindowState((state) => {
+        const t = vscode13.window.activeTerminal;
         if (state.focused && t) this.claimFor(t);
       }),
       deps.accounts.onAccountRemoved((ref) => this.closeAccount(ref)),
@@ -17984,7 +18358,7 @@ var Terminals = class _Terminals {
   }
   /** The active terminal and its HQ session, if it is one of ours. */
   activeTerminal() {
-    const t = vscode12.window.activeTerminal;
+    const t = vscode13.window.activeTerminal;
     if (!t) return null;
     for (const o of this.open.values()) {
       if (o.terminal === t) return { terminal: t, target: o.pty.target };
@@ -17993,7 +18367,7 @@ var Terminals = class _Terminals {
   }
   /** The HQ session behind the active terminal, if it is one of ours. */
   active() {
-    const t = vscode12.window.activeTerminal;
+    const t = vscode13.window.activeTerminal;
     if (!t) return null;
     for (const o of this.open.values()) {
       if (o.terminal === t) return { ...o.pty.target, state: o.state };
@@ -18025,18 +18399,18 @@ var Terminals = class _Terminals {
       {
         service,
         accountLabel: label,
-        localEchoMode: () => vscode12.workspace.getConfiguration("hq").get("localEcho", "auto"),
+        localEchoMode: () => vscode13.workspace.getConfiguration(ACTIVE_DEV_BRAND.vscode.idPrefix).get("localEcho", "auto"),
         vsCodeTypeaheadOn: () => {
-          const c = vscode12.workspace.getConfiguration("terminal.integrated");
+          const c = vscode13.workspace.getConfiguration("terminal.integrated");
           return vsCodeTypeaheadActive(
             { enabled: c.get("localEchoEnabled"), threshold: c.get("localEchoLatencyThreshold") },
-            vscode12.env.remoteName !== void 0
+            vscode13.env.remoteName !== void 0
           );
         },
         onEchoOrgOff: (team) => this.echoOrgOff.show(team),
         ...this.deps.rewriteInput ? { rewriteInput: this.deps.rewriteInput(target) } : {},
-        windowActive: () => vscode12.window.state.focused || vscode12.window.state.active === true,
-        inFront: () => vscode12.window.state.focused && vscode12.window.activeTerminal === entry.terminal,
+        windowActive: () => vscode13.window.state.focused || vscode13.window.state.active === true,
+        inFront: () => vscode13.window.state.focused && vscode13.window.activeTerminal === entry.terminal,
         offerPorts: (team, ports) => this.deps.offerPorts(target.account, team, ports),
         // The team's live state (F11), else the last listing: an off team attaches passively.
         teamRunning: async (team) => {
@@ -18060,10 +18434,10 @@ var Terminals = class _Terminals {
       },
       target
     );
-    const terminal = vscode12.window.createTerminal({
+    const terminal = vscode13.window.createTerminal({
       name: terminalName(target, { canType: target.session.canType }, label()),
       pty,
-      iconPath: new vscode12.ThemeIcon(target.session.canType ? "terminal" : "eye"),
+      iconPath: new vscode13.ThemeIcon(target.session.canType ? "terminal" : "eye"),
       isTransient: true
     });
     entry.terminal = terminal;
@@ -18096,7 +18470,7 @@ var Terminals = class _Terminals {
         })).body
       );
     } catch (err) {
-      void vscode12.window.showErrorMessage(newSessionError(err));
+      void vscode13.window.showErrorMessage(newSessionError(err));
       return;
     }
     this.attach({ account, team, session: created });
@@ -18191,7 +18565,7 @@ function newSessionError(err) {
 var import_node_child_process = require("node:child_process");
 var import_node_fs6 = require("node:fs");
 var import_node_os5 = require("node:os");
-var vscode13 = __toESM(require("vscode"), 1);
+var vscode14 = __toESM(require("vscode"), 1);
 
 // src/terminal/image-paste.ts
 var MAX_PASTE_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -18291,8 +18665,10 @@ function hasControl(s) {
   }
   return false;
 }
+var TEAM_FOLDER_FSPATH = new RegExp(`^\\\\${TEAM_ALIAS_SOURCE}(\\\\|$)`);
+var TEAM_PATH = new RegExp(`^[/\\\\](${TEAM_ALIAS_SOURCE})(?:[/\\\\](.*))?$`);
 function absolute(p) {
-  return p.startsWith("/") && p.length > 1 || /^[A-Za-z]:\\/.test(p) || /^\\\\[^\\]/.test(p) || /^\\hq-[0-9a-f]{8}(\\|$)/.test(p);
+  return p.startsWith("/") && p.length > 1 || /^[A-Za-z]:\\/.test(p) || /^\\\\[^\\]/.test(p) || TEAM_FOLDER_FSPATH.test(p);
 }
 function parseDroppedPaths(chunk) {
   let body = chunk;
@@ -18346,7 +18722,7 @@ function parseDroppedPaths(chunk) {
   return tokens.length > 0 ? { open, close, tokens } : null;
 }
 function teamPathOf2(path5) {
-  const m = /^[/\\](hq-[0-9a-f]{8})(?:[/\\](.*))?$/.exec(path5);
+  const m = TEAM_PATH.exec(path5);
   return m ? [m[1], (m[2] ?? "").replace(/\\/g, "/")] : null;
 }
 var SNIFF_BYTES = 16;
@@ -18545,9 +18921,9 @@ function uploader(accounts, target) {
   };
 }
 var progress = (title, task, onCancel) => Promise.resolve(
-  vscode13.window.withProgress(
+  vscode14.window.withProgress(
     {
-      location: vscode13.ProgressLocation.Notification,
+      location: vscode14.ProgressLocation.Notification,
       title,
       cancellable: onCancel !== void 0
     },
@@ -18582,7 +18958,7 @@ async function openLocal(path5) {
 async function confirmUpload(paths, team) {
   const home = (0, import_node_os5.homedir)();
   const files = paths.map((p) => cleanLabel(displayPath(p, home), 400) || "?").join(", ");
-  const choice = await vscode13.window.showWarningMessage(
+  const choice = await vscode14.window.showWarningMessage(
     COPY.imageUploadConfirm(files, team),
     { modal: true },
     COPY.imageUploadAction,
@@ -18597,8 +18973,8 @@ function rewriteInputFor(accounts) {
     canWrite: () => canWrite(target),
     suppressed: () => Date.now() < (ownPasteUntil.get(target) ?? 0),
     teamName: () => teamName(target),
-    info: (m) => void vscode13.window.showInformationMessage(m),
-    error: (m) => void vscode13.window.showWarningMessage(m),
+    info: (m) => void vscode14.window.showInformationMessage(m),
+    error: (m) => void vscode14.window.showWarningMessage(m),
     progress,
     ctx: () => ({
       teamAlias: target.team.alias,
@@ -18609,15 +18985,15 @@ function rewriteInputFor(accounts) {
   });
 }
 function registerTerminalPaste(deps) {
-  const setContext = () => void vscode13.commands.executeCommand(
+  const setContext = () => void vscode14.commands.executeCommand(
     "setContext",
-    "hq.activeTerminal",
+    brandText("hq.activeTerminal"),
     deps.terminals.activeTerminal() !== null
   );
   setContext();
   const onChange = deps.terminals.onDidChange(setContext);
-  const command = vscode13.commands.registerCommand(
-    "hq.terminalPaste",
+  const command = vscode14.commands.registerCommand(
+    brandText("hq.terminalPaste"),
     async (args) => {
       const ctrlV = args?.fallback === "ctrlV";
       const active = deps.terminals.activeTerminal();
@@ -18629,7 +19005,7 @@ function registerTerminalPaste(deps) {
         const target2 = active?.target;
         if (target2) ownPasteUntil.set(target2, Number.POSITIVE_INFINITY);
         try {
-          await vscode13.commands.executeCommand("workbench.action.terminal.paste");
+          await vscode14.commands.executeCommand("workbench.action.terminal.paste");
         } finally {
           if (target2) ownPasteUntil.set(target2, Date.now() + OWN_PASTE_TAIL_MS);
         }
@@ -18637,7 +19013,7 @@ function registerTerminalPaste(deps) {
       if (!active) return fallback();
       const { terminal, target } = active;
       await pasteIntoTerminal({
-        readText: () => Promise.resolve(vscode13.env.clipboard.readText()),
+        readText: () => Promise.resolve(vscode14.env.clipboard.readText()),
         readImage: () => readClipboardImage({ platform: process.platform, env: process.env, exec: execFileP }),
         fallback,
         canWrite: canWrite(target),
@@ -18647,25 +19023,25 @@ function registerTerminalPaste(deps) {
           terminal.sendText(text, false);
           deps.log.info("terminal: an image was pasted");
         },
-        info: (m) => void vscode13.window.showInformationMessage(m),
-        error: (m) => void vscode13.window.showWarningMessage(m),
+        info: (m) => void vscode14.window.showInformationMessage(m),
+        error: (m) => void vscode14.window.showWarningMessage(m),
         progress: (title, task) => progress(title, task),
-        status: (m) => void vscode13.window.setStatusBarMessage(m, 4e3)
+        status: (m) => void vscode14.window.setStatusBarMessage(m, 4e3)
       });
     }
   );
-  return vscode13.Disposable.from(command, onChange);
+  return vscode14.Disposable.from(command, onChange);
 }
 
 // src/tree/account-tree.ts
-var vscode14 = __toESM(require("vscode"), 1);
+var vscode15 = __toESM(require("vscode"), 1);
 var AccountTree = class {
   constructor(accounts) {
     this.accounts = accounts;
     accounts.onDidChange(() => this.changed.fire(void 0));
   }
   accounts;
-  changed = new vscode14.EventEmitter();
+  changed = new vscode15.EventEmitter();
   onDidChangeTreeData = this.changed.event;
   /** Active first, then by email (never by recency). */
   ordered() {
@@ -18689,16 +19065,16 @@ var AccountTree = class {
       case "account": {
         const b = this.accounts.get(node.ref);
         const active = b !== null && this.accounts.active() === b;
-        const item = new vscode14.TreeItem(
+        const item = new vscode15.TreeItem(
           cleanLabel(node.email),
-          vscode14.TreeItemCollapsibleState.Expanded
+          vscode15.TreeItemCollapsibleState.Expanded
         );
-        item.iconPath = new vscode14.ThemeIcon("account");
+        item.iconPath = new vscode15.ThemeIcon("account");
         item.contextValue = active ? "account:active" : "account:other";
         if (b?.health === "needs-sign-in") {
           item.description = COPY.needsSignInDescription;
           item.command = {
-            command: "hq.renewAccount",
+            command: brandText("hq.renewAccount"),
             title: COPY.needsSignInDescription,
             arguments: [node.ref]
           };
@@ -18706,7 +19082,7 @@ var AccountTree = class {
           item.description = COPY.accountActiveNote;
         } else {
           item.command = {
-            command: "hq.switchAccount",
+            command: brandText("hq.switchAccount"),
             title: COPY.pickAccount,
             arguments: [node.ref]
           };
@@ -18714,21 +19090,21 @@ var AccountTree = class {
         return item;
       }
       case "devices": {
-        const item = new vscode14.TreeItem(COPY.manageDevices);
-        item.iconPath = new vscode14.ThemeIcon("link-external");
+        const item = new vscode15.TreeItem(COPY.manageDevices);
+        item.iconPath = new vscode15.ThemeIcon("link-external");
         item.tooltip = COPY.manageDevicesBrowserNote(cleanLabel(node.email));
-        item.command = { command: "hq.manageDevices", title: COPY.manageDevices };
+        item.command = { command: brandText("hq.manageDevices"), title: COPY.manageDevices };
         return item;
       }
       case "addAccount": {
-        const item = new vscode14.TreeItem(COPY.addAnotherAccount);
-        item.iconPath = new vscode14.ThemeIcon("add");
-        item.command = { command: "hq.addAccount", title: COPY.addAnotherAccount };
+        const item = new vscode15.TreeItem(COPY.addAnotherAccount);
+        item.iconPath = new vscode15.ThemeIcon("add");
+        item.command = { command: brandText("hq.addAccount"), title: COPY.addAnotherAccount };
         return item;
       }
       case "host": {
-        const item = new vscode14.TreeItem(COPY.accountHost(this.accounts.host() ?? ""));
-        item.iconPath = new vscode14.ThemeIcon("globe");
+        const item = new vscode15.TreeItem(COPY.accountHost(this.accounts.host() ?? ""));
+        item.iconPath = new vscode15.ThemeIcon("globe");
         return item;
       }
     }
@@ -18739,7 +19115,7 @@ var AccountTree = class {
 };
 
 // src/tree/teams-tree.ts
-var vscode15 = __toESM(require("vscode"), 1);
+var vscode16 = __toESM(require("vscode"), 1);
 function tagOfNode(node) {
   return accountTag(node.account.host, node.account.userId);
 }
@@ -18751,7 +19127,7 @@ var TeamsTree = class {
     accounts.onAccountRemoved(() => this.sessions.clear());
   }
   accounts;
-  changed = new vscode15.EventEmitter();
+  changed = new vscode16.EventEmitter();
   onDidChangeTreeData = this.changed.event;
   sessions = /* @__PURE__ */ new Map();
   /** Teams a wake is in flight for (the row shows a spinner). */
@@ -18815,43 +19191,43 @@ var TeamsTree = class {
   getTreeItem(node) {
     switch (node.kind) {
       case "org": {
-        const item = new vscode15.TreeItem(
+        const item = new vscode16.TreeItem(
           cleanLabel(node.org.name) || node.org.slug,
-          vscode15.TreeItemCollapsibleState.Expanded
+          vscode16.TreeItemCollapsibleState.Expanded
         );
         item.contextValue = "org";
-        item.iconPath = new vscode15.ThemeIcon("organization");
+        item.iconPath = new vscode16.ThemeIcon("organization");
         return item;
       }
       case "team": {
         const t = node.team;
-        const item = new vscode15.TreeItem(
+        const item = new vscode16.TreeItem(
           cleanLabel(t.workspace.name) || t.alias,
-          vscode15.TreeItemCollapsibleState.Collapsed
+          vscode16.TreeItemCollapsibleState.Collapsed
         );
         item.id = `${tagOfNode(node)}:team:${t.workspace.id}`;
         item.description = teamDescription(t);
         item.contextValue = teamContextValue(t);
         const state = this.waking.has(t.workspace.id) ? "starting" : teamState(t.workspace);
-        item.iconPath = state === "running" ? new vscode15.ThemeIcon("circle-filled", new vscode15.ThemeColor("testing.iconPassed")) : state === "starting" ? new vscode15.ThemeIcon("sync~spin") : new vscode15.ThemeIcon("circle-outline");
+        item.iconPath = state === "running" ? new vscode16.ThemeIcon("circle-filled", new vscode16.ThemeColor("testing.iconPassed")) : state === "starting" ? new vscode16.ThemeIcon("sync~spin") : new vscode16.ThemeIcon("circle-outline");
         item.tooltip = needsUpdate(t) ? COPY.updateNeededLong(cleanLabel(t.workspace.name)) : state === "off" ? COPY.teamOffTooltip(cleanLabel(t.workspace.name)) : cleanLabel(t.workspace.name);
         return item;
       }
       case "session": {
-        const item = new vscode15.TreeItem(sessionLabel(node.session));
+        const item = new vscode16.TreeItem(sessionLabel(node.session));
         item.id = `${tagOfNode(node)}:session:${node.session.id}`;
         item.description = sessionDescription(node.session);
         item.contextValue = sessionContextValue(node.session);
-        item.iconPath = new vscode15.ThemeIcon(node.session.canType ? "terminal" : "eye");
+        item.iconPath = new vscode16.ThemeIcon(node.session.canType ? "terminal" : "eye");
         item.command = {
-          command: "hq.attachSession",
+          command: brandText("hq.attachSession"),
           title: "Attach",
           arguments: [node]
         };
         return item;
       }
       case "message": {
-        const item = new vscode15.TreeItem(node.text);
+        const item = new vscode16.TreeItem(node.text);
         item.contextValue = "message";
         return item;
       }
@@ -18863,7 +19239,7 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.2.3".length > 0 ? "0.2.3" : "0.0.0-dev";
+var EXTENSION_VERSION = "0.4.0".length > 0 ? "0.4.0" : "0.0.0-dev";
 
 // src/extension.ts
 function vscodeUi() {
@@ -18873,9 +19249,9 @@ function vscodeUi() {
     showDeviceCode: (code, onCancel) => {
       let close = () => void 0;
       const ended = new Promise((r) => close = r);
-      void vscode16.window.withProgress(
+      void vscode17.window.withProgress(
         {
-          location: vscode16.ProgressLocation.Notification,
+          location: vscode17.ProgressLocation.Notification,
           title: notificationText(COPY.deviceCode(code)),
           cancellable: true
         },
@@ -18886,17 +19262,17 @@ function vscodeUi() {
       );
       return { close };
     },
-    openExternal: async (url) => vscode16.env.openExternal(vscode16.Uri.parse(url)),
-    copyToClipboard: async (text) => vscode16.env.clipboard.writeText(text),
-    info: (message) => void vscode16.window.showInformationMessage(message),
-    askToSignIn: async (_ref, message, modal) => await (modal ? vscode16.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode16.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
-    modal: (message) => void vscode16.window.showErrorMessage(message, { modal: true }),
-    offerSignInHere: async (message) => await vscode16.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction,
-    confirm: async (message, action) => await vscode16.window.showWarningMessage(message, { modal: true }, action) === action
+    openExternal: async (url) => vscode17.env.openExternal(vscode17.Uri.parse(url)),
+    copyToClipboard: async (text) => vscode17.env.clipboard.writeText(text),
+    info: (message) => void vscode17.window.showInformationMessage(message),
+    askToSignIn: async (_ref, message, modal) => await (modal ? vscode17.window.showWarningMessage(message, { modal: true }, COPY.signInAction) : vscode17.window.showWarningMessage(message, COPY.signInAction)) === COPY.signInAction,
+    modal: (message) => void vscode17.window.showErrorMessage(message, { modal: true }),
+    offerSignInHere: async (message) => await vscode17.window.showInformationMessage(message, COPY.signInHereAction) === COPY.signInHereAction,
+    confirm: async (message, action) => await vscode17.window.showWarningMessage(message, { modal: true }, action) === action
   };
 }
 function hostSetting() {
-  const config = vscode16.workspace.getConfiguration("hq");
+  const config = vscode17.workspace.getConfiguration(ACTIVE_DEV_BRAND.vscode.idPrefix);
   const host = config.inspect("host");
   const allowed = config.inspect("allowedHosts");
   return resolveHqHost(host?.globalValue ?? host?.defaultValue, allowed?.globalValue ?? []);
@@ -18915,7 +19291,7 @@ async function pickTeam(b, node, filter = () => true) {
     teams = b.service.teams().filter(filter);
   }
   if (teams.length === 1) return teams[0];
-  const picked = await vscode16.window.showQuickPick(
+  const picked = await vscode17.window.showQuickPick(
     teams.map((t) => ({
       label: cleanLabel(t.workspace.name) || t.alias,
       description: `${cleanLabel(t.org.name)} \xB7 ${teamState(t.workspace) === "running" ? COPY.stateRunning : teamState(t.workspace) === "starting" ? COPY.stateStarting : COPY.stateOff}`,
@@ -18927,20 +19303,20 @@ async function pickTeam(b, node, filter = () => true) {
 }
 async function showWakeNotice(n, node) {
   const labels = n.actions.map(
-    (a) => a === "newSession" ? COPY.startSessionAction : COPY.openInHqAction
+    (a) => a === "newSession" ? COPY.startSessionAction : COPY.openInAppAction
   );
-  const choice = n.level === "info" ? await vscode16.window.showInformationMessage(n.message, ...labels) : n.level === "warning" ? await vscode16.window.showWarningMessage(n.message, ...labels) : await vscode16.window.showErrorMessage(n.message, ...labels);
+  const choice = n.level === "info" ? await vscode17.window.showInformationMessage(n.message, ...labels) : n.level === "warning" ? await vscode17.window.showWarningMessage(n.message, ...labels) : await vscode17.window.showErrorMessage(n.message, ...labels);
   if (choice === COPY.startSessionAction) {
-    await vscode16.commands.executeCommand("hq.newSessionTerminal", node);
-  } else if (choice === COPY.openInHqAction) {
-    await vscode16.commands.executeCommand("hq.openInHqWeb", node);
+    await vscode17.commands.executeCommand(brandText("hq.newSessionTerminal"), node);
+  } else if (choice === COPY.openInAppAction) {
+    await vscode17.commands.executeCommand(brandText("hq.openInHqWeb"), node);
   }
 }
 function activate(context) {
-  const channel = vscode16.window.createOutputChannel("AI Workforce One HQ", { log: true });
+  const channel = vscode17.window.createOutputChannel(ACTIVE_DEV_BRAND.displayName, { log: true });
   context.subscriptions.push(channel);
   const log = redactingLog(channel);
-  log.info(`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode16.env.appName}`);
+  log.info(copy`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode17.env.appName}`);
   const store = new SessionStore(context.secrets, context.globalState);
   const ui = vscodeUi();
   const teamIssues = new HqTeamIssues({ host: () => accounts.host() });
@@ -18949,7 +19325,7 @@ function activate(context) {
   const fsHooks = (b) => ({
     onRefused: (org) => {
       const name = b.service.teams().find((t) => t.org.slug === org)?.org.name ?? org;
-      void vscode16.window.showWarningMessage(COPY.fsEventsRefused(cleanLabel(name) || org));
+      void vscode17.window.showWarningMessage(COPY.fsEventsRefused(cleanLabel(name) || org));
     },
     ui: {
       // Its Wake Team link runs as the folder's OWN account, whichever is active (MA-S19).
@@ -18964,12 +19340,12 @@ function activate(context) {
         if (maskedSaid.has(k)) return;
         maskedSaid.add(k);
         const file = cleanLabel(path5.split("/").pop() ?? path5) || path5;
-        void vscode16.window.showInformationMessage(notificationText(COPY.fsMaskedFile(file, names)));
+        void vscode17.window.showInformationMessage(notificationText(COPY.fsMaskedFile(file, names)));
       },
       teamIssue: (team, issue) => teamIssues.onIssue(b.tag, (t) => rootsFor(b, t, accounts.isLegacyUser(b)), team, issue),
       // 0.2.2 review S2: only files open in an editor are re-read when the team's secrets change.
       openState: (team, path5) => {
-        const doc = vscode16.workspace.textDocuments.find((d) => {
+        const doc = vscode17.workspace.textDocuments.find((d) => {
           if (d.uri.scheme !== HQ_SCHEME || d.uri.path !== `/${team.alias}/${path5}`) return false;
           const r = accounts.resolveAuthority(d.uri.authority);
           return r.kind === "ok" && r.bundle.tag === b.tag && r.orgSlug === team.org.slug;
@@ -18979,7 +19355,7 @@ function activate(context) {
       },
       maskedWhileDirty: (_team, path5) => {
         const file = cleanLabel(path5.split("/").pop() ?? path5) || path5;
-        void vscode16.window.showWarningMessage(notificationText(COPY.fsMaskedWhileEditing(file)));
+        void vscode17.window.showWarningMessage(notificationText(COPY.fsMaskedWhileEditing(file)));
       }
     }
   });
@@ -18988,11 +19364,11 @@ function activate(context) {
     ui,
     host: hostSetting,
     extensionVersion: EXTENSION_VERSION,
-    appName: vscode16.env.appName,
+    appName: vscode17.env.appName,
     windowState: context.workspaceState,
     log,
-    windowFocused: () => vscode16.window.state.focused,
-    firstFolderAuthority: () => (vscode16.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === HQ_SCHEME)?.uri.authority,
+    windowFocused: () => vscode17.window.state.focused,
+    firstFolderAuthority: () => (vscode17.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === HQ_SCHEME)?.uri.authority,
     fsHooks
   });
   const c = { accounts, onAccountMissing: (ref) => accountMissing(ref) };
@@ -19004,7 +19380,25 @@ function activate(context) {
     sayUnavailable({ key: tag, email: t?.email ?? null, tag, userId: ref.userId });
   };
   const teamsTree = new TeamsTree(accounts);
-  const teamsView = vscode16.window.createTreeView("hq.teams", { treeDataProvider: teamsTree });
+  const sessionLifecycle = async (node, action) => {
+    if (node?.kind !== "session") return;
+    const service = accounts.get(node.account)?.service;
+    if (!service) return;
+    await runSessionLifecycle(
+      {
+        call: (fn) => service.call(fn),
+        refresh: () => {
+          teamsTree.refresh();
+          void service.refreshOrgs().catch(() => void 0);
+        }
+      },
+      { team: node.team, session: node.session },
+      action
+    );
+  };
+  const teamsView = vscode17.window.createTreeView(brandText("hq.teams"), {
+    treeDataProvider: teamsTree
+  });
   const accountTree = new AccountTree(accounts);
   const ports = new Ports({
     accounts,
@@ -19023,14 +19417,14 @@ function activate(context) {
     // 0.2.2 live FAIL 2: this window's HQ tabs, so a restarted extension host can replace them.
     memento: context.workspaceState
   });
-  terminals.adoptOrphans(vscode16.window.terminals);
+  terminals.adoptOrphans(vscode17.window.terminals);
   context.subscriptions.push(
     registerTerminalPaste({
       accounts,
       terminals,
       // The extension runs on the local UI host (extensionKind "ui"); were it ever in a remote
       // extension host, the clipboard it can read would not be this computer's.
-      remoteHost: () => vscode16.env.remoteName !== void 0 && context.extension.extensionKind === vscode16.ExtensionKind.Workspace,
+      remoteHost: () => vscode17.env.remoteName !== void 0 && context.extension.extensionKind === vscode17.ExtensionKind.Workspace,
       log
     })
   );
@@ -19065,20 +19459,24 @@ function activate(context) {
     );
   };
   void warnIfKeyringMissing({
-    missing: () => keyringMissingHere(vscode16.env.appName),
+    missing: () => keyringMissingHere(vscode17.env.appName),
     memento: context.globalState,
-    warn: (message) => void vscode16.window.showWarningMessage(message)
+    warn: (message) => void vscode17.window.showWarningMessage(message)
   });
   const setContext = () => {
     const active = accounts.active();
     teamsView.description = active ? cleanLabel(active.email) : "";
-    void vscode16.commands.executeCommand("setContext", "hq.signedIn", active !== null);
-    void vscode16.commands.executeCommand(
+    void vscode17.commands.executeCommand("setContext", brandText("hq.signedIn"), active !== null);
+    void vscode17.commands.executeCommand(
       "setContext",
-      "hq.hasOrgs",
+      brandText("hq.hasOrgs"),
       (active?.service.teams().length ?? 0) > 0
     );
-    void vscode16.commands.executeCommand("setContext", "hq.accountCount", accounts.count());
+    void vscode17.commands.executeCommand(
+      "setContext",
+      brandText("hq.accountCount"),
+      accounts.count()
+    );
   };
   setContext();
   const labelMode = () => accounts.list().map((b) => accounts.shortLabel(b.ref) ?? "").join("|");
@@ -19104,18 +19502,18 @@ function activate(context) {
     accountTree,
     fsProvider,
     teamIssues,
-    vscode16.authentication.registerAuthenticationProvider(
+    vscode17.authentication.registerAuthenticationProvider(
       AUTH_PROVIDER_ID,
       AUTH_PROVIDER_LABEL,
       auth,
       { supportsMultipleAccounts: true }
     ),
-    vscode16.window.registerTreeDataProvider("hq.ports", ports),
-    vscode16.window.registerTreeDataProvider("hq.account", accountTree),
-    vscode16.window.registerTreeDataProvider("hq.search", searchView),
-    vscode16.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
-    vscode16.window.registerFileDecorationProvider(teamIssues),
-    vscode16.window.registerFileDecorationProvider(
+    vscode17.window.registerTreeDataProvider(brandText("hq.ports"), ports),
+    vscode17.window.registerTreeDataProvider(brandText("hq.account"), accountTree),
+    vscode17.window.registerTreeDataProvider(brandText("hq.search"), searchView),
+    vscode17.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
+    vscode17.window.registerFileDecorationProvider(teamIssues),
+    vscode17.window.registerFileDecorationProvider(
       new UnopenableNames((authority) => {
         const r = accounts.resolveAuthority(authority);
         return r.kind === "ok" ? { core: r.bundle.core, orgSlug: r.orgSlug } : null;
@@ -19149,71 +19547,74 @@ function activate(context) {
     accounts.onAccountRenewed((ref) => accounts.get(ref)?.events.reconnectAll()),
     { dispose: () => renameTimer && clearTimeout(renameTimer) },
     // Decision 23: another window may have added, signed out or renewed an account.
-    vscode16.window.onDidChangeWindowState((s) => {
+    vscode17.window.onDidChangeWindowState((s) => {
       if (s.focused) accounts.rederive("focus");
     }),
-    vscode16.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("hq.host") || e.affectsConfiguration("hq.allowedHosts")) {
+    vscode17.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(brandText("hq.host")) || e.affectsConfiguration(brandText("hq.allowedHosts"))) {
         accounts.rederive("host");
         setContext();
         const verdict = hostSetting();
-        if (!verdict.ok) void vscode16.window.showErrorMessage(COPY.hostNotAllowed(verdict.host));
+        if (!verdict.ok) void vscode17.window.showErrorMessage(COPY.hostNotAllowed(verdict.host));
         else if (accounts.count() === 0)
-          void vscode16.window.showInformationMessage(COPY.hostChanged);
+          void vscode17.window.showInformationMessage(COPY.hostChanged);
       }
     }),
     store,
     { dispose: () => accounts.dispose() },
     // ── accounts ───────────────────────────────────────────────────────────────────────────────
-    vscode16.commands.registerCommand("hq.signIn", async () => {
+    vscode17.commands.registerCommand(brandText("hq.signIn"), async () => {
       if (accounts.count() === 0) return (await accounts.signIn({ kind: "first" })).outcome;
       await switchAccount(c);
       return "busy";
     }),
-    vscode16.commands.registerCommand("hq.signOut", async () => {
+    vscode17.commands.registerCommand(brandText("hq.signOut"), async () => {
       const active = accounts.active();
       if (active) await accounts.signOut(active.ref, { confirm: true });
       else await signOutAccount(c);
     }),
-    vscode16.commands.registerCommand(
-      "hq.addAccount",
+    vscode17.commands.registerCommand(
+      brandText("hq.addAccount"),
       async () => accounts.count() === 0 ? (await accounts.signIn({ kind: "first" })).outcome : (await accounts.signIn({ kind: "add" })).outcome
     ),
-    vscode16.commands.registerCommand(
-      "hq.switchAccount",
+    vscode17.commands.registerCommand(
+      brandText("hq.switchAccount"),
       (ref) => switchAccount(c, ref && "userId" in ref ? ref : void 0)
     ),
-    vscode16.commands.registerCommand(
-      "hq.signOutAccount",
+    vscode17.commands.registerCommand(
+      brandText("hq.signOutAccount"),
       (arg) => signOutAccount(c, arg && "ref" in arg ? arg.ref : arg)
     ),
     // The notice's "Sign in as <email>" link (account-notices.ts). Renews a listed account.
-    vscode16.commands.registerCommand("hq.signInAs", async (tag, userId) => {
-      if (typeof tag === "string" && typeof userId === "string") {
-        await accounts.signInAs(tag, userId);
+    vscode17.commands.registerCommand(
+      brandText("hq.signInAs"),
+      async (tag, userId) => {
+        if (typeof tag === "string" && typeof userId === "string") {
+          await accounts.signInAs(tag, userId);
+        }
       }
-    }),
-    vscode16.commands.registerCommand("hq.renewAccount", async (ref) => {
+    ),
+    vscode17.commands.registerCommand(brandText("hq.renewAccount"), async (ref) => {
       if (ref) await accounts.signIn({ kind: "renew", ref });
     }),
-    vscode16.commands.registerCommand("hq.accounts.primaryAction", () => primaryAction(c)),
+    vscode17.commands.registerCommand(brandText("hq.accounts.primaryAction"), () => primaryAction(c)),
     // ── teams ──────────────────────────────────────────────────────────────────────────────────
-    vscode16.commands.registerCommand("hq.refresh", async () => {
+    vscode17.commands.registerCommand(brandText("hq.refresh"), async () => {
       teamsTree.refresh();
       const b = await requireAccount(c);
       await b?.service.refreshOrgs().catch(() => void 0);
     }),
-    vscode16.commands.registerCommand("hq.manageDevices", () => {
+    vscode17.commands.registerCommand(brandText("hq.manageDevices"), () => {
       const host = accounts.host();
-      if (host) void vscode16.env.openExternal(vscode16.Uri.parse(`${host}/account/devices`));
+      if (host) void vscode17.env.openExternal(vscode17.Uri.parse(`${host}/account/devices`));
     }),
-    vscode16.commands.registerCommand("hq.openInHqWeb", (node) => {
+    vscode17.commands.registerCommand(brandText("hq.openInHqWeb"), (node) => {
       const host = accounts.host();
       if (!host || !node || node.kind === "org") return;
       const url = node.kind === "session" ? webUrl(host, { workspaceId: node.team.workspace.id, sessionId: node.session.id }) : webUrl(host, { workspaceId: node.team.workspace.id });
-      void vscode16.env.openExternal(vscode16.Uri.parse(url));
+      void vscode17.env.openExternal(vscode17.Uri.parse(url));
     }),
-    vscode16.commands.registerCommand("hq.wakeTeam", async (node) => {
+    vscode17.commands.registerCommand(brandText("hq.wakeTeam"), async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => teamState(t.workspace) !== "running");
@@ -19222,17 +19623,17 @@ function activate(context) {
       teamsTree.setWaking(team.workspace.id, true);
       b.core.expectUp(team, { force: true });
       try {
-        const outcome = await vscode16.window.withProgress(
+        const outcome = await vscode17.window.withProgress(
           {
-            location: vscode16.ProgressLocation.Notification,
-            title: notificationText(COPY.waking(name))
+            location: vscode17.ProgressLocation.Notification,
+            title: notificationText(COPY.waking(name, team.workspace.wakeEstimate))
           },
           (progress2) => b.service.call(
             (client) => wakeTeam(client, team, {
               now: Date.now,
               sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
               report: (message) => progress2.report({
-                message: message === COPY.waking(name) ? "" : notificationText(message)
+                message: message === COPY.waking(name, team.workspace.wakeEstimate) ? "" : notificationText(message)
               })
             })
           )
@@ -19250,14 +19651,14 @@ function activate(context) {
       }
     }),
     // The off notice's "Wake Team" link (team-off-notices.ts): [tag, workspaceId], validated.
-    vscode16.commands.registerCommand(
-      "hq.wakeTeamOf",
+    vscode17.commands.registerCommand(
+      brandText("hq.wakeTeamOf"),
       async (tag, workspaceId) => {
         if (!isTag(tag) || typeof workspaceId !== "string") return;
         const b = accounts.byTag(tag);
         const team = b?.service.teams().find((t) => t.workspace.id === workspaceId);
         if (b && team) {
-          await vscode16.commands.executeCommand("hq.wakeTeam", {
+          await vscode17.commands.executeCommand(brandText("hq.wakeTeam"), {
             kind: "team",
             account: b.ref,
             team
@@ -19265,7 +19666,7 @@ function activate(context) {
         }
       }
     ),
-    vscode16.commands.registerCommand("hq.attachSession", async (node) => {
+    vscode17.commands.registerCommand(brandText("hq.attachSession"), async (node) => {
       if (node?.kind === "session") {
         terminals.attach({ account: node.account, team: node.team, session: node.session });
         return;
@@ -19276,7 +19677,7 @@ function activate(context) {
       if (!team) return;
       teamsTree.refresh();
       const sessions = await teamsTree.getChildren({ kind: "team", account: b.ref, team }) ?? [];
-      const picked = await vscode16.window.showQuickPick(
+      const picked = await vscode17.window.showQuickPick(
         sessions.filter((n) => n.kind === "session").map((n) => ({
           label: cleanLabel(n.session.name),
           description: cleanLabel(n.session.ownerName),
@@ -19292,16 +19693,33 @@ function activate(context) {
         });
       }
     }),
-    vscode16.commands.registerCommand("hq.newSessionTerminal", async (node) => {
-      const b = await requireAccount(c, nodeAccount(node));
-      if (!b) return;
-      const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
-      if (!team) return;
-      await terminals.newSession(b.ref, team);
-      teamsTree.refresh();
-    }),
+    // cli-session-lifecycle: Start, Stop and Restart on a session row, as the account that listed
+    // it. The row's contextValue decides where they show (package.json); refusals are notifications.
+    vscode17.commands.registerCommand(
+      brandText("hq.startSession"),
+      (node) => sessionLifecycle(node, "start")
+    ),
+    vscode17.commands.registerCommand(
+      brandText("hq.stopSession"),
+      (node) => sessionLifecycle(node, "stop")
+    ),
+    vscode17.commands.registerCommand(
+      brandText("hq.restartSession"),
+      (node) => sessionLifecycle(node, "restart")
+    ),
+    vscode17.commands.registerCommand(
+      brandText("hq.newSessionTerminal"),
+      async (node) => {
+        const b = await requireAccount(c, nodeAccount(node));
+        if (!b) return;
+        const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
+        if (!team) return;
+        await terminals.newSession(b.ref, team);
+        teamsTree.refresh();
+      }
+    ),
     // ── ports ──────────────────────────────────────────────────────────────────────────────────
-    vscode16.commands.registerCommand("hq.forwardPort", async (node) => {
+    vscode17.commands.registerCommand(brandText("hq.forwardPort"), async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
@@ -19309,54 +19727,63 @@ function activate(context) {
       const chosen = await askForPorts();
       if (chosen) await ports.start(b.ref, team, chosen.remote, chosen.local);
     }),
-    vscode16.commands.registerCommand("hq.ports.open", (entry) => {
+    vscode17.commands.registerCommand(brandText("hq.ports.open"), (entry) => {
       const url = ports.localUrl(entry);
-      if (url) void vscode16.env.openExternal(vscode16.Uri.parse(url));
+      if (url) void vscode17.env.openExternal(vscode17.Uri.parse(url));
     }),
-    vscode16.commands.registerCommand("hq.ports.copy", async (entry) => {
+    vscode17.commands.registerCommand(brandText("hq.ports.copy"), async (entry) => {
       const url = ports.localUrl(entry);
       if (!url) return;
-      await vscode16.env.clipboard.writeText(url);
-      void vscode16.window.setStatusBarMessage(COPY.addressCopied(url), 3e3);
+      await vscode17.env.clipboard.writeText(url);
+      void vscode17.window.setStatusBarMessage(COPY.addressCopied(url), 3e3);
     }),
-    vscode16.commands.registerCommand("hq.ports.stop", (entry) => ports.stop(entry)),
-    vscode16.commands.registerCommand("hq.ports.resume", (entry) => ports.resume(entry)),
-    vscode16.commands.registerCommand("hq.ports.forwardDetected", async (entry) => {
-      if (entry.kind === "detected") {
-        await ports.start(entry.account, entry.team, entry.port, entry.port);
+    vscode17.commands.registerCommand(
+      brandText("hq.ports.stop"),
+      (entry) => ports.stop(entry)
+    ),
+    vscode17.commands.registerCommand(
+      brandText("hq.ports.resume"),
+      (entry) => ports.resume(entry)
+    ),
+    vscode17.commands.registerCommand(
+      brandText("hq.ports.forwardDetected"),
+      async (entry) => {
+        if (entry.kind === "detected") {
+          await ports.start(entry.account, entry.team, entry.port, entry.port);
+        }
       }
-    }),
-    vscode16.commands.registerCommand(
-      "hq.ports.dismissDetected",
+    ),
+    vscode17.commands.registerCommand(
+      brandText("hq.ports.dismissDetected"),
       (entry) => ports.dismiss(entry)
     ),
     // ── team files ─────────────────────────────────────────────────────────────────────────────
-    vscode16.commands.registerCommand("hq.openTeamFiles", async (node) => {
+    vscode17.commands.registerCommand(brandText("hq.openTeamFiles"), async (node) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.files?.read === true);
       if (!team) return;
       const open = openFolderOf(b, team, accounts.isLegacyUser(b));
       if (open) {
-        void vscode16.commands.executeCommand("revealInExplorer", open.uri);
+        void vscode17.commands.executeCommand("revealInExplorer", open.uri);
         return;
       }
-      const folders = vscode16.workspace.workspaceFolders ?? [];
-      vscode16.workspace.updateWorkspaceFolders(folders.length, 0, {
+      const folders = vscode17.workspace.workspaceFolders ?? [];
+      vscode17.workspace.updateWorkspaceFolders(folders.length, 0, {
         uri: teamRootUri(b.ref, team),
         name: teamFolderName(team, accounts.shortLabel(b.ref))
       });
     }),
-    vscode16.commands.registerCommand("hq.searchTeamFiles", async (node) => {
-      const active = vscode16.window.activeTextEditor?.document.uri;
+    vscode17.commands.registerCommand(brandText("hq.searchTeamFiles"), async (node) => {
+      const active = vscode17.window.activeTextEditor?.document.uri;
       let b = null;
       let team;
       if (!node && active?.scheme === HQ_SCHEME) {
         const r = accounts.resolveAuthority(active.authority);
         if (r.kind === "ok") {
           b = r.bundle;
-          const alias = relPathOf(active).alias;
-          team = b.service.teams().find((t) => t.org.slug === r.orgSlug && t.alias === alias);
+          const alias2 = relPathOf(active).alias;
+          team = b.service.teams().find((t) => t.org.slug === r.orgSlug && t.alias === alias2);
         }
       }
       if (!b || !team) {
@@ -19366,10 +19793,10 @@ function activate(context) {
       }
       if (!team) return;
       const bundle = b;
-      const query = await vscode16.window.showInputBox({ prompt: COPY.searchPrompt });
+      const query = await vscode17.window.showInputBox({ prompt: COPY.searchPrompt });
       if (!query) return;
       const canRegex = team.workspace.rights.files?.write === true;
-      const options = await vscode16.window.showQuickPick(
+      const options = await vscode17.window.showQuickPick(
         [...canRegex ? [COPY.searchRegex] : [], COPY.searchCase, COPY.searchWord].map(
           (label) => ({ label })
         ),
@@ -19377,8 +19804,8 @@ function activate(context) {
       );
       if (options === void 0) return;
       const picked = new Set(options.map((o) => o.label));
-      const include = parseGlobs(await vscode16.window.showInputBox({ prompt: COPY.searchInclude }));
-      const exclude = parseGlobs(await vscode16.window.showInputBox({ prompt: COPY.searchExclude }));
+      const include = parseGlobs(await vscode17.window.showInputBox({ prompt: COPY.searchInclude }));
+      const exclude = parseGlobs(await vscode17.window.showInputBox({ prompt: COPY.searchExclude }));
       const req = {
         query,
         isRegex: picked.has(COPY.searchRegex),
@@ -19389,8 +19816,8 @@ function activate(context) {
       };
       const searchTeam = team;
       try {
-        const res = await vscode16.window.withProgress(
-          { location: vscode16.ProgressLocation.Notification, title: COPY.searchTitle },
+        const res = await vscode17.window.withProgress(
+          { location: vscode17.ProgressLocation.Notification, title: COPY.searchTitle },
           () => bundle.fsApi.search(searchTeam, req)
         );
         searchView.show(
@@ -19399,15 +19826,15 @@ function activate(context) {
             (t, p) => bundle.core.shownPath(t, p)
           )
         );
-        void vscode16.commands.executeCommand("setContext", "hq.hasSearch", true);
-        void vscode16.commands.executeCommand("hq.search.focus");
+        void vscode17.commands.executeCommand("setContext", brandText("hq.hasSearch"), true);
+        void vscode17.commands.executeCommand(brandText("hq.search.focus"));
       } catch (err) {
         void bundle.service.handleError(err);
         const detail = err instanceof FsApiError || err instanceof Error ? err.message : COPY.unreachable;
-        void vscode16.window.showErrorMessage(COPY.searchFailed(detail));
+        void vscode17.window.showErrorMessage(COPY.searchFailed(detail));
       }
     }),
-    vscode16.commands.registerCommand("hq.search.open", (node) => {
+    vscode17.commands.registerCommand(brandText("hq.search.open"), (node) => {
       const b = node.kind === "summary" ? null : accounts.get(node.account);
       if (node.kind !== "summary" && !b) accountMissing(node.account);
       return openMatch(

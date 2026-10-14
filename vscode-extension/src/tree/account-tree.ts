@@ -13,6 +13,7 @@ import { COPY } from '../copy.js';
 import type { AccountRef } from '../hq/account-ref.js';
 import type { AccountBundle, HqAccounts } from '../hq/accounts.js';
 import { cleanLabel } from '../util/text.js';
+import { brandText } from '@kpa/shared/active-dev-brand';
 
 export type AccountNode =
   | { kind: 'account'; ref: AccountRef; email: string }
@@ -63,7 +64,7 @@ export class AccountTree implements vscode.TreeDataProvider<AccountNode> {
         if (b?.health === 'needs-sign-in') {
           item.description = COPY.needsSignInDescription;
           item.command = {
-            command: 'hq.renewAccount',
+            command: brandText('hq.renewAccount'),
             title: COPY.needsSignInDescription,
             arguments: [node.ref],
           };
@@ -73,7 +74,7 @@ export class AccountTree implements vscode.TreeDataProvider<AccountNode> {
           // Clicking another account's row makes it this window's (MA-U9). The active row does
           // nothing: it must not pretend to.
           item.command = {
-            command: 'hq.switchAccount',
+            command: brandText('hq.switchAccount'),
             title: COPY.pickAccount,
             arguments: [node.ref],
           };
@@ -84,13 +85,13 @@ export class AccountTree implements vscode.TreeDataProvider<AccountNode> {
         const item = new vscode.TreeItem(COPY.manageDevices);
         item.iconPath = new vscode.ThemeIcon('link-external');
         item.tooltip = COPY.manageDevicesBrowserNote(cleanLabel(node.email));
-        item.command = { command: 'hq.manageDevices', title: COPY.manageDevices };
+        item.command = { command: brandText('hq.manageDevices'), title: COPY.manageDevices };
         return item;
       }
       case 'addAccount': {
         const item = new vscode.TreeItem(COPY.addAnotherAccount);
         item.iconPath = new vscode.ThemeIcon('add');
-        item.command = { command: 'hq.addAccount', title: COPY.addAnotherAccount };
+        item.command = { command: brandText('hq.addAccount'), title: COPY.addAnotherAccount };
         return item;
       }
       case 'host': {

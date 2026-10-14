@@ -151,11 +151,91 @@ describe('tree labels (D3, U4)', () => {
       canType: false,
       ownerIsMe: false,
       engine: 'codex',
+      canOperate: false,
     };
     expect(sessionDescription(mine)).toBe('you');
-    expect(sessionContextValue(mine)).toBe('session:type');
+    expect(sessionContextValue(mine)).toBe('session:type:running:op');
     expect(sessionDescription(theirs)).toBe('Maya · view only · Codex');
-    expect(sessionContextValue(theirs)).toBe('session:view');
+    expect(sessionContextValue(theirs)).toBe('session:view:running:noop');
+  });
+
+  it('train 98 e2e: a session HQ is still starting reads "starting", never running; an older HQ reads as before', () => {
+    const base: RemoteSessionSummary = {
+      id: 's1',
+      name: 'fix login bug',
+      ownerName: 'Jean',
+      status: 'running',
+      canType: true,
+      ownerIsMe: true,
+      canOperate: true,
+    };
+    expect(sessionDescription({ ...base, starting: true })).toBe('you · starting');
+    expect(sessionDescription({ ...base, canType: false, starting: true, engine: 'codex' })).toBe(
+      'you · starting · view only · Codex',
+    );
+    // An older HQ never sends the field: the row is what it was.
+    expect(sessionDescription(base)).toBe('you');
+    // HQ keeps `status: 'running'` while starting, so Stop and Restart stay on the row (HQ decides).
+    expect(sessionContextValue({ ...base, starting: true })).toBe('session:type:running:op');
+  });
+
+  it('cli-session-lifecycle: the session contextValue carries its state and whether you may operate it', () => {
+    const base: RemoteSessionSummary = {
+      id: 's1',
+      name: 'n',
+      ownerName: 'Jean',
+      status: 'stopped',
+      canType: true,
+      canOperate: true,
+    };
+    expect(sessionContextValue(base)).toBe('session:type:stopped:op');
+    expect(sessionContextValue({ ...base, status: 'idle' })).toBe('session:type:idle:op');
+    // An older HQ does not say: offer the actions and let HQ answer.
+    const { canOperate: _omitted, ...older } = base;
+    expect(sessionContextValue(older)).toBe('session:type:stopped:op');
+    expect(sessionContextValue({ ...base, canType: false, canOperate: false })).toBe(
+      'session:view:stopped:noop',
+    );
+  });
+
+  it('cli-session-lifecycle: package.json shows Start only on a stopped session, Stop and Restart only on a live one, and none without operate', () => {
+    const pkg = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    ) as {
+      contributes: {
+        commands: Array<{ command: string; icon?: string }>;
+        menus: Record<string, Array<{ command: string; when?: string; group?: string }>>;
+      };
+    };
+    const ids = ['hq.startSession', 'hq.stopSession', 'hq.restartSession'];
+    for (const id of ids) {
+      expect(pkg.contributes.commands.find((c) => c.command === id)?.icon, id).toBeDefined();
+      // Tree-only: each needs the row it acts on.
+      expect(pkg.contributes.menus.commandPalette!.find((m) => m.command === id)?.when, id).toBe(
+        'false',
+      );
+    }
+    const whenOf = (id: string, inline: boolean) =>
+      pkg.contributes.menus['view/item/context']!.filter(
+        (m) => m.command === id && (m.group === 'inline') === inline,
+      ).map((m) => m.when!);
+    const shown = (id: string, ctx: string) =>
+      [true, false].map((inline) =>
+        whenOf(id, inline).some((w) => {
+          const re = /viewItem =~ \/(.+)\/$/.exec(w)![1]!;
+          return w.startsWith('view == hq.teams && ') && new RegExp(re).test(ctx);
+        }),
+      );
+    // Inline AND in the context menu, both by the same rule.
+    expect(shown('hq.startSession', 'session:type:stopped:op')).toEqual([true, true]);
+    expect(shown('hq.startSession', 'session:type:running:op')).toEqual([false, false]);
+    expect(shown('hq.startSession', 'session:view:stopped:noop')).toEqual([false, false]);
+    for (const id of ['hq.stopSession', 'hq.restartSession']) {
+      expect(shown(id, 'session:type:running:op'), id).toEqual([true, true]);
+      expect(shown(id, 'session:view:idle:op'), id).toEqual([true, true]);
+      expect(shown(id, 'session:type:stopped:op'), id).toEqual([false, false]);
+      expect(shown(id, 'session:view:running:noop'), id).toEqual([false, false]);
+    }
   });
 
   it('web links go to the HQ page of the team or the session', () => {

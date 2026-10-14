@@ -55,6 +55,7 @@ import { HqAccounts, type AccountBundle, type BundleFsHooks } from './hq/account
 import { resolveHqHost } from './hq/hosts.js';
 import type { HqUi } from './hq/hq-service.js';
 import { SessionStore } from './hq/session-store.js';
+import { runSessionLifecycle } from './hq/session-lifecycle.js';
 import { wakeNotice, wakeTeam, type WakeNotice } from './hq/wake.js';
 import { askForPorts, Ports, type PortEntry } from './ports/ports.js';
 import {
@@ -73,6 +74,7 @@ import { teamState, webUrl } from './tree/labels.js';
 import { TeamsTree, type TeamsNode } from './tree/teams-tree.js';
 import { cleanLabel, notificationText } from './util/text.js';
 import { EXTENSION_VERSION } from './version.js';
+import { ACTIVE_DEV_BRAND, brandText, copy } from '@kpa/shared/active-dev-brand';
 
 function vscodeUi(): HqUi {
   return {
@@ -111,7 +113,7 @@ function vscodeUi(): HqUi {
 }
 
 function hostSetting(): ReturnType<typeof resolveHqHost> {
-  const config = vscode.workspace.getConfiguration('hq');
+  const config = vscode.workspace.getConfiguration(ACTIVE_DEV_BRAND.vscode.idPrefix);
   // `inspect` and globalValue only: an application-scoped setting has no workspace value, and even
   // if a workspace file named one it is never read (decision 26, U25).
   const host = config.inspect<string>('host');
@@ -158,7 +160,7 @@ async function showWakeNotice(
   node: Extract<TeamsNode, { kind: 'team' }>,
 ): Promise<void> {
   const labels = n.actions.map((a) =>
-    a === 'newSession' ? COPY.startSessionAction : COPY.openInHqAction,
+    a === 'newSession' ? COPY.startSessionAction : COPY.openInAppAction,
   );
   const choice =
     n.level === 'info'
@@ -167,18 +169,18 @@ async function showWakeNotice(
         ? await vscode.window.showWarningMessage(n.message, ...labels)
         : await vscode.window.showErrorMessage(n.message, ...labels);
   if (choice === COPY.startSessionAction) {
-    await vscode.commands.executeCommand('hq.newSessionTerminal', node);
-  } else if (choice === COPY.openInHqAction) {
-    await vscode.commands.executeCommand('hq.openInHqWeb', node);
+    await vscode.commands.executeCommand(brandText('hq.newSessionTerminal'), node);
+  } else if (choice === COPY.openInAppAction) {
+    await vscode.commands.executeCommand(brandText('hq.openInHqWeb'), node);
   }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
   // Output, "AI Workforce One HQ": the account and sign-in lifecycle, redacted (src/log.ts).
-  const channel = vscode.window.createOutputChannel('AI Workforce One HQ', { log: true });
+  const channel = vscode.window.createOutputChannel(ACTIVE_DEV_BRAND.displayName, { log: true });
   context.subscriptions.push(channel);
   const log = redactingLog(channel);
-  log.info(`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode.env.appName}`);
+  log.info(copy`AI Workforce One HQ ${EXTENSION_VERSION} activated in ${vscode.env.appName}`);
   const store = new SessionStore(context.secrets, context.globalState);
   const ui = vscodeUi();
   const teamIssues = new HqTeamIssues({ host: () => accounts.host() });
@@ -255,7 +257,30 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const teamsTree = new TeamsTree(accounts);
-  const teamsView = vscode.window.createTreeView('hq.teams', { treeDataProvider: teamsTree });
+
+  /** cli-session-lifecycle: one session row's Start / Stop / Restart, then the tree re-reads. */
+  const sessionLifecycle = async (
+    node: TeamsNode | undefined,
+    action: 'start' | 'stop' | 'restart',
+  ): Promise<void> => {
+    if (node?.kind !== 'session') return;
+    const service = accounts.get(node.account)?.service;
+    if (!service) return;
+    await runSessionLifecycle(
+      {
+        call: (fn) => service.call(fn),
+        refresh: () => {
+          teamsTree.refresh();
+          void service.refreshOrgs().catch(() => undefined);
+        },
+      },
+      { team: node.team, session: node.session },
+      action,
+    );
+  };
+  const teamsView = vscode.window.createTreeView(brandText('hq.teams'), {
+    treeDataProvider: teamsTree,
+  });
   const accountTree = new AccountTree(accounts);
   const ports = new Ports({
     accounts,
@@ -335,13 +360,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const setContext = () => {
     const active = accounts.active();
     teamsView.description = active ? cleanLabel(active.email) : '';
-    void vscode.commands.executeCommand('setContext', 'hq.signedIn', active !== null);
+    void vscode.commands.executeCommand('setContext', brandText('hq.signedIn'), active !== null);
     void vscode.commands.executeCommand(
       'setContext',
-      'hq.hasOrgs',
+      brandText('hq.hasOrgs'),
       (active?.service.teams().length ?? 0) > 0,
     );
-    void vscode.commands.executeCommand('setContext', 'hq.accountCount', accounts.count());
+    void vscode.commands.executeCommand(
+      'setContext',
+      brandText('hq.accountCount'),
+      accounts.count(),
+    );
   };
   setContext();
 
@@ -381,9 +410,9 @@ export function activate(context: vscode.ExtensionContext): void {
       auth,
       { supportsMultipleAccounts: true },
     ),
-    vscode.window.registerTreeDataProvider('hq.ports', ports),
-    vscode.window.registerTreeDataProvider('hq.account', accountTree),
-    vscode.window.registerTreeDataProvider('hq.search', searchView),
+    vscode.window.registerTreeDataProvider(brandText('hq.ports'), ports),
+    vscode.window.registerTreeDataProvider(brandText('hq.account'), accountTree),
+    vscode.window.registerTreeDataProvider(brandText('hq.search'), searchView),
     vscode.workspace.registerFileSystemProvider(HQ_SCHEME, fsProvider, { isCaseSensitive: true }),
     vscode.window.registerFileDecorationProvider(teamIssues),
     vscode.window.registerFileDecorationProvider(
@@ -424,7 +453,10 @@ export function activate(context: vscode.ExtensionContext): void {
       if (s.focused) accounts.rederive('focus');
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('hq.host') || e.affectsConfiguration('hq.allowedHosts')) {
+      if (
+        e.affectsConfiguration(brandText('hq.host')) ||
+        e.affectsConfiguration(brandText('hq.allowedHosts'))
+      ) {
         accounts.rederive('host');
         setContext();
         const verdict = hostSetting();
@@ -437,52 +469,55 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => accounts.dispose() },
 
     // ── accounts ───────────────────────────────────────────────────────────────────────────────
-    vscode.commands.registerCommand('hq.signIn', async () => {
+    vscode.commands.registerCommand(brandText('hq.signIn'), async () => {
       // With accounts here, a signed-out window picks one (or adds one), never a pointless grant.
       if (accounts.count() === 0) return (await accounts.signIn({ kind: 'first' })).outcome;
       await switchAccount(c);
       return 'busy';
     }),
-    vscode.commands.registerCommand('hq.signOut', async () => {
+    vscode.commands.registerCommand(brandText('hq.signOut'), async () => {
       const active = accounts.active();
       if (active) await accounts.signOut(active.ref, { confirm: true });
       else await signOutAccount(c);
     }),
-    vscode.commands.registerCommand('hq.addAccount', async () =>
+    vscode.commands.registerCommand(brandText('hq.addAccount'), async () =>
       accounts.count() === 0
         ? (await accounts.signIn({ kind: 'first' })).outcome
         : (await accounts.signIn({ kind: 'add' })).outcome,
     ),
-    vscode.commands.registerCommand('hq.switchAccount', (ref?: AccountRef) =>
+    vscode.commands.registerCommand(brandText('hq.switchAccount'), (ref?: AccountRef) =>
       switchAccount(c, ref && 'userId' in ref ? ref : undefined),
     ),
     vscode.commands.registerCommand(
-      'hq.signOutAccount',
+      brandText('hq.signOutAccount'),
       (arg?: AccountRef | Extract<AccountNode, { kind: 'account' }>) =>
         signOutAccount(c, arg && 'ref' in arg ? arg.ref : arg),
     ),
     // The notice's "Sign in as <email>" link (account-notices.ts). Renews a listed account.
-    vscode.commands.registerCommand('hq.signInAs', async (tag?: unknown, userId?: unknown) => {
-      if (typeof tag === 'string' && typeof userId === 'string') {
-        await accounts.signInAs(tag, userId);
-      }
-    }),
-    vscode.commands.registerCommand('hq.renewAccount', async (ref?: AccountRef) => {
+    vscode.commands.registerCommand(
+      brandText('hq.signInAs'),
+      async (tag?: unknown, userId?: unknown) => {
+        if (typeof tag === 'string' && typeof userId === 'string') {
+          await accounts.signInAs(tag, userId);
+        }
+      },
+    ),
+    vscode.commands.registerCommand(brandText('hq.renewAccount'), async (ref?: AccountRef) => {
       if (ref) await accounts.signIn({ kind: 'renew', ref });
     }),
-    vscode.commands.registerCommand('hq.accounts.primaryAction', () => primaryAction(c)),
+    vscode.commands.registerCommand(brandText('hq.accounts.primaryAction'), () => primaryAction(c)),
 
     // ── teams ──────────────────────────────────────────────────────────────────────────────────
-    vscode.commands.registerCommand('hq.refresh', async () => {
+    vscode.commands.registerCommand(brandText('hq.refresh'), async () => {
       teamsTree.refresh();
       const b = await requireAccount(c);
       await b?.service.refreshOrgs().catch(() => undefined);
     }),
-    vscode.commands.registerCommand('hq.manageDevices', () => {
+    vscode.commands.registerCommand(brandText('hq.manageDevices'), () => {
       const host = accounts.host();
       if (host) void vscode.env.openExternal(vscode.Uri.parse(`${host}/account/devices`));
     }),
-    vscode.commands.registerCommand('hq.openInHqWeb', (node?: TeamsNode) => {
+    vscode.commands.registerCommand(brandText('hq.openInHqWeb'), (node?: TeamsNode) => {
       const host = accounts.host();
       if (!host || !node || node.kind === 'org') return;
       const url =
@@ -491,7 +526,7 @@ export function activate(context: vscode.ExtensionContext): void {
           : webUrl(host, { workspaceId: node.team.workspace.id });
       void vscode.env.openExternal(vscode.Uri.parse(url));
     }),
-    vscode.commands.registerCommand('hq.wakeTeam', async (node?: TeamsNode) => {
+    vscode.commands.registerCommand(brandText('hq.wakeTeam'), async (node?: TeamsNode) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => teamState(t.workspace) !== 'running');
@@ -504,7 +539,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const outcome = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: notificationText(COPY.waking(name)),
+            title: notificationText(COPY.waking(name, team.workspace.wakeEstimate)),
           },
           (progress) =>
             b.service.call((client) =>
@@ -513,7 +548,10 @@ export function activate(context: vscode.ExtensionContext): void {
                 sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
                 report: (message) =>
                   progress.report({
-                    message: message === COPY.waking(name) ? '' : notificationText(message),
+                    message:
+                      message === COPY.waking(name, team.workspace.wakeEstimate)
+                        ? ''
+                        : notificationText(message),
                   }),
               }),
             ),
@@ -533,13 +571,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     // The off notice's "Wake Team" link (team-off-notices.ts): [tag, workspaceId], validated.
     vscode.commands.registerCommand(
-      'hq.wakeTeamOf',
+      brandText('hq.wakeTeamOf'),
       async (tag?: unknown, workspaceId?: unknown) => {
         if (!isTag(tag) || typeof workspaceId !== 'string') return;
         const b = accounts.byTag(tag);
         const team = b?.service.teams().find((t) => t.workspace.id === workspaceId);
         if (b && team) {
-          await vscode.commands.executeCommand('hq.wakeTeam', {
+          await vscode.commands.executeCommand(brandText('hq.wakeTeam'), {
             kind: 'team',
             account: b.ref,
             team,
@@ -547,7 +585,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       },
     ),
-    vscode.commands.registerCommand('hq.attachSession', async (node?: TeamsNode) => {
+    vscode.commands.registerCommand(brandText('hq.attachSession'), async (node?: TeamsNode) => {
       if (node?.kind === 'session') {
         terminals.attach({ account: node.account, team: node.team, session: node.session });
         return;
@@ -576,17 +614,31 @@ export function activate(context: vscode.ExtensionContext): void {
         });
       }
     }),
-    vscode.commands.registerCommand('hq.newSessionTerminal', async (node?: TeamsNode) => {
-      const b = await requireAccount(c, nodeAccount(node));
-      if (!b) return;
-      const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
-      if (!team) return;
-      await terminals.newSession(b.ref, team);
-      teamsTree.refresh();
-    }),
+    // cli-session-lifecycle: Start, Stop and Restart on a session row, as the account that listed
+    // it. The row's contextValue decides where they show (package.json); refusals are notifications.
+    vscode.commands.registerCommand(brandText('hq.startSession'), (node?: TeamsNode) =>
+      sessionLifecycle(node, 'start'),
+    ),
+    vscode.commands.registerCommand(brandText('hq.stopSession'), (node?: TeamsNode) =>
+      sessionLifecycle(node, 'stop'),
+    ),
+    vscode.commands.registerCommand(brandText('hq.restartSession'), (node?: TeamsNode) =>
+      sessionLifecycle(node, 'restart'),
+    ),
+    vscode.commands.registerCommand(
+      brandText('hq.newSessionTerminal'),
+      async (node?: TeamsNode) => {
+        const b = await requireAccount(c, nodeAccount(node));
+        if (!b) return;
+        const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
+        if (!team) return;
+        await terminals.newSession(b.ref, team);
+        teamsTree.refresh();
+      },
+    ),
 
     // ── ports ──────────────────────────────────────────────────────────────────────────────────
-    vscode.commands.registerCommand('hq.forwardPort', async (node?: TeamsNode) => {
+    vscode.commands.registerCommand(brandText('hq.forwardPort'), async (node?: TeamsNode) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.forward);
@@ -594,29 +646,36 @@ export function activate(context: vscode.ExtensionContext): void {
       const chosen = await askForPorts();
       if (chosen) await ports.start(b.ref, team, chosen.remote, chosen.local);
     }),
-    vscode.commands.registerCommand('hq.ports.open', (entry: PortEntry) => {
+    vscode.commands.registerCommand(brandText('hq.ports.open'), (entry: PortEntry) => {
       const url = ports.localUrl(entry);
       if (url) void vscode.env.openExternal(vscode.Uri.parse(url));
     }),
-    vscode.commands.registerCommand('hq.ports.copy', async (entry: PortEntry) => {
+    vscode.commands.registerCommand(brandText('hq.ports.copy'), async (entry: PortEntry) => {
       const url = ports.localUrl(entry);
       if (!url) return;
       await vscode.env.clipboard.writeText(url);
       void vscode.window.setStatusBarMessage(COPY.addressCopied(url), 3_000);
     }),
-    vscode.commands.registerCommand('hq.ports.stop', (entry: PortEntry) => ports.stop(entry)),
-    vscode.commands.registerCommand('hq.ports.resume', (entry: PortEntry) => ports.resume(entry)),
-    vscode.commands.registerCommand('hq.ports.forwardDetected', async (entry: PortEntry) => {
-      if (entry.kind === 'detected') {
-        await ports.start(entry.account, entry.team, entry.port, entry.port);
-      }
-    }),
-    vscode.commands.registerCommand('hq.ports.dismissDetected', (entry: PortEntry) =>
+    vscode.commands.registerCommand(brandText('hq.ports.stop'), (entry: PortEntry) =>
+      ports.stop(entry),
+    ),
+    vscode.commands.registerCommand(brandText('hq.ports.resume'), (entry: PortEntry) =>
+      ports.resume(entry),
+    ),
+    vscode.commands.registerCommand(
+      brandText('hq.ports.forwardDetected'),
+      async (entry: PortEntry) => {
+        if (entry.kind === 'detected') {
+          await ports.start(entry.account, entry.team, entry.port, entry.port);
+        }
+      },
+    ),
+    vscode.commands.registerCommand(brandText('hq.ports.dismissDetected'), (entry: PortEntry) =>
       ports.dismiss(entry),
     ),
 
     // ── team files ─────────────────────────────────────────────────────────────────────────────
-    vscode.commands.registerCommand('hq.openTeamFiles', async (node?: TeamsNode) => {
+    vscode.commands.registerCommand(brandText('hq.openTeamFiles'), async (node?: TeamsNode) => {
       const b = await requireAccount(c, nodeAccount(node));
       if (!b) return;
       const team = await pickTeam(b, node, (t) => t.workspace.rights.files?.read === true);
@@ -633,7 +692,7 @@ export function activate(context: vscode.ExtensionContext): void {
         name: teamFolderName(team, accounts.shortLabel(b.ref)),
       });
     }),
-    vscode.commands.registerCommand('hq.searchTeamFiles', async (node?: TeamsNode) => {
+    vscode.commands.registerCommand(brandText('hq.searchTeamFiles'), async (node?: TeamsNode) => {
       // The team of the active hq:// editor (as ITS account) first, else a pick of the account's.
       const active = vscode.window.activeTextEditor?.document.uri;
       let b: AccountBundle | null = null;
@@ -686,8 +745,8 @@ export function activate(context: vscode.ExtensionContext): void {
             bundle.core.shownPath(t, p),
           ),
         );
-        void vscode.commands.executeCommand('setContext', 'hq.hasSearch', true);
-        void vscode.commands.executeCommand('hq.search.focus');
+        void vscode.commands.executeCommand('setContext', brandText('hq.hasSearch'), true);
+        void vscode.commands.executeCommand(brandText('hq.search.focus'));
       } catch (err) {
         void bundle.service.handleError(err);
         const detail =
@@ -695,7 +754,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showErrorMessage(COPY.searchFailed(detail));
       }
     }),
-    vscode.commands.registerCommand('hq.search.open', (node: SearchNode) => {
+    vscode.commands.registerCommand(brandText('hq.search.open'), (node: SearchNode) => {
       const b = node.kind === 'summary' ? null : accounts.get(node.account);
       if (node.kind !== 'summary' && !b) accountMissing(node.account);
       return openMatch(

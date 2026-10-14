@@ -14,6 +14,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 // The real org-slug rule, imported, never copied (`hq-client/src/safe-text.ts`, used by teams.ts).
 import { ORG_SLUG_RE } from '@hq/client/safe-text.js';
+import { KEY_NS } from '../brand-keys.js';
 
 export interface AccountRef {
   host: string;
@@ -42,11 +43,11 @@ export function accountTag(host: string, userId: string): string {
 
 /** `hq:<host>:` for the 0.1.x slot (byte-identical to 0.1.1), `hq:<host>:u:<profileKey>:<userId>:` otherwise. */
 export function slotPrefix(ref: AccountRef): string {
-  if (ref.slot === 'legacy') return `hq:${ref.host}:`;
+  if (ref.slot === 'legacy') return `${KEY_NS}:${ref.host}:`;
   if (!USER_ID_RE.test(ref.userId) || !PROFILE_KEY_RE.test(ref.profileKey)) {
     throw new Error('bad slot');
   }
-  return `hq:${ref.host}:u:${ref.profileKey}:${ref.userId}:`;
+  return `${KEY_NS}:${ref.host}:u:${ref.profileKey}:${ref.userId}:`;
 }
 
 /** The legacy sign-in lock and refresh lock names, exactly as 0.1.1 builds them. */

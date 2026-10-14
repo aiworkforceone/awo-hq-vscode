@@ -4,14 +4,20 @@
  * application setting at workspace scope), and the value is re-checked here at every use anyway: a
  * token is only ever sent to an address on the built-in list or one the person added themselves.
  *
+ * The built-in list is the build's brand (`shared/src/dev-brands/`). AWO: its two exact hosts,
+ * `hq.aiworkforceone.com` by default. A brand may instead have NO default (every customer has their
+ * own address) and trust one label under its own domains; a custom domain works once the person
+ * adds it to `allowedHosts`.
+ *
  * Pure (no `vscode` import), so the unit tier covers it.
  */
+import { ACTIVE_DEV_BRAND } from '@kpa/shared/active-dev-brand';
+import { isBuiltInHost, type DevBrand } from '@kpa/shared/dev-brand-core';
 
-export const DEFAULT_HOST = 'https://hq.aiworkforceone.com';
-export const BUILT_IN_HOSTS: readonly string[] = [
-  DEFAULT_HOST,
-  'https://hq-test.aiworkforceone.com',
-];
+/** The brand's default address, or `''` when it has none. */
+export const DEFAULT_HOST: string = ACTIVE_DEV_BRAND.defaultHost ?? '';
+/** The exact built-in addresses (AWO's two; none for a brand whose hosts are a pattern). */
+export const BUILT_IN_HOSTS: readonly string[] = ACTIVE_DEV_BRAND.builtInHosts;
 
 /** Loopback may use plain http, and only when listed explicitly (a local HQ during development). */
 const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
@@ -25,20 +31,29 @@ export function normalizeHqHost(value: unknown): string | null {
   return null;
 }
 
-export type HostVerdict = { ok: true; host: string } | { ok: false; host: string };
+/** `unset`: no address is configured and the brand has no default (before setup). */
+export type HostVerdict = { ok: true; host: string } | { ok: false; host: string; unset?: true };
 
 /** The configured host, if it is allowed. */
-export function resolveHqHost(configured: unknown, allowedExtra: unknown): HostVerdict {
+export function resolveHqHost(
+  configured: unknown,
+  allowedExtra: unknown,
+  brand: DevBrand = ACTIVE_DEV_BRAND,
+): HostVerdict {
   const raw =
-    typeof configured === 'string' && configured.trim() !== '' ? configured : DEFAULT_HOST;
+    typeof configured === 'string' && configured.trim() !== ''
+      ? configured
+      : (brand.defaultHost ?? '');
+  if (raw === '') return { ok: false, host: '', unset: true };
   const host = normalizeHqHost(raw);
   if (host === null) return { ok: false, host: String(raw) };
   const extra = Array.isArray(allowedExtra)
     ? allowedExtra.map(normalizeHqHost).filter((h): h is string => h !== null)
     : [];
-  const allowed = new Set([...BUILT_IN_HOSTS, ...extra]);
   if (LOOPBACK.test(host) && !extra.includes(host)) return { ok: false, host };
-  return allowed.has(host) ? { ok: true, host } : { ok: false, host };
+  return isBuiltInHost(brand, host) || extra.includes(host)
+    ? { ok: true, host }
+    : { ok: false, host };
 }
 
 /** Is `url` a plain http(s) URL on exactly this HQ address (the only kind the extension opens)? */

@@ -32,9 +32,23 @@ export interface DeviceFlowInput {
   devicePubkey: string;
 }
 
+/** `details.host` of a DEVICE_WRONG_HOST answer, when it is a plain https origin; else null. */
+export function wrongHostOf(body: unknown): string | null {
+  const host = (body as { details?: { host?: unknown } } | null)?.details?.host;
+  if (typeof host !== 'string') return null;
+  try {
+    const u = new URL(host);
+    return u.protocol === 'https:' && u.origin === host ? host : null;
+  } catch {
+    return null;
+  }
+}
+
 export type DeviceFlowResult =
   | { kind: 'approved'; approved: Extract<DevicePollResponse, { status: 'approved' }> }
   | { kind: 'denied' }
+  /** The client host rule: the approver's account signs in at `host`, not this one. */
+  | { kind: 'wrong-host'; host: string }
   | { kind: 'expired' }
   /** The code expired right after a poll lost to the network: the approval may have happened. */
   | { kind: 'expired-after-network' }
@@ -114,6 +128,10 @@ export async function runDeviceFlow(
     ) {
       interval = Math.max(interval, poll.body.interval);
       continue;
+    }
+    if (poll.status === 409 && poll.body?.code === 'DEVICE_WRONG_HOST') {
+      const host = wrongHostOf(poll.body);
+      if (host) return { kind: 'wrong-host', host };
     }
     if (poll.status === 403) return { kind: 'denied' };
     if (poll.status === 410) return { kind: 'expired' };

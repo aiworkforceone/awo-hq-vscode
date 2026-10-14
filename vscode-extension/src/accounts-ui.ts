@@ -18,6 +18,7 @@ import { shortAccountLabel, type AccountRef } from './hq/account-ref.js';
 import type { AccountBundle, HqAccounts } from './hq/accounts.js';
 import { HQ_SCHEME, relPathOf, teamFolderName } from './fs/hq-fs-provider.js';
 import { cleanLabel } from './util/text.js';
+import { ACTIVE_DEV_BRAND } from '@kpa/shared/active-dev-brand';
 
 export type SwitcherItem = vscode.QuickPickItem & { ref?: AccountRef; add?: true };
 
@@ -124,7 +125,9 @@ export async function switchAccount(c: AccountCommands, ref?: AccountRef): Promi
 /** The status-bar click: the sidebar with one account (0.1.1), the switcher with more (MA-U1/U2). */
 export async function primaryAction(c: AccountCommands): Promise<void> {
   if (c.accounts.list().length <= 1) {
-    await vscode.commands.executeCommand('workbench.view.extension.hq');
+    await vscode.commands.executeCommand(
+      `workbench.view.extension.${ACTIVE_DEV_BRAND.vscode.idPrefix}`,
+    );
     return;
   }
   await switchAccount(c);

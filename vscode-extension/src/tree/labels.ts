@@ -4,7 +4,12 @@
  * `contextValue` the menus key on.
  *
  *   team contextValue     `team:<running|starting|off>:<write|read>`
- *   session contextValue  `session:<type|view>`
+ *   session contextValue  `session:<type|view>:<running|idle|stopped>:<op|noop>`
+ *                         (cli-session-lifecycle: the state picks Start or Stop and Restart; `noop`
+ *                         when HQ says this member may not operate it. An older HQ that does not
+ *                         say reads `op`: the action is offered and HQ answers. A session HQ is
+ *                         still starting keeps `running` here, as HQ's `status` does, so Stop and
+ *                         Restart stay on it; its description says `starting`.)
  */
 import type { RemoteSessionSummary, RemoteWorkspace } from '@kpa/shared/remote.types';
 import type { Team } from '@hq/client/teams.js';
@@ -54,13 +59,15 @@ export function sessionLabel(s: RemoteSessionSummary): string {
 
 export function sessionDescription(s: RemoteSessionSummary): string {
   const parts: string[] = [s.ownerIsMe === true ? COPY.you : cleanLabel(s.ownerName)];
+  // train 98 e2e: HQ is still starting it (its machine may yet fail to come up), so never "running".
+  if (s.starting === true) parts.push(COPY.stateStarting);
   if (!s.canType) parts.push(COPY.viewOnly);
   if (s.engine === 'codex') parts.push(COPY.codex);
   return parts.filter((p) => p.length > 0).join(' · ');
 }
 
 export function sessionContextValue(s: RemoteSessionSummary): string {
-  return `session:${s.canType ? 'type' : 'view'}`;
+  return `session:${s.canType ? 'type' : 'view'}:${s.status}:${s.canOperate === false ? 'noop' : 'op'}`;
 }
 
 /** The HQ web page for a team or a session (Open in HQ Web). */

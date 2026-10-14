@@ -789,11 +789,7 @@ export class HqFsCore {
           return new FsCoreError('unavailable', COPY.updateNeededLong(name));
         }
         if (err.code === 'WORKSPACE_UPDATING') {
-          const issue = this.issueOf(err);
-          return new FsCoreError(
-            'unavailable',
-            COPY.fsUpdating(name, issue?.kind === 'updating' ? issue.etaSeconds : null),
-          );
+          return new FsCoreError('unavailable', COPY.fsUpdating(name));
         }
         if (err.code === 'CONFLICT') return new FsCoreError('exists', err.message);
         if (err.code === 'NOT_A_DIRECTORY') return new FsCoreError('not-a-dir', err.message);

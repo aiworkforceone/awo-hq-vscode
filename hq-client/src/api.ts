@@ -27,10 +27,15 @@ import {
   HQ_HEADER_DEVICE_SIG,
   HQ_HEADER_NONCE,
   HQ_HEADER_ORG,
+  type RemoteSessionAction,
+  type RemoteSessionActionResponse,
+  type RemoteSessionSummary,
   type TokenPair,
 } from '@kpa/shared/remote.types';
 import { signRequest } from './device-key.js';
 import { acquireFileLock, FileLockBusyError } from './file-lock.js';
+import { sessionActionPath, teamApiPath, type TeamRef } from './session-actions.js';
+import { copy } from '@kpa/shared/active-dev-brand';
 
 export interface StoredTokens {
   accessToken: string;
@@ -53,12 +58,12 @@ export class HqApiError extends Error {
     readonly details: Record<string, unknown> | undefined,
   ) {
     super(message);
-    this.name = 'HqApiError';
+    this.name = 'ApiError';
   }
 }
 
 export class NotLoggedInError extends Error {
-  constructor(message = 'hq: you are not logged in on this computer. Run hq login.') {
+  constructor(message = copy`hq: you are not logged in on this computer. Run hq login.`) {
     super(message);
     this.name = 'NotLoggedInError';
   }
@@ -80,7 +85,7 @@ export class RefreshBusyError extends Error {
  * used, so it is never presented again. Sign in again.
  */
 export class RefreshNeedsRenewingError extends Error {
-  constructor(message = 'hq: your HQ login on this computer needs renewing. Run hq login.') {
+  constructor(message = copy`hq: your HQ login on this computer needs renewing. Run hq login.`) {
     super(message);
     this.name = 'RefreshNeedsRenewingError';
   }
@@ -489,6 +494,57 @@ export class HqClient {
     return res;
   }
 
+  // ── sessions (cli-session-lifecycle) ─────────────────────────────────────────────────────────
+  // The bearer twins of the web's session lifecycle routes (`session-actions.ts`). Reads are
+  // unsigned; every state change is device-signed. Refusals throw `HqApiError` (status + code);
+  // `describeSessionRefusal` turns one into the sentence both clients print.
+
+  /** The sessions of one team this member may see, with `canOperate` and `midTurn`. */
+  async listSessions(team: TeamRef): Promise<RemoteSessionSummary[]> {
+    return (
+      await this.request<RemoteSessionSummary[]>('GET', `${teamApiPath(team)}/sessions`, {
+        org: team.org.slug,
+      })
+    ).body;
+  }
+
+  /** Start a stopped session (202 `starting`); a sleeping team wakes for it, as on the web. */
+  async startSession(
+    team: TeamRef,
+    sessionId: string,
+    size?: { cols: number; rows: number },
+  ): Promise<RemoteSessionActionResponse> {
+    return this.sessionAction(team, sessionId, 'start', size);
+  }
+
+  async stopSession(team: TeamRef, sessionId: string): Promise<RemoteSessionActionResponse> {
+    return this.sessionAction(team, sessionId, 'stop');
+  }
+
+  /** Restart: resumes the conversation unless `fresh` (a blank chat), as on the web. */
+  async restartSession(
+    team: TeamRef,
+    sessionId: string,
+    opts: { fresh?: boolean } = {},
+  ): Promise<RemoteSessionActionResponse> {
+    return this.sessionAction(team, sessionId, 'restart', opts.fresh ? { fresh: true } : undefined);
+  }
+
+  private async sessionAction(
+    team: TeamRef,
+    sessionId: string,
+    action: RemoteSessionAction,
+    body?: unknown,
+  ): Promise<RemoteSessionActionResponse> {
+    return (
+      await this.request<RemoteSessionActionResponse>(
+        'POST',
+        sessionActionPath(team, sessionId, action),
+        { ...(body !== undefined ? { body } : {}), org: team.org.slug, signed: true },
+      )
+    ).body;
+  }
+
   /**
    * Is this login really gone (security review B1)? Only an UNSIGNED `GET /api/remote/orgs` that
    * answers 401 (or a refresh HQ refuses with 401, or no stored login) says so: a signed call's 401
@@ -510,7 +566,7 @@ export class HqClient {
     } catch {
       /* not JSON */
     }
-    const message = typeof body.error === 'string' ? body.error : `HQ answered ${res.status}`;
+    const message = typeof body.error === 'string' ? body.error : copy`HQ answered ${res.status}`;
     return new HqApiError(
       res.status,
       typeof body.code === 'string' ? body.code : undefined,

@@ -23,6 +23,10 @@
 import * as vscode from 'vscode';
 import { ConnectRefusedError } from '@hq/client/connect.js';
 import { parsePort, startForward, type ForwardHandle } from '@hq/client/forward.js';
+import {
+  DEVICE_SIGNATURE_MISSING_CODE,
+  deviceSignatureMissingMessage,
+} from '@hq/client/session-actions.js';
 import type { Team } from '@hq/client/teams.js';
 import { COPY } from '../copy.js';
 import { accountTag, sameAccount, type AccountRef } from '../hq/account-ref.js';
@@ -30,6 +34,7 @@ import type { HqAccounts } from '../hq/accounts.js';
 import { portsKey } from '../hq/session-store.js';
 import { Emitter } from '../util/emitter.js';
 import { cleanLabel } from '../util/text.js';
+import { brandText } from '@kpa/shared/active-dev-brand';
 
 /** Refused before any request (decision 14). HQ also refuses them. */
 // docker-in-teams D27: and the Docker API (2375, 2376), matching HQ's and the runner's refusal.
@@ -75,6 +80,8 @@ export function forwardError(team: string, err: unknown): string {
       return COPY.forwardTeamStopped(team);
     }
     if (e.code === 'UPGRADE_REQUIRED' || e.status === 426) return COPY.tooOld;
+    // train 96 review W1: an unsigned request is a client bug, not a dead sign-in.
+    if (e.code === DEVICE_SIGNATURE_MISSING_CODE) return deviceSignatureMissingMessage();
     if (e.code === 'REMOTE_TOKEN_INVALID' || e.status === 401) return COPY.renewSignIn;
     if (e.status === 403) return COPY.forwardNotAllowed(team);
     if (e.status === 404) return COPY.fsTeamGone;
@@ -414,7 +421,7 @@ export class Ports implements vscode.TreeDataProvider<PortEntry> {
       entry.kind === 'active' ? 'plug' : entry.kind === 'starting' ? 'sync~spin' : 'debug-pause',
     );
     if (entry.kind === 'paused') {
-      item.command = { command: 'hq.ports.resume', title: 'Resume', arguments: [entry] };
+      item.command = { command: brandText('hq.ports.resume'), title: 'Resume', arguments: [entry] };
     }
     return item;
   }

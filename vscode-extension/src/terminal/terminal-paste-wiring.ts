@@ -30,6 +30,7 @@ import {
 } from './image-paste.js';
 import { displayPath, dropRewriter, pasteIntoTerminal } from './terminal-paste.js';
 import type { Terminals } from './terminals.js';
+import { brandText } from '@kpa/shared/active-dev-brand';
 
 type Accounts = Pick<HqAccounts, 'get'>;
 
@@ -164,13 +165,13 @@ export function registerTerminalPaste(deps: {
   const setContext = (): void =>
     void vscode.commands.executeCommand(
       'setContext',
-      'hq.activeTerminal',
+      brandText('hq.activeTerminal'),
       deps.terminals.activeTerminal() !== null,
     );
   setContext();
   const onChange = deps.terminals.onDidChange(setContext);
   const command = vscode.commands.registerCommand(
-    'hq.terminalPaste',
+    brandText('hq.terminalPaste'),
     async (args?: { fallback?: unknown }) => {
       const ctrlV = args?.fallback === 'ctrlV';
       const active = deps.terminals.activeTerminal();

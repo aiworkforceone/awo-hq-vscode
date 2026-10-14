@@ -4,13 +4,16 @@
  *
  * Messages go through `say` (stderr for the CLI). Nothing here prints a code, a token or a host key.
  */
-import type {
-  ConnectionReady,
-  ConnectionRequest,
-  ConnectionWaking,
+import {
+  wakeRangeText,
+  type ConnectionReady,
+  type ConnectionRequest,
+  type ConnectionWaking,
 } from '@kpa/shared/remote.types';
 import { HqApiError, type HqClient } from './api.js';
 import type { Team } from './teams.js';
+import { copy } from '@kpa/shared/active-dev-brand';
+import { DEVICE_SIGNATURE_MISSING_CODE, deviceSignatureMissingMessage } from './session-actions.js';
 
 export class ConnectRefusedError extends Error {
   /**
@@ -32,7 +35,7 @@ export const WAKE_POLL_MS = 2_000;
 
 /** What every door says when a wake runs past `WAKE_TIMEOUT_MS` (`hq up`, `hq attach`, `hq forward`). */
 export function wakeTimeoutMessage(team: Team): string {
-  return `hq: team "${team.workspace.name}" did not wake within 3 minutes. Check it in HQ and try again.`;
+  return copy`hq: team "${team.workspace.name}" did not wake within 3 minutes. Check it in HQ and try again.`;
 }
 
 export function connectionsPath(team: Team, id?: string): string {
@@ -45,31 +48,34 @@ export function refusalMessage(team: Team, err: unknown): string {
   const name = team.workspace.name;
   if (err instanceof HqApiError) {
     if (err.code === 'RUNNER_UNAVAILABLE' && err.details?.hint === 'reconnect') {
-      return `hq: team "${name}" is asleep and this looks like an editor reconnect, so it was not woken. Run \`hq up ${team.alias}\` or open HQ to wake it.`;
+      return copy`hq: team "${name}" is asleep and this looks like an editor reconnect, so it was not woken. Run \`hq up ${team.alias}\` or open HQ to wake it.`;
     }
     if (err.code === 'RUNNER_UNAVAILABLE') {
-      return `hq: team "${name}" has no running machine. Open the team in HQ and start a session to start it.`;
+      return copy`hq: team "${name}" has no running Cloud Computer. Open the team in HQ and start a session to start it.`;
     }
     if (err.code === 'REMOTE_UNSUPPORTED_RUNNER' && err.details?.reason === 'restart_required') {
-      return `hq: team "${name}" must restart its machine before remote access works (remote access was turned on while it was running). An owner or admin can stop and start it from the team page in HQ.`;
+      // Only a port forward meets this (SSH was removed on 2026-10-01; attach does not need it).
+      return copy`hq: team "${name}" cannot forward ports yet: its AI Team Cloud Computer started before Developer access was turned on. Restart the AI Team Cloud Computer, then try again. An owner or admin presses Restart Cloud Computer in the team's Settings in HQ.`;
     }
     if (err.code === 'REMOTE_UNSUPPORTED_RUNNER') {
-      return `hq: team "${name}" runs an older machine image without remote access. An owner or admin can update it: HQ → ${name} → Settings → Update machine.`;
+      return copy`hq: team "${name}" runs an older Cloud Computer image without remote access. An owner or admin can update it: HQ → ${name} → Settings → Update Cloud Computer.`;
     }
     if (err.code === 'THROTTLED') {
-      return `hq: too many open connections to team "${name}". Close one and try again.`;
+      return copy`hq: too many open connections to team "${name}". Close one and try again.`;
     }
-    if (err.code === 'UPGRADE_REQUIRED') return `hq: ${err.message}`;
+    if (err.code === 'UPGRADE_REQUIRED') return copy`hq: ${err.message}`;
+    if (err.code === DEVICE_SIGNATURE_MISSING_CODE)
+      return copy`hq: ${deviceSignatureMissingMessage()}`;
     if (err.code === 'REMOTE_TOKEN_INVALID')
-      return 'hq: your HQ login on this computer expired or was revoked. Run hq login.';
+      return copy`hq: your HQ login on this computer expired or was revoked. Run hq login.`;
     if (err.code === 'FEATURE_NOT_AVAILABLE')
-      return `hq: remote access is not available for ${team.org.name} yet.`;
-    if (err.status === 403) return `hq: you do not have remote access to team "${name}".`;
+      return copy`hq: remote access is not available for ${team.org.name} yet.`;
+    if (err.status === 403) return copy`hq: you do not have remote access to team "${name}".`;
     if (err.status === 404)
-      return `hq: team "${name}" was not found. Run hq status to refresh your teams.`;
-    return `hq: ${err.message}`;
+      return copy`hq: team "${name}" was not found. Run hq status to refresh your teams.`;
+    return copy`hq: ${err.message}`;
   }
-  return `hq: ${(err as Error).message}`;
+  return copy`hq: ${(err as Error).message}`;
 }
 
 export interface ConnectDeps {
@@ -82,6 +88,15 @@ export interface ConnectDeps {
  * Open a connection row and wait until it is ready. Resolves with the one-time connect code and the
  * host key; throws `ConnectRefusedError` (with the §13 sentence) on every refusal.
  */
+/**
+ * "hq: waking team "X", this usually takes 15-30 seconds..." with the range HQ gives for THIS team's
+ * machine (`wakeEstimate`, Jean 2026-10-14: 30-45 seconds from 32 GB). An older HQ sends none and
+ * the ordinary 15-30 holds. Shared by `hq up` and every connecting door.
+ */
+export function wakingTeamLine(team: Team): string {
+  return copy`hq: waking team "${team.workspace.name}", this usually takes ${wakeRangeText(team.workspace.wakeEstimate)}...`;
+}
+
 export async function openConnection(
   client: HqClient,
   team: Team,
@@ -109,8 +124,8 @@ export async function openConnection(
   const id = first.body.id;
   deps.say(
     first.body.code === 'SESSION_RESUME_COLD_RESTART'
-      ? `hq: starting team "${team.workspace.name}" fresh (about 60 s)...`
-      : `hq: waking team "${team.workspace.name}" (about 15 s)...`,
+      ? copy`hq: starting team "${team.workspace.name}" fresh (about 60 s)...`
+      : wakingTeamLine(team),
   );
   const deadline = deps.now() + WAKE_TIMEOUT_MS;
   while (deps.now() < deadline) {

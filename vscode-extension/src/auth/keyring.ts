@@ -10,10 +10,11 @@
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { KEY_NS } from '../brand-keys.js';
 import { COPY } from '../copy.js';
 
 /** `globalState` key: the warning was shown on this install. */
-export const KEYRING_WARNED_KEY = 'hq:keyringWarned';
+export const KEYRING_WARNED_KEY = `${KEY_NS}:keyringWarned`;
 
 export function keyringLikelyMissing(input: {
   platform: string;

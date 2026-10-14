@@ -13,6 +13,7 @@ import * as vscode from 'vscode';
 import { COPY } from './copy.js';
 import type { UnavailableAccount } from './fs/hq-fs-provider.js';
 import { notificationText } from './util/text.js';
+import { copy } from '@kpa/shared/active-dev-brand';
 
 /** A command URI argument: JSON, percent-encoded, and no `)` or `(` left to end the link early. */
 function uriArg(value: unknown): string {
@@ -41,7 +42,7 @@ export class AccountNotices {
     // Security L1: every interpolated string is neutralized; only OUR link is a link.
     const text = notificationText(COPY.fsAccountGone(info.email));
     const label = notificationText(COPY.signInAsAction(info.email));
-    const title = `${text} [${label}](command:hq.signInAs?${uriArg([tag, info.userId])})`;
+    const title = copy`${text} [${label}](command:hq.signInAs?${uriArg([tag, info.userId])})`;
     let end: () => void = () => undefined;
     const ended = new Promise<void>((r) => (end = r));
     this.open.set(tag, end);
