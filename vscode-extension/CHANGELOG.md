@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- When your access changes so you can no longer watch a session, its terminal says "Your access to
+  this session ended." instead of "Session not found".
+
 ## 0.4.0
 
 - A session HQ is still starting shows `starting` in the Teams view instead of looking like a

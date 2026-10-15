@@ -219,7 +219,7 @@ export const CLI_ATTACH_COPY: AttachCopy = {
   reconnecting: copy`hq: connection lost, reconnecting...`,
   accessEnded: copy`hq: your access to this session ended.`,
   detached: copy`hq: detached.`,
-  nowViewOnly: copy`hq: you can watch this session but not type in it.`,
+  nowViewOnly: copy`hq: View only: your role doesn't let you type here.`,
   sessionStopped: copy`hq: the session stopped.`,
   sessionError: copy`hq: the session exited with an error.`,
 };
@@ -270,6 +270,12 @@ export interface AttachSessionOptions {
   onForbidden?: 'end' | 'view-only';
   /** Typing rights changed (the extension renames its terminal "· view only"). */
   onCanTypeChanged?: (canType: boolean) => void;
+  /**
+   * The CLI (train 104 e2e): while view-only, a key the person types is dropped and `nowViewOnly`
+   * is said again, at most once per this many ms. Absent (the extension, whose terminal title says
+   * "· view only"): said once, when typing is taken away.
+   */
+  viewOnlyNoticeMs?: number;
   /** The team machine reported its listening ports (the extension offers them in HQ Ports). */
   onListenPorts?: (ports: number[]) => void;
   /** A wake began (`true`) or ended (`false`): the extension renames its terminal "· waking". */
@@ -382,6 +388,9 @@ type ServerFrame =
   | { type: 'output' | 'history'; sessionId: string; data: string }
   | { type: 'geometry'; sessionId: string; cols?: unknown; rows?: unknown; viewers?: unknown }
   | { type: 'reset'; sessionId: string; reattach?: boolean }
+  // Review W5: `reattach` means the server DETACHED this socket (a role change, a share revoke, a
+  // claim); without it the socket is still attached and only the rights changed.
+  | { type: 'ownership-changed'; sessionId: string; reattach?: boolean }
   | { type: 'status'; sessionId: string; status?: string }
   | {
       type: 'error';
@@ -442,6 +451,13 @@ export function createAttachSession(
     asleep: false,
   };
   let canType = session.canType;
+  /** When `nowViewOnly` was last said (`viewOnlyNoticeMs` throttles the repeats). */
+  let viewOnlySaidAt: number | null = null;
+  /**
+   * An attach of this session was admitted at least once: a NOT_FOUND after that is the person's
+   * access ENDING (a role change, a narrowed team), not a session that was never there.
+   */
+  let everAdmitted = false;
   let current: WebSocket | null = null;
   let detachRequested = false;
   const detachHooks = new Set<() => void>();
@@ -554,6 +570,7 @@ export function createAttachSession(
             // ends the row (checked at the drop below), so a day of hourly LB cuts never adds up to a
             // give-up, while an admit-then-drop loop still runs out.
             admittedAt = Date.now();
+            everAdmitted = true;
             cancelLostNotice(); // 0.2.3: back within the bound: nothing to say
           },
           intent,
@@ -632,6 +649,16 @@ export function createAttachSession(
     const say = (line: string): void => {
       echo?.undrawNow();
       sink.say(line);
+    };
+    /** `nowViewOnly`, once when typing is taken away, then (`viewOnlyNoticeMs`) throttled. */
+    const sayViewOnly = (): void => {
+      const now = Date.now();
+      if (viewOnlySaidAt !== null) {
+        if (opts.viewOnlyNoticeMs === undefined) return;
+        if (now - viewOnlySaidAt < opts.viewOnlyNoticeMs) return;
+      }
+      viewOnlySaidAt = now;
+      say(`\r\n${attachCopy.nowViewOnly}`);
     };
     let lastToken = (headers.Authorization ?? '').slice('Bearer '.length);
     const send = (frame: Record<string, unknown>) => {
@@ -974,6 +1001,15 @@ export function createAttachSession(
           wake.asleep = false;
           attachFrame('open');
         }
+        if (
+          !canType &&
+          before.length > 0 &&
+          opts.viewOnlyNoticeMs !== undefined &&
+          !isPassiveTerminalInput(before.toString('utf8'))
+        ) {
+          // The CLI: the key is dropped here (it never leaves the laptop) and the person is told.
+          sayViewOnly();
+        }
         if (canType && before.length > 0) {
           const data = before.toString('utf8');
           // A key from a non-owner: its size goes to the pty first (before the held keys of a
@@ -1074,6 +1110,15 @@ export function createAttachSession(
         } else if (frame.type === 'ownership-changed') {
           // 0.2.2 (b): the frame carries no facts on purpose; the caller re-reads the rights.
           opts.onOwnershipChanged?.();
+          // Review W5 (custom-roles e2e): the server DETACHED this socket, so nothing more arrives
+          // until we attach again (the web froze the same way). A `reconnect` (the server did this,
+          // not the person) re-runs the server's authorization: still allowed to watch comes back
+          // with a fresh screen, no longer allowed answers NOT_FOUND through the usual path. Never
+          // two attaches out at once, the reset+reattach rule.
+          if ('reattach' in frame && frame.reattach === true) {
+            if (attachOutstanding) reattachPending = true;
+            else attachFrame('reconnect');
+          }
         } else if (frame.type === 'attached') {
           attachOutstanding = false;
           onAdmitted();
@@ -1147,8 +1192,9 @@ export function createAttachSession(
             // Watching goes on; typing stops, and the terminal says so once.
             if (canType) {
               setCanType(false);
-              say(`\r\n${attachCopy.nowViewOnly}`);
+              viewOnlySaidAt = null; // typing was just taken away: always said
             }
+            sayViewOnly();
             return;
           }
           if (!TERMINAL_ERROR_CODES.has(code)) {
@@ -1163,7 +1209,12 @@ export function createAttachSession(
             scheduleErrorRetry();
             return;
           }
-          errorMessage = `\r\n${attachCopy.prefix}${frame.message}`;
+          // train 104 e2e: a NOT_FOUND once this attach had been watching is the access ending (the
+          // server's "Session not found" reads as if it never existed). Still the end, exit 1.
+          errorMessage =
+            code === 'NOT_FOUND' && everAdmitted
+              ? `\r\n${attachCopy.accessEnded}`
+              : `\r\n${attachCopy.prefix}${frame.message}`;
           exitCode = 1;
           ws.close(1000);
         } else if (frame.type === 'notice' && 'text' in frame) {

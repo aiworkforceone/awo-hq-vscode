@@ -13275,7 +13275,7 @@ var CLI_ATTACH_COPY = {
   reconnecting: copy`hq: connection lost, reconnecting...`,
   accessEnded: copy`hq: your access to this session ended.`,
   detached: copy`hq: detached.`,
-  nowViewOnly: copy`hq: you can watch this session but not type in it.`,
+  nowViewOnly: copy`hq: View only: your role doesn't let you type here.`,
   sessionStopped: copy`hq: the session stopped.`,
   sessionError: copy`hq: the session exited with an error.`
 };
@@ -13316,6 +13316,8 @@ function createAttachSession(client, target, sink, opts = {}) {
     asleep: false
   };
   let canType = session.canType;
+  let viewOnlySaidAt = null;
+  let everAdmitted = false;
   let current = null;
   let detachRequested = false;
   const detachHooks = /* @__PURE__ */ new Set();
@@ -13399,6 +13401,7 @@ ${attachCopy.detached}` };
           ws,
           () => {
             admittedAt = Date.now();
+            everAdmitted = true;
             cancelLostNotice();
           },
           intent,
@@ -13458,6 +13461,16 @@ ${attachCopy.reconnecting}`);
     const say = (line) => {
       echo?.undrawNow();
       sink.say(line);
+    };
+    const sayViewOnly = () => {
+      const now = Date.now();
+      if (viewOnlySaidAt !== null) {
+        if (opts.viewOnlyNoticeMs === void 0) return;
+        if (now - viewOnlySaidAt < opts.viewOnlyNoticeMs) return;
+      }
+      viewOnlySaidAt = now;
+      say(`\r
+${attachCopy.nowViewOnly}`);
     };
     let lastToken = (headers.Authorization ?? "").slice("Bearer ".length);
     const send = (frame) => {
@@ -13724,6 +13737,9 @@ ${attachCopy.wakeTimeout(team)}`);
           wake.asleep = false;
           attachFrame("open");
         }
+        if (!canType && before.length > 0 && opts.viewOnlyNoticeMs !== void 0 && !isPassiveTerminalInput(before.toString("utf8"))) {
+          sayViewOnly();
+        }
         if (canType && before.length > 0) {
           const data = before.toString("utf8");
           if (!isPassiveTerminalInput(data)) claimNow?.();
@@ -13799,6 +13815,10 @@ ${attachCopy.sessionError}`);
           follow();
         } else if (frame.type === "ownership-changed") {
           opts.onOwnershipChanged?.();
+          if ("reattach" in frame && frame.reattach === true) {
+            if (attachOutstanding) reattachPending = true;
+            else attachFrame("reconnect");
+          }
         } else if (frame.type === "attached") {
           attachOutstanding = false;
           onAdmitted();
@@ -13863,9 +13883,9 @@ ${opts.wakeText ? opts.wakeText(code, frame.message, wake.estimate) : `${attachC
           if (code === "FORBIDDEN" && opts.onForbidden === "view-only") {
             if (canType) {
               setCanType(false);
-              say(`\r
-${attachCopy.nowViewOnly}`);
+              viewOnlySaidAt = null;
             }
+            sayViewOnly();
             return;
           }
           if (!TERMINAL_ERROR_CODES.has(code)) {
@@ -13879,7 +13899,8 @@ ${attachCopy.prefix}${frame.message}`);
             scheduleErrorRetry();
             return;
           }
-          errorMessage = `\r
+          errorMessage = code === "NOT_FOUND" && everAdmitted ? `\r
+${attachCopy.accessEnded}` : `\r
 ${attachCopy.prefix}${frame.message}`;
           exitCode = 1;
           ws.close(1e3);
@@ -19239,7 +19260,7 @@ var TeamsTree = class {
 };
 
 // src/version.ts
-var EXTENSION_VERSION = "0.4.0".length > 0 ? "0.4.0" : "0.0.0-dev";
+var EXTENSION_VERSION = "0.4.1".length > 0 ? "0.4.1" : "0.0.0-dev";
 
 // src/extension.ts
 function vscodeUi() {
